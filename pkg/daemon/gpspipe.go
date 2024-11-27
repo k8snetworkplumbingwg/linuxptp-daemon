@@ -2,7 +2,7 @@ package daemon
 
 import (
 	"fmt"
-	"github.com/openshift/linuxptp-daemon/pkg/config"
+	"github.com/josephdrichard/linuxptp-daemon/pkg/config"
 	"os"
 	"os/exec"
 	"sync"
