@@ -2,7 +2,7 @@ package daemon
 
 import (
 	"fmt"
-	"github.com/josephdrichard/linuxptp-daemon/pkg/config"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"os"
 	"os/exec"
 	"sync"
