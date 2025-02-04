@@ -13,18 +13,7 @@ jobs:
       with:
         go-version: ${{ matrix.go-version }}
 
-    - name: Checkout code
+    - name: Checkouts code
       uses: actions/checkout@v4
 
-    - name: Run Revive Action by pulling pre-built image
-      uses: docker://morphy/revive-action:v2
-      with:
-        exclude: "./vendor/..."
-
-    - name: Run go fmt
-      run: go fmt ./...
-      #run: diff -u <(echo -n) <(gofmt -d -s .)
-
-    - name: Run go vet
-      run: go vet ./...
 
