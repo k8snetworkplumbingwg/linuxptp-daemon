@@ -1,48 +1,109 @@
+name: Test linuxptp daemon
+
 on: [push, pull_request]
-name: Test
+
+concurrency:
+  group: ${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    strategy:
-      matrix:
-        go-version: [1.22.x, 1.23.x]
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-    - name: Install Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: ${{ matrix.go-version }}
 
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Run Revive Action by pulling pre-built image
-      uses: docker://morphy/revive-action:v2
-      with:
-        exclude: "./vendor/..."
-
-    - name: Run go fmt
-      run: go fmt ./...
-      #run: diff -u <(echo -n) <(gofmt -d -s .)
-
-    - name: Run go vet
-      run: go vet ./...
-
-    - name: Test
-      run: sudo ./hack/test-go.sh
-
-    - name: Send coverage
-      uses: shogo82148/actions-goveralls@v1
-      with:
-        path-to-profile: coverage.out
-        flag-name: Go-${{ matrix.go }}
-        parallel: true
-
-  # notifies that all test jobs are finished.
-  finish:
-    needs: test
+  build:
+    name: build
     runs-on: ubuntu-latest
     steps:
-      - uses: shogo82148/actions-goveralls@v1
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v3
         with:
-          parallel-finished: true
+          go-version: 1.22.x
+
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v2
+
+      - name: fmt
+        run: IS_CONTAINER=yes make fmt
+
+      - name: Build
+        run: make all
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.22.x
+
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v2
+
+      - name: test
+        run: make test-
+
+  modules:
+    name: check go modules
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.22.x
+
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v2
+
+      - name: check go modules are up to date
+        run: make check-deps
+
+  golangci:
+    name: Golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.22.x
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v2
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          # Required: the version of golangci-lint is required and must be specified without patch version: we always use the latest patch version.
+          version: v1.55.2
+
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          severity: error
+
+  test-coverage:
+    name: test-coverage
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.22.x
+
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v2
+
+      - name: test
+        run: make test
+
+      - name: Coveralls
+        uses: coverallsapp/github-action@1.1.3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path-to-lcov: lcov.out
+
