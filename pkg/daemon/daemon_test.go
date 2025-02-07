@@ -235,10 +235,17 @@ func TestMain(m *testing.M) {
 	teardown()
 	os.Exit(code)
 }
+func safeClose() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered from panic of leapMgr close:", r)
+		}
+	}()
+	close(leap.LeapMgr.Close) // This may panic if already closed, but recover() will catch it
+}
 func Test_ProcessPTPMetrics(t *testing.T) {
 	leap.MockLeapFile()
-	defer close(leap.LeapMgr.Close)
-
+	defer safeClose()
 	assert := assert.New(t)
 	for _, tc := range testCases {
 		tc.node = MYNODE
