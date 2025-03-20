@@ -906,11 +906,13 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 
 		// don't discard process stderr output
 		p.cmd.Stderr = p.cmd.Stdout
-
+		var logsReady sync.WaitGroup
+		logsReady.Add(1)
 		if !stdoutToSocket {
 			scanner := bufio.NewScanner(cmdReader)
 			processStatus(nil, p.name, p.messageTag, PtpProcessUp)
 			go func() {
+				logsReady.Done()
 				for scanner.Scan() {
 					output := scanner.Text()
 					if regexErr != nil || !logFilterRegex.MatchString(output) {
@@ -949,6 +951,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 						d.ProcessStatus(p.c, PtpProcessUp)
 					}
 				}
+				logsReady.Done()
 				for scanner.Scan() {
 					output := scanner.Text()
 					if p.pmcCheck {
@@ -979,6 +982,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool) {
 				done <- struct{}{}
 			}()
 		}
+		logsReady.Wait()
 		// Don't restart after termination
 		if !p.Stopped() {
 			err = p.cmd.Start() // this is asynchronous call,
