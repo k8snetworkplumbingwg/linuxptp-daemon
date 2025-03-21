@@ -1027,7 +1027,7 @@ func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
 	if classErr != nil {
 		glog.Errorf("error updating clock class %s", classErr)
 	} else {
-		glog.Infof("updated clock class for last clock class %d to %d with clock accuracy %d", e.clockClass, clockClass, clockAccuracy)
+		glog.Infof("updated clock class for last clock class %d to %d with clock accuracy %d", clk.clockClass, clockClass, clockAccuracy)
 		e.clockClass = clockClass
 		e.clockAccuracy = clockAccuracy
 		clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), clk.cfgName, clockClass)
