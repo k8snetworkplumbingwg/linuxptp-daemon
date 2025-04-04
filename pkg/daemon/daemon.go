@@ -183,7 +183,6 @@ type ptpProcess struct {
 	c                   *net.Conn
 	hasCollectedMetrics bool
 	trIfaceName         string // Time receiver interface name for T-BC clock monitoring
-	profileClockType    string
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -424,6 +423,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 				for _, d := range p.depProcess {
 					if d != nil {
 						time.Sleep(3 * time.Second)
+						glog.Infof("Starting %s", d.Name())
 						go d.CmdRun(false)
 						time.Sleep(3 * time.Second)
 						dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, d.Name())
@@ -598,9 +598,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		if found {
 			switch profileClockType {
 			case "T-GM":
-				clockType = "GM"
+				clockType = event.GM
 			case "T-BC":
-				clockType = "BC"
+				clockType = event.BC
 			}
 		} else {
 			clockType = output.clock_type
@@ -675,16 +675,16 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			ptpClockThreshold: getPTPThreshold(nodeProfile),
 			haProfile:         haProfile,
 			syncERelations:    relations,
-			profileClockType:  profileClockType,
 		}
+
 		if pProcess == ptp4lProcessName {
-			if profileClockType == "T-BC" {
+			if clockType == event.BC {
 				dprocess.trIfaceName, _ = (*nodeProfile).PtpSettings["upstreamPort"]
 			}
 		}
 		// TODO HARDWARE PLUGIN for e810
 		if pProcess == ts2phcProcessName { //& if the x plugin is enabled
-			if profileClockType == "T-GM" {
+			if clockType == event.GM {
 				if output.gnss_serial_port == "" {
 					output.gnss_serial_port = GPSPIPE_SERIALPORT
 				}
@@ -945,7 +945,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 						if strings.Contains(output, ClockClassChangeIndicator) {
 							go p.updateClockClass(nil)
 						}
-						if p.profileClockType == "T-BC" && strings.Contains(output, p.trIfaceName) {
+						if p.clockType == event.BC && strings.Contains(output, p.trIfaceName) {
 							if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
 								glog.Info("T-BC MOVE TO NORMAL")
 								pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-exit")
