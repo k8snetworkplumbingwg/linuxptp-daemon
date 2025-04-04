@@ -37,7 +37,7 @@ type ptp4lConfSection struct {
 type ptp4lConf struct {
 	sections         []ptp4lConfSection
 	mapping          []string
-	profile_name     string
+	profileName      string
 	clock_type       event.ClockType
 	gnss_serial_port string // gnss serial port
 }
@@ -119,7 +119,9 @@ func (output *ptp4lConf) populatePtp4lConf(config *string) error {
 	var currentSection ptp4lConfSection
 	output.sections = make([]ptp4lConfSection, 0)
 	globalIsDefined := false
-	hasSlaveConfigDefined := false
+	isSlaveOnly := false
+	atLeastOneMaster := false
+	allMasters := true
 
 	if config != nil {
 		for _, line := range strings.Split(*config, "\n") {
@@ -142,14 +144,17 @@ func (output *ptp4lConf) populatePtp4lConf(config *string) error {
 				}
 				currentSection = ptp4lConfSection{options: map[string]string{}, sectionName: currentSectionName}
 			} else if currentSectionName != "" {
-				split := strings.IndexByte(line, ' ')
-				if split > 0 {
-					currentSection.options[line[:split]] = line[split:]
-					if (line[:split] == "masterOnly" && line[split:] == "0") ||
-						(line[:split] == "serverOnly" && line[split:] == "0") ||
-						(line[:split] == "slaveOnly" && line[split:] == "1") ||
-						(line[:split] == "clientOnly" && line[split:] == "1") {
-						hasSlaveConfigDefined = true
+				split := strings.Split(line, " ")
+				if len(split) == 2 {
+					currentSection.options[split[0]] = split[1]
+					if currentSection.options["slaveOnly"] == "1" && globalIsDefined {
+						isSlaveOnly = true
+					}
+					if currentSection.options["masterOnly"] == "1" {
+						atLeastOneMaster = true
+					}
+					if currentSectionName != "global" && currentSection.options["masterOnly"] == "0" {
+						allMasters = false
 					}
 				}
 			} else {
@@ -165,16 +170,17 @@ func (output *ptp4lConf) populatePtp4lConf(config *string) error {
 		output.sections = append(output.sections, ptp4lConfSection{options: map[string]string{}, sectionName: "[global]"})
 	}
 
-	if !hasSlaveConfigDefined {
-		// No Slave Interfaces defined
-		output.clock_type = event.GM
-	} else if len(output.sections) > 2 {
-		// Multiple interfaces with at least one slave Interface defined
+	if isSlaveOnly {
+		// slaveOnly = 1
+		output.clock_type = event.OC
+	} else if ((len(output.sections) > 2 && globalIsDefined) || (len(output.sections) > 1 && !globalIsDefined)) && atLeastOneMaster && !allMasters {
+		// At least 2 interfaces defined and at least one isMasterOnly = 1 but not for all sections
 		output.clock_type = event.BC
 	} else {
-		// Single slave Interface defined
-		output.clock_type = event.OC
+		// Otherwise clocktype is considered GM
+		output.clock_type = event.GM
 	}
+	glog.Infof("Clock type inferred from ptp4l = %s", output.clock_type)
 	return nil
 }
 
@@ -256,7 +262,7 @@ func (conf *ptp4lConf) extractSynceRelations() *synce.Relations {
 }
 
 func (conf *ptp4lConf) renderSyncE4lConf(ptpSettings map[string]string) (configOut string, relations *synce.Relations) {
-	configOut = fmt.Sprintf("#profile: %s\n", conf.profile_name)
+	configOut = fmt.Sprintf("#profile: %s\n", conf.profileName)
 	relations = conf.extractSynceRelations()
 	relations.AddClockIds(ptpSettings)
 	deviceIdx := 0
@@ -276,7 +282,7 @@ func (conf *ptp4lConf) renderSyncE4lConf(ptpSettings map[string]string) (configO
 }
 
 func (conf *ptp4lConf) renderPtp4lConf() (configOut string, ifaces config.IFaces) {
-	configOut = fmt.Sprintf("#profile: %s\n", conf.profile_name)
+	configOut = fmt.Sprintf("#profile: %s\n", conf.profileName)
 	conf.mapping = nil
 	var nmea_source event.EventSource
 

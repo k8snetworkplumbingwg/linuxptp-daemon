@@ -60,9 +60,9 @@ var (
 var configPrefix = "/var/run"
 
 var ptpProcesses = []string{
+	ptp4lProcessName,   // ALWAYS FIRST, used to get clock type. There could be more than one ptp4l in the system
 	ts2phcProcessName,  // there can be only one ts2phc process in the system
 	syncEProcessName,   // there can be only one synce Process per profile
-	ptp4lProcessName,   // there could be more than one ptp4l in the system
 	phc2sysProcessName, // there can be only one phc2sys process in the system
 }
 
@@ -512,7 +512,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	var haProfile map[string][]string
 
 	ptpHAEnabled := len(listHaProfiles(nodeProfile)) > 0
-
+	var clockType event.ClockType
 	for _, p := range ptpProcesses {
 		pProcess = p
 		switch pProcess {
@@ -593,19 +593,21 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			return err
 		}
 
-		var clockType event.ClockType
 		profileClockType, found := (*nodeProfile).PtpSettings["clockType"]
 		if found {
+			glog.Infof("Clock type read from profile: %s", profileClockType)
 			switch profileClockType {
 			case "T-GM":
 				clockType = "GM"
 			case "T-BC":
 				clockType = "BC"
 			}
-		} else {
+		} else if p == ptp4lProcessName {
 			clockType = output.clock_type
 		}
-		output.profile_name = *nodeProfile.Name
+
+		glog.Infof("Selected Clock type: %s", clockType)
+		output.profileName = *nodeProfile.Name
 
 		if nodeProfile.Interface != nil && *nodeProfile.Interface != "" {
 			output.sections = append([]ptp4lConfSection{{
