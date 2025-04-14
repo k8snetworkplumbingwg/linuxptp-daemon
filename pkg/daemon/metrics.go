@@ -22,9 +22,13 @@ import (
 )
 
 const (
-	PTPNamespace               = "openshift"
-	PTPSubsystem               = "ptp"
-	GNSS                       = "gnss"
+	// PTPNamespace String describing the prometheus namespace including PTP
+	PTPNamespace = "openshift"
+	// PTPSubsystem String describing the prometheus PTP subsystem
+	PTPSubsystem = "ptp"
+	// GNSS GNSS string
+	GNSS = "gnss"
+	// DPLL String
 	DPLL                       = "dpll"
 	ptp4lProcessName           = "ptp4l"
 	phc2sysProcessName         = "phc2sys"
