@@ -1015,9 +1015,11 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 		}
 		// Don't restart after termination
 		if !p.Stopped() {
-			// Wait for a small amount ot time to give a chance for the socket to be up before starting the command
+			// Wait for a small amount ot time to give a chance for the socket to be up before starting the cloud-event-proxy command
 			// otherwise the initial logs will be lost.
-			time.Sleep(time.Second)
+			if p.name == cloudEventProxyProcessName {
+				time.Sleep(time.Second)
+			}
 			err = p.cmd.Start() // this is asynchronous call,
 			if err != nil {
 				glog.Errorf("CmdRun() error starting %s: %v", p.name, err)

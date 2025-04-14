@@ -22,17 +22,18 @@ import (
 )
 
 const (
-	PTPNamespace       = "openshift"
-	PTPSubsystem       = "ptp"
-	GNSS               = "gnss"
-	DPLL               = "dpll"
-	ptp4lProcessName   = "ptp4l"
-	phc2sysProcessName = "phc2sys"
-	ts2phcProcessName  = "ts2phc"
-	syncEProcessName   = "synce4l"
-	clockRealTime      = "CLOCK_REALTIME"
-	master             = "master"
-	pmcSocketName      = "pmc"
+	PTPNamespace               = "openshift"
+	PTPSubsystem               = "ptp"
+	GNSS                       = "gnss"
+	DPLL                       = "dpll"
+	ptp4lProcessName           = "ptp4l"
+	phc2sysProcessName         = "phc2sys"
+	ts2phcProcessName          = "ts2phc"
+	syncEProcessName           = "synce4l"
+	cloudEventProxyProcessName = "cloud-event-proxy"
+	clockRealTime              = "CLOCK_REALTIME"
+	master                     = "master"
+	pmcSocketName              = "pmc"
 
 	faultyOffset = 999999
 
