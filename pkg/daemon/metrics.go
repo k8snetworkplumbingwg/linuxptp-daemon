@@ -353,8 +353,8 @@ func extractSummaryMetrics(configName, processName, output string) (iface string
 		fields = append(fields, "") // Making space for the new element
 		//  0             1     2
 		//ptp4l.0.config rms   53 max   74 freq -16642 +/-  40 delay  1089 +/-  20
-		copy(fields[2:], fields[1:])                       // Shifting elements
-		fields[1] = masterOffsetIface.get(configName).name // Copying/inserting the value
+		copy(fields[2:], fields[1:])                        // Shifting elements
+		fields[1] = masterOffsetIface.get(configName).alias // Copying/inserting the value
 		//  0             0       1   2
 		//ptp4l.0.config master rms   53 max   74 freq -16642 +/-  40 delay  1089 +/-  20
 	} else if fields[1] != "CLOCK_REALTIME" {
@@ -783,8 +783,12 @@ func (m *masterOffsetInterface) set(configName string, value string) {
 	defer m.Unlock()
 	alias := ""
 	if value != "" {
-		r := []rune(value)
-		alias = string(r[:len(r)-1]) + "x"
+		dotIndex := strings.Index(value, ".")
+		if dotIndex == -1 {
+			alias = value[:len(value)-1] + "x"
+		} else {
+			alias = value[:dotIndex-1] + "x" + value[dotIndex:]
+		}
 	}
 	m.iface[configName] = ptpInterface{
 		name:  value,
