@@ -783,8 +783,12 @@ func (m *masterOffsetInterface) set(configName string, value string) {
 	defer m.Unlock()
 	alias := ""
 	if value != "" {
-		r := []rune(value)
-		alias = string(r[:len(r)-1]) + "x"
+		dotIndex := strings.Index(value, ".")
+		if dotIndex == -1 {
+			alias = value[:len(value)-1] + "x"
+		} else {
+			alias = value[:dotIndex-1] + "x" + value[dotIndex:]
+		}
 	}
 	m.iface[configName] = ptpInterface{
 		name:  value,
