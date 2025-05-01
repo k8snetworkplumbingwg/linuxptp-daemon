@@ -916,6 +916,16 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 	}
 }
 
+func (p *ptpProcess) printFilteredOutput(output string) {
+	logFilterRegex, regexErr := regexp.Compile(p.logFilterRegex)
+	if regexErr != nil {
+		glog.Infof("Failed parsing regex %s for %s: %d.  Defaulting to accept all", p.logFilterRegex, p.configName, regexErr)
+	}
+	if regexErr != nil || !logFilterRegex.MatchString(output) {
+		fmt.Printf("%s\n", output)
+	}
+}
+
 // cmdRun runs given ptpProcess and restarts on errors
 func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 	done := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
@@ -927,11 +937,6 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 		}
 		p.exitCh <- true
 	}()
-
-	logFilterRegex, regexErr := regexp.Compile(p.logFilterRegex)
-	if regexErr != nil {
-		glog.Infof("Failed parsing regex %s for %s: %d.  Defaulting to accept all", p.logFilterRegex, p.configName, regexErr)
-	}
 
 	for {
 		glog.Infof("Starting %s...", p.name)
@@ -952,9 +957,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 			go func() {
 				for scanner.Scan() {
 					output := scanner.Text()
-					if regexErr != nil || !logFilterRegex.MatchString(output) {
-						fmt.Printf("%s\n", output)
-					}
+					p.printFilteredOutput(output)
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
 						if strings.Contains(output, ClockClassChangeIndicator) {
@@ -1005,9 +1008,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 						go p.updateClockClass(p.c)
 					}
 
-					if regexErr != nil || !logFilterRegex.MatchString(output) {
-						fmt.Printf("%s\n", output)
-					}
+					p.printFilteredOutput(output)
 					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface name
 					output = fmt.Sprintf("%s\n", p.replaceClockID(output))
 					// for ts2phc, we need to extract metrics to identify GM state
