@@ -159,6 +159,12 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 
 }
 
+type logFilter struct {
+	logFilterEnabled  bool
+	logFilterRegexStr string
+	logFilterRegex    *regexp.Regexp
+}
+
 type ptpProcess struct {
 	name                string
 	ifaces              config.IFaces
@@ -170,7 +176,7 @@ type ptpProcess struct {
 	exitCh              chan bool
 	execMutex           sync.Mutex
 	stopped             bool
-	logFilterRegex      string
+	logFilters          []logFilter // List of filters to apply to logs
 	cmd                 *exec.Cmd
 	depProcess          []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
 	nodeProfile         ptpv1.PtpProfile
@@ -452,20 +458,40 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	return nil
 }
 
-func getLogFilterRegex(nodeProfile *ptpv1.PtpProfile) string {
-	logFilterRegex := "^$"
+func logFilterFromRegex(regex string) logFilter {
+	var filter logFilter
+	logFilterRegex, regexErr := regexp.Compile(regex)
+	if regexErr != nil {
+		glog.Infof("Failed parsing regex %s: %d.  Defaulting to accept all", regex, regexErr)
+		filter.logFilterEnabled = false
+	} else {
+		filter.logFilterEnabled = true
+		filter.logFilterRegexStr = regex
+		filter.logFilterRegex = logFilterRegex
+	}
+	return filter
+}
+
+func reprLogFilter(filter logFilter) string {
+	return filter.logFilterRegexStr
+}
+
+func getLogFilters(nodeProfile *ptpv1.PtpProfile) []logFilter {
+	var logFilters []logFilter
+
 	if filter, ok := (*nodeProfile).PtpSettings["stdoutFilter"]; ok {
-		logFilterRegex = filter
+		logFilters = append(logFilters, logFilterFromRegex(filter)) // Filter anything with specified filter
 	}
 	if logReduce, ok := (*nodeProfile).PtpSettings["logReduce"]; ok {
 		if strings.ToLower(logReduce) == "true" {
-			logFilterRegex = fmt.Sprintf("%s|^.*master offset.*$", logFilterRegex)
+			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$")) // Just filter anything with master offset
 		}
 	}
-	if logFilterRegex != "^$" {
-		glog.Infof("%s logFilterRegex='%s'\n", *nodeProfile.Name, logFilterRegex)
+	for index, filter := range logFilters {
+		glog.Infof("%s logFilterRegex[%d]='%s'\n", index, *nodeProfile.Name, reprLogFilter(filter))
 	}
-	return logFilterRegex
+
+	return logFilters
 }
 
 func printNodeProfile(nodeProfile *ptpv1.PtpProfile) {
@@ -682,7 +708,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			messageTag:        messageTag,
 			exitCh:            make(chan bool),
 			stopped:           false,
-			logFilterRegex:    getLogFilterRegex(nodeProfile),
+			logFilters:        getLogFilters(nodeProfile),
 			cmd:               cmd,
 			depProcess:        []process{},
 			nodeProfile:       *nodeProfile,
@@ -917,11 +943,16 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 }
 
 func (p *ptpProcess) printFilteredOutput(output string) {
-	logFilterRegex, regexErr := regexp.Compile(p.logFilterRegex)
-	if regexErr != nil {
-		glog.Infof("Failed parsing regex %s for %s: %d.  Defaulting to accept all", p.logFilterRegex, p.configName, regexErr)
+	for _, filter := range p.logFilters {
+		if !filter.logFilterEnabled {
+			continue
+		}
+		if filter.logFilterRegex.MatchString(output) {
+			output = ""
+		}
 	}
-	if regexErr != nil || !logFilterRegex.MatchString(output) {
+
+	if output != "" {
 		fmt.Printf("%s\n", output)
 	}
 }
