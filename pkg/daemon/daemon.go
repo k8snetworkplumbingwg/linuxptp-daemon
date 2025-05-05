@@ -160,9 +160,11 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 }
 
 type logFilter struct {
-	logFilterEnabled  bool
-	logFilterRegexStr string
-	logFilterRegex    *regexp.Regexp
+	logFilterEnabled   bool
+	logFilterRegexStr  string
+	logFilterRegex     *regexp.Regexp
+	logFilterFrequency int64
+	counter            int64
 }
 
 type ptpProcess struct {
@@ -469,6 +471,8 @@ func logFilterFromRegex(regex string) logFilter {
 		filter.logFilterRegexStr = regex
 		filter.logFilterRegex = logFilterRegex
 	}
+	filter.counter = 0
+	filter.logFilterFrequency = 1
 	return filter
 }
 
@@ -948,7 +952,12 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 			continue
 		}
 		if filter.logFilterRegex.MatchString(output) {
-			output = ""
+			filter.counter %= filter.logFilterFrequency
+			if filter.counter == 0 {
+				output = ""
+			}
+			filter.counter++
+
 		}
 	}
 
