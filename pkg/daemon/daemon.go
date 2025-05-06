@@ -951,13 +951,17 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 		if !filter.logFilterEnabled {
 			continue
 		}
+		match := output
 		for _, r := range filter.logFilterRegexes {
-			if r.MatchString(output) {
+			match = r.FindString(match)
+			if match != "" {
 				filter.counter %= filter.logFilterFrequency
 				if filter.counter == 0 {
 					output = ""
 				}
 				filter.counter++
+			} else {
+				break
 			}
 		}
 	}
