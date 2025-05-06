@@ -160,11 +160,15 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 }
 
 type logFilter struct {
-	logFilterEnabled   bool
-	logFilterRegexStrs []string
-	logFilterRegexes   []*regexp.Regexp
-	logFilterFrequency int64
-	counter            int64
+	logFilterEnabled        bool
+	logFilterRegexStr       string
+	logFilterRegex          *regexp.Regexp
+	logFilterReducerRegexes []*regexp.Regexp
+	logFilterFrequency      int64
+	counter                 int64
+	min                     float64
+	max                     float64
+	sum                     float64
 }
 
 type ptpProcess struct {
@@ -468,16 +472,19 @@ func logFilterFromRegex(regex string) logFilter {
 		filter.logFilterEnabled = false
 	} else {
 		filter.logFilterEnabled = true
-		filter.logFilterRegexStrs[0] = regex
-		filter.logFilterRegexes[0] = logFilterRegex
+		filter.logFilterRegexStr = regex
+		filter.logFilterRegex = logFilterRegex
 	}
 	filter.counter = 0
 	filter.logFilterFrequency = 1
+	filter.min = 0
+	filter.max = 0
+	filter.sum = 0
 	return filter
 }
 
 func reprLogFilter(filter logFilter) string {
-	return filter.logFilterRegexStrs[0]
+	return filter.logFilterRegexStr
 }
 
 func getLogFilters(nodeProfile *ptpv1.PtpProfile) []logFilter {
@@ -947,27 +954,41 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 }
 
 func (p *ptpProcess) printFilteredOutput(output string) {
+	skipOutput := false
+	ret := output
 	for _, filter := range p.logFilters {
 		if !filter.logFilterEnabled {
 			continue
 		}
-		match := output
-		for _, r := range filter.logFilterRegexes {
-			match = r.FindString(match)
-			if match != "" {
-				filter.counter %= filter.logFilterFrequency
-				if filter.counter == 0 {
-					output = ""
-				}
-				filter.counter++
-			} else {
-				break
+		if filter.logFilterRegex.MatchString(output) {
+			filter.counter %= filter.logFilterFrequency
+			filteredOutput := output
+			for _, reducer := range filter.logFilterReducerRegexes {
+				filteredOutput = reducer.FindString(filteredOutput)
 			}
+			filteredVal := 0.0
+			if filteredOutput != output {
+				f, err := strconv.ParseFloat(filteredOutput, 64)
+				if err == nil {
+					filteredVal = f
+				}
+			}
+			if filter.counter == 0 {
+				filter.min = filteredVal
+				filter.max = filteredVal
+				filter.sum = filteredVal
+			} else {
+				filter.min = min(filteredVal, filter.min)
+				filter.max = max(filteredVal, filter.max)
+				filter.sum += filteredVal
+				skipOutput = true
+			}
+			filter.counter++
 		}
 	}
 
-	if output != "" {
-		fmt.Printf("%s\n", output)
+	if !skipOutput {
+		fmt.Printf("%s\n", ret)
 	}
 }
 
