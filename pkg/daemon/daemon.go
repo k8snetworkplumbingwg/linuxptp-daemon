@@ -161,8 +161,8 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 
 type logFilter struct {
 	logFilterEnabled   bool
-	logFilterRegexStr  string
-	logFilterRegex     *regexp.Regexp
+	logFilterRegexStrs []string
+	logFilterRegexes   []*regexp.Regexp
 	logFilterFrequency int64
 	counter            int64
 }
@@ -468,8 +468,8 @@ func logFilterFromRegex(regex string) logFilter {
 		filter.logFilterEnabled = false
 	} else {
 		filter.logFilterEnabled = true
-		filter.logFilterRegexStr = regex
-		filter.logFilterRegex = logFilterRegex
+		filter.logFilterRegexStrs[0] = regex
+		filter.logFilterRegexes[0] = logFilterRegex
 	}
 	filter.counter = 0
 	filter.logFilterFrequency = 1
@@ -477,7 +477,7 @@ func logFilterFromRegex(regex string) logFilter {
 }
 
 func reprLogFilter(filter logFilter) string {
-	return filter.logFilterRegexStr
+	return filter.logFilterRegexStrs[0]
 }
 
 func getLogFilters(nodeProfile *ptpv1.PtpProfile) []logFilter {
@@ -951,13 +951,14 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 		if !filter.logFilterEnabled {
 			continue
 		}
-		if filter.logFilterRegex.MatchString(output) {
-			filter.counter %= filter.logFilterFrequency
-			if filter.counter == 0 {
-				output = ""
+		for _, r := range filter.logFilterRegexes {
+			if r.MatchString(output) {
+				filter.counter %= filter.logFilterFrequency
+				if filter.counter == 0 {
+					output = ""
+				}
+				filter.counter++
 			}
-			filter.counter++
-
 		}
 	}
 
