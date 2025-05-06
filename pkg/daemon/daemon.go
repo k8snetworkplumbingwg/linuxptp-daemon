@@ -464,7 +464,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	return nil
 }
 
-func logFilterFromRegex(regex string) logFilter {
+func logFilterFromRegex(regex string, reducers []string, freq int64) logFilter {
 	var filter logFilter
 	logFilterRegex, regexErr := regexp.Compile(regex)
 	if regexErr != nil {
@@ -476,7 +476,7 @@ func logFilterFromRegex(regex string) logFilter {
 		filter.logFilterRegex = logFilterRegex
 	}
 	filter.counter = 0
-	filter.logFilterFrequency = 1
+	filter.logFilterFrequency = freq
 	filter.min = 0
 	filter.max = 0
 	filter.sum = 0
@@ -491,11 +491,13 @@ func getLogFilters(nodeProfile *ptpv1.PtpProfile) []logFilter {
 	var logFilters []logFilter
 
 	if filter, ok := (*nodeProfile).PtpSettings["stdoutFilter"]; ok {
-		logFilters = append(logFilters, logFilterFromRegex(filter)) // Filter anything with specified filter
+		logFilters = append(logFilters, logFilterFromRegex(filter, nil, 1)) // Filter anything with specified filter
 	}
 	if logReduce, ok := (*nodeProfile).PtpSettings["logReduce"]; ok {
 		if strings.ToLower(logReduce) == "true" {
-			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$")) // Just filter anything with master offset
+			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, 1)) // Just filter anything with master offset
+		} else if strings.ToLower(logReduce) == "enhanced" {
+			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, 5)) // Just filter anything with master offset, summarizing output
 		}
 	}
 	for index, filter := range logFilters {
