@@ -475,11 +475,19 @@ func logFilterFromRegex(regex string, reducers []string, freq int64) logFilter {
 		filter.logFilterRegexStr = regex
 		filter.logFilterRegex = logFilterRegex
 	}
+
 	filter.counter = 0
 	filter.logFilterFrequency = freq
 	filter.min = 0
 	filter.max = 0
 	filter.sum = 0
+	for _, reducer := range reducers {
+		reducerRegex, regexErr := regexp.Compile(reducer)
+		if regexErr != nil {
+			glog.Infof("Failed parsing reducer %s: %d.", reducer, regexErr)
+		}
+		filter.logFilterReducerRegexes = append(filter.logFilterReducerRegexes, reducerRegex)
+	}
 	return filter
 }
 
@@ -500,6 +508,7 @@ func getLogFilters(nodeProfile *ptpv1.PtpProfile) []logFilter {
 			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, 5)) // Just filter anything with master offset, summarizing output
 		}
 	}
+
 	for index, filter := range logFilters {
 		glog.Infof("%s logFilterRegex[%d]='%s'\n", index, *nodeProfile.Name, reprLogFilter(filter))
 	}
