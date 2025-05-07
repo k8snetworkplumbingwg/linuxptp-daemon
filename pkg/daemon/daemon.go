@@ -169,6 +169,7 @@ type logFilter struct {
 	min                     float64
 	max                     float64
 	sum                     float64
+	summaryText             string
 }
 
 type ptpProcess struct {
@@ -464,7 +465,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	return nil
 }
 
-func logFilterFromRegex(regex string, reducers []string, freq int64) logFilter {
+func logFilterFromRegex(regex string, reducers []string, freq int64, summaryText string) logFilter {
 	var filter logFilter
 	logFilterRegex, regexErr := regexp.Compile(regex)
 	if regexErr != nil {
@@ -481,9 +482,10 @@ func logFilterFromRegex(regex string, reducers []string, freq int64) logFilter {
 	filter.min = 0
 	filter.max = 0
 	filter.sum = 0
+	filter.summaryText = summaryText
 	for _, reducer := range reducers {
-		reducerRegex, regexErr := regexp.Compile(reducer)
-		if regexErr != nil {
+		reducerRegex, err := regexp.Compile(reducer)
+		if err != nil {
 			glog.Infof("Failed parsing reducer %s: %d.", reducer, regexErr)
 		}
 		filter.logFilterReducerRegexes = append(filter.logFilterReducerRegexes, reducerRegex)
@@ -499,13 +501,13 @@ func getLogFilters(nodeProfile *ptpv1.PtpProfile) []logFilter {
 	var logFilters []logFilter
 
 	if filter, ok := (*nodeProfile).PtpSettings["stdoutFilter"]; ok {
-		logFilters = append(logFilters, logFilterFromRegex(filter, nil, 1)) // Filter anything with specified filter
+		logFilters = append(logFilters, logFilterFromRegex(filter, nil, 1, "")) // Filter anything with specified filter
 	}
 	if logReduce, ok := (*nodeProfile).PtpSettings["logReduce"]; ok {
 		if strings.ToLower(logReduce) == "true" {
-			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, 1)) // Just filter anything with master offset
+			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, 1, "")) // Just filter anything with master offset
 		} else if strings.ToLower(logReduce) == "enhanced" {
-			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, 5)) // Just filter anything with master offset, summarizing output
+			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, 5, "Enhance summary: min=%f,max=%f,avg=%f")) // Just filter anything with master offset, summarizing output
 		}
 	}
 
@@ -988,6 +990,9 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 				filter.min = filteredVal
 				filter.max = filteredVal
 				filter.sum = filteredVal
+				if filter.summaryText != "" {
+					ret = fmt.Sprintf(filter.summaryText, filter.min, filter.max, filter.sum/float64(filter.logFilterFrequency))
+				}
 			} else {
 				filter.min = min(filteredVal, filter.min)
 				filter.max = max(filteredVal, filter.max)
