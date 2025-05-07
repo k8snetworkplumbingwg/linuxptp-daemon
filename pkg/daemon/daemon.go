@@ -159,6 +159,19 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 
 }
 
+type logFilter struct {
+	logFilterEnabled        bool
+	logFilterRegexStr       string
+	logFilterRegex          *regexp.Regexp
+	logFilterReducerRegexes []*regexp.Regexp
+	logFilterFrequency      int64
+	counter                 int64
+	min                     float64
+	max                     float64
+	sum                     float64
+	summaryText             string
+}
+
 type ptpProcess struct {
 	name                string
 	ifaces              config.IFaces
@@ -170,7 +183,7 @@ type ptpProcess struct {
 	exitCh              chan bool
 	execMutex           sync.Mutex
 	stopped             bool
-	logFilterRegex      string
+	logFilters          []logFilter // List of filters to apply to logs
 	cmd                 *exec.Cmd
 	depProcess          []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
 	nodeProfile         ptpv1.PtpProfile
@@ -452,20 +465,57 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	return nil
 }
 
-func getLogFilterRegex(nodeProfile *ptpv1.PtpProfile) string {
-	logFilterRegex := "^$"
+func logFilterFromRegex(regex string, reducers []string, freq int64, summaryText string) logFilter {
+	var filter logFilter
+	logFilterRegex, regexErr := regexp.Compile(regex)
+	if regexErr != nil {
+		glog.Infof("Failed parsing regex %s: %d.  Defaulting to accept all", regex, regexErr)
+		filter.logFilterEnabled = false
+	} else {
+		filter.logFilterEnabled = true
+		filter.logFilterRegexStr = regex
+		filter.logFilterRegex = logFilterRegex
+	}
+
+	filter.counter = 0
+	filter.logFilterFrequency = freq
+	filter.min = 0
+	filter.max = 0
+	filter.sum = 0
+	filter.summaryText = summaryText
+	for _, reducer := range reducers {
+		reducerRegex, err := regexp.Compile(reducer)
+		if err != nil {
+			glog.Infof("Failed parsing reducer %s: %d.", reducer, regexErr)
+		}
+		filter.logFilterReducerRegexes = append(filter.logFilterReducerRegexes, reducerRegex)
+	}
+	return filter
+}
+
+func reprLogFilter(filter logFilter) string {
+	return filter.logFilterRegexStr
+}
+
+func getLogFilters(nodeProfile *ptpv1.PtpProfile) []logFilter {
+	var logFilters []logFilter
+
 	if filter, ok := (*nodeProfile).PtpSettings["stdoutFilter"]; ok {
-		logFilterRegex = filter
+		logFilters = append(logFilters, logFilterFromRegex(filter, nil, 1, "")) // Filter anything with specified filter
 	}
 	if logReduce, ok := (*nodeProfile).PtpSettings["logReduce"]; ok {
 		if strings.ToLower(logReduce) == "true" {
-			logFilterRegex = fmt.Sprintf("%s|^.*master offset.*$", logFilterRegex)
+			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, 1, "")) // Just filter anything with master offset
+		} else if strings.ToLower(logReduce) == "enhanced" {
+			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, 5, "Enhance summary: min=%f,max=%f,avg=%f")) // Just filter anything with master offset, summarizing output
 		}
 	}
-	if logFilterRegex != "^$" {
-		glog.Infof("%s logFilterRegex='%s'\n", *nodeProfile.Name, logFilterRegex)
+
+	for index, filter := range logFilters {
+		glog.Infof("%s logFilterRegex[%d]='%s'\n", index, *nodeProfile.Name, reprLogFilter(filter))
 	}
-	return logFilterRegex
+
+	return logFilters
 }
 
 func printNodeProfile(nodeProfile *ptpv1.PtpProfile) {
@@ -682,7 +732,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			messageTag:        messageTag,
 			exitCh:            make(chan bool),
 			stopped:           false,
-			logFilterRegex:    getLogFilterRegex(nodeProfile),
+			logFilters:        getLogFilters(nodeProfile),
 			cmd:               cmd,
 			depProcess:        []process{},
 			nodeProfile:       *nodeProfile,
@@ -916,6 +966,48 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 	}
 }
 
+func (p *ptpProcess) printFilteredOutput(output string) {
+	skipOutput := false
+	ret := output
+	for _, filter := range p.logFilters {
+		if !filter.logFilterEnabled {
+			continue
+		}
+		if filter.logFilterRegex.MatchString(output) {
+			filter.counter %= filter.logFilterFrequency
+			filteredOutput := output
+			for _, reducer := range filter.logFilterReducerRegexes {
+				filteredOutput = reducer.FindString(filteredOutput)
+			}
+			filteredVal := 0.0
+			if filteredOutput != output {
+				f, err := strconv.ParseFloat(filteredOutput, 64)
+				if err == nil {
+					filteredVal = f
+				}
+			}
+			if filter.counter == 0 {
+				filter.min = filteredVal
+				filter.max = filteredVal
+				filter.sum = filteredVal
+				if filter.summaryText != "" {
+					ret = fmt.Sprintf(filter.summaryText, filter.min, filter.max, filter.sum/float64(filter.logFilterFrequency))
+				}
+			} else {
+				filter.min = min(filteredVal, filter.min)
+				filter.max = max(filteredVal, filter.max)
+				filter.sum += filteredVal
+				skipOutput = true
+			}
+			filter.counter++
+		}
+	}
+
+	if !skipOutput {
+		fmt.Printf("%s\n", ret)
+	}
+}
+
 // cmdRun runs given ptpProcess and restarts on errors
 func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 	done := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
@@ -927,11 +1019,6 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 		}
 		p.exitCh <- true
 	}()
-
-	logFilterRegex, regexErr := regexp.Compile(p.logFilterRegex)
-	if regexErr != nil {
-		glog.Infof("Failed parsing regex %s for %s: %d.  Defaulting to accept all", p.logFilterRegex, p.configName, regexErr)
-	}
 
 	for {
 		glog.Infof("Starting %s...", p.name)
@@ -952,9 +1039,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 			go func() {
 				for scanner.Scan() {
 					output := scanner.Text()
-					if regexErr != nil || !logFilterRegex.MatchString(output) {
-						fmt.Printf("%s\n", output)
-					}
+					p.printFilteredOutput(output)
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
 						if strings.Contains(output, ClockClassChangeIndicator) {
@@ -1005,9 +1090,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 						go p.updateClockClass(p.c)
 					}
 
-					if regexErr != nil || !logFilterRegex.MatchString(output) {
-						fmt.Printf("%s\n", output)
-					}
+					p.printFilteredOutput(output)
 					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface name
 					output = fmt.Sprintf("%s\n", p.replaceClockID(output))
 					// for ts2phc, we need to extract metrics to identify GM state
