@@ -986,6 +986,7 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 			continue
 		}
 		if filter.logFilterRegex.MatchString(output) {
+			filter.counter++
 			filter.counter %= filter.logFilterFrequency
 			filteredOutput := output
 			for _, reducer := range filter.logFilterReducerRegexes {
@@ -1003,13 +1004,13 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 			if filter.logFilterFrequency < 0 {
 				skipOutput = true
 			} else if filter.counter == 0 {
+				if filter.summaryText != "" {
+					ret = fmt.Sprintf(filter.summaryText, filter.min, filter.max, filter.sum/float64(filter.logFilterFrequency), filter.abssum/float64(filter.logFilterFrequency))
+				}
 				filter.min = filteredVal
 				filter.max = filteredVal
 				filter.sum = filteredVal
 				filter.abssum = math.Abs(filteredVal)
-				if filter.summaryText != "" {
-					ret = fmt.Sprintf(filter.summaryText, filter.min, filter.max, filter.sum/float64(filter.logFilterFrequency), filter.abssum/float64(filter.logFilterFrequency))
-				}
 			} else {
 				filter.min = min(filteredVal, filter.min)
 				filter.max = max(filteredVal, filter.max)
@@ -1017,7 +1018,7 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 				filter.abssum += math.Abs(filteredVal)
 				skipOutput = true
 			}
-			filter.counter++
+
 		}
 	}
 
