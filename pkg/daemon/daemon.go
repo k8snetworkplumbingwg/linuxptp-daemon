@@ -516,7 +516,7 @@ func getLogFilters(nodeProfile *ptpv1.PtpProfile) []logFilter {
 
 			phc2sysOffsetRegex := "^.*phc2sys.*phc offset.*$"
 			phc2sysOffsetReducers := []string{"phc offset *[0-9-]* ", "[-]*[0-9]+"}
-			phc2sysOffsetFormatter := "ptp4l offset summary: min=%f,max=%f,avg=%f,absavg=%f"
+			phc2sysOffsetFormatter := "phc2sys offset summary: min=%f,max=%f,avg=%f,absavg=%f"
 			phc2sysOffsetFilter := logFilterFromRegex(phc2sysOffsetRegex, phc2sysOffsetReducers, 16, phc2sysOffsetFormatter)
 			logFilters = append(logFilters, phc2sysOffsetFilter) // Just filter anything with master offset, summarizing output
 		}
@@ -1021,7 +1021,7 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 	}
 
 	if !skipOutput {
-		fmt.Printf("%s\n", ret)
+		glog.Infof("%s\n", ret)
 	}
 }
 
