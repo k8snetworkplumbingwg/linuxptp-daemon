@@ -501,11 +501,11 @@ func getLogFilters(nodeProfile *ptpv1.PtpProfile) []logFilter {
 	var logFilters []logFilter
 
 	if filter, ok := (*nodeProfile).PtpSettings["stdoutFilter"]; ok {
-		logFilters = append(logFilters, logFilterFromRegex(filter, nil, 1, "")) // Filter anything with specified filter
+		logFilters = append(logFilters, logFilterFromRegex(filter, nil, -1, "")) // Filter anything with specified filter
 	}
 	if logReduce, ok := (*nodeProfile).PtpSettings["logReduce"]; ok {
-		if strings.ToLower(logReduce) == "true" {
-			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, 1, "")) // Just filter anything with master offset
+		if strings.ToLower(logReduce) == "true" || strings.ToLower(logReduce) == "basic" {
+			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, -1, "")) // Just filter anything with master offset
 		} else if strings.ToLower(logReduce) == "enhanced" {
 			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, 5, "Enhance summary: min=%f,max=%f,avg=%f")) // Just filter anything with master offset, summarizing output
 		}
@@ -986,7 +986,9 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 					filteredVal = f
 				}
 			}
-			if filter.counter == 0 {
+			if filter.logFilterFrequency < 0 {
+				skipOutput = true
+			} else if filter.counter == 0 {
 				filter.min = filteredVal
 				filter.max = filteredVal
 				filter.sum = filteredVal
