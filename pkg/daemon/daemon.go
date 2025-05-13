@@ -508,12 +508,17 @@ func getLogFilters(nodeProfile *ptpv1.PtpProfile) []logFilter {
 		if strings.ToLower(logReduce) == "true" || strings.ToLower(logReduce) == "basic" {
 			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, -1, "")) // Just filter anything with master offset
 		} else if strings.ToLower(logReduce) == "enhanced" {
-			//["master offset *[0-9-]* ", "[0-9-]*"]
-			ptp4lOffsetRegex := "^.*master offset.*$"
+			ptp4lOffsetRegex := "^.*ptp4l.*master offset.*$"
 			ptp4lOffsetReducers := []string{"master offset *[0-9-]* ", "[-]*[0-9]+"}
 			ptp4lOffsetFormatter := "ptp4l offset summary: min=%f,max=%f,avg=%f,absavg=%f"
-			ptp4lOffsetFilter := logFilterFromRegex(ptp4lOffsetRegex, ptp4lOffsetReducers, 32, ptp4lOffsetFormatter)
+			ptp4lOffsetFilter := logFilterFromRegex(ptp4lOffsetRegex, ptp4lOffsetReducers, 16, ptp4lOffsetFormatter)
 			logFilters = append(logFilters, ptp4lOffsetFilter) // Just filter anything with master offset, summarizing output
+
+			phc2sysOffsetRegex := "^.*phc2sys.*phc offset.*$"
+			phc2sysOffsetReducers := []string{"phc offset *[0-9-]* ", "[-]*[0-9]+"}
+			phc2sysOffsetFormatter := "ptp4l offset summary: min=%f,max=%f,avg=%f,absavg=%f"
+			phc2sysOffsetFilter := logFilterFromRegex(phc2sysOffsetRegex, phc2sysOffsetReducers, 16, phc2sysOffsetFormatter)
+			logFilters = append(logFilters, phc2sysOffsetFilter) // Just filter anything with master offset, summarizing output
 		}
 	}
 
