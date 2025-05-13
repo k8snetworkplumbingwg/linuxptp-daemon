@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"cmp"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -1005,7 +1006,7 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 				filter.min = filteredVal
 				filter.max = filteredVal
 				filter.sum = filteredVal
-				filter.abssum = filteredVal
+				filter.abssum = math.Abs(filteredVal)
 				if filter.summaryText != "" {
 					ret = fmt.Sprintf(filter.summaryText, filter.min, filter.max, filter.sum/float64(filter.logFilterFrequency), filter.abssum/float64(filter.logFilterFrequency))
 				}
@@ -1013,7 +1014,7 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 				filter.min = min(filteredVal, filter.min)
 				filter.max = max(filteredVal, filter.max)
 				filter.sum += filteredVal
-				filter.abssum += filteredVal
+				filter.abssum += math.Abs(filteredVal)
 				skipOutput = true
 			}
 			filter.counter++
