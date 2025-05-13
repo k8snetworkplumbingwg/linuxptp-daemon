@@ -169,6 +169,7 @@ type logFilter struct {
 	min                     float64
 	max                     float64
 	sum                     float64
+	abssum                  float64
 	summaryText             string
 }
 
@@ -510,7 +511,7 @@ func getLogFilters(nodeProfile *ptpv1.PtpProfile) []logFilter {
 			//["master offset *[0-9-]* ", "[0-9-]*"]
 			ptp4lOffsetRegex := "^.*master offset.*$"
 			ptp4lOffsetReducers := []string{"master offset *[0-9-]* ", "[-]*[0-9]+"}
-			ptp4lOffsetFormatter := "ptp4l offset summary: min=%f,max=%f,avg=%f"
+			ptp4lOffsetFormatter := "ptp4l offset summary: min=%f,max=%f,avg=%f,absavg=%f"
 			ptp4lOffsetFilter := logFilterFromRegex(ptp4lOffsetRegex, ptp4lOffsetReducers, 32, ptp4lOffsetFormatter)
 			logFilters = append(logFilters, ptp4lOffsetFilter) // Just filter anything with master offset, summarizing output
 		}
@@ -979,14 +980,10 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 			continue
 		}
 		if filter.logFilterRegex.MatchString(output) {
-
 			filter.counter %= filter.logFilterFrequency
 			filteredOutput := output
-			glog.Infof("%d %d MATCH: %s", filter.counter, filter.logFilterFrequency, output)
 			for _, reducer := range filter.logFilterReducerRegexes {
-				glog.Infof("%s will reduce MATCH: %s", reducer.String(), filteredOutput)
 				filteredOutput = reducer.FindString(filteredOutput)
-				glog.Infof("%s reduced MATCH: %s", reducer.String(), filteredOutput)
 			}
 			filteredVal := 0.0
 			if filteredOutput != output {
@@ -1003,13 +1000,15 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 				filter.min = filteredVal
 				filter.max = filteredVal
 				filter.sum = filteredVal
+				filter.abssum = filteredVal
 				if filter.summaryText != "" {
-					ret = fmt.Sprintf(filter.summaryText, filter.min, filter.max, filter.sum/float64(filter.logFilterFrequency))
+					ret = fmt.Sprintf(filter.summaryText, filter.min, filter.max, filter.sum/float64(filter.logFilterFrequency), filter.abssum/float64(filter.logFilterFrequency))
 				}
 			} else {
 				filter.min = min(filteredVal, filter.min)
 				filter.max = max(filteredVal, filter.max)
 				filter.sum += filteredVal
+				filter.abssum += filteredVal
 				skipOutput = true
 			}
 			filter.counter++
