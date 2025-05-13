@@ -507,7 +507,12 @@ func getLogFilters(nodeProfile *ptpv1.PtpProfile) []logFilter {
 		if strings.ToLower(logReduce) == "true" || strings.ToLower(logReduce) == "basic" {
 			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, -1, "")) // Just filter anything with master offset
 		} else if strings.ToLower(logReduce) == "enhanced" {
-			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, 5, "Enhance summary: min=%f,max=%f,avg=%f")) // Just filter anything with master offset, summarizing output
+			//["master offset *[0-9-]* ", "[0-9-]*"]
+			ptp4lOffsetRegex := "^.*master offset.*$"
+			ptp4lOffsetReducers := []string{"master offset *[0-9-]* ", "[-]*[0-9]+"}
+			ptp4lOffsetFormatter := "ptp4l offset summary: min=%f,max=%f,avg=%f"
+			ptp4lOffsetFilter := logFilterFromRegex(ptp4lOffsetRegex, ptp4lOffsetReducers, 32, ptp4lOffsetFormatter)
+			logFilters = append(logFilters, ptp4lOffsetFilter) // Just filter anything with master offset, summarizing output
 		}
 	}
 
@@ -974,16 +979,22 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 			continue
 		}
 		if filter.logFilterRegex.MatchString(output) {
+
 			filter.counter %= filter.logFilterFrequency
 			filteredOutput := output
+			glog.Infof("%d %d MATCH: %s", filter.counter, filter.logFilterFrequency, output)
 			for _, reducer := range filter.logFilterReducerRegexes {
+				glog.Infof("%s will reduce MATCH: %s", reducer.String(), filteredOutput)
 				filteredOutput = reducer.FindString(filteredOutput)
+				glog.Infof("%s reduced MATCH: %s", reducer.String(), filteredOutput)
 			}
 			filteredVal := 0.0
 			if filteredOutput != output {
 				f, err := strconv.ParseFloat(filteredOutput, 64)
 				if err == nil {
 					filteredVal = f
+				} else {
+					glog.Errorf("error parsing filtered value %s", err.Error())
 				}
 			}
 			if filter.logFilterFrequency < 0 {
