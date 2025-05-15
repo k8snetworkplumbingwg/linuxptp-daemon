@@ -986,11 +986,8 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 			continue
 		}
 		if filter.logFilterRegex.MatchString(output) {
-			glog.Infof("a %d %d ", filter.counter, filter.logFilterFrequency)
 			filter.counter++
-			glog.Infof("b %d %d ", filter.counter, filter.logFilterFrequency)
 			filter.counter %= filter.logFilterFrequency
-			glog.Infof("c %d %d ", filter.counter, filter.logFilterFrequency)
 			filteredOutput := output
 			for _, reducer := range filter.logFilterReducerRegexes {
 				filteredOutput = reducer.FindString(filteredOutput)
