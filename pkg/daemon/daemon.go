@@ -185,7 +185,7 @@ type ptpProcess struct {
 	exitCh              chan bool
 	execMutex           sync.Mutex
 	stopped             bool
-	logFilters          []logFilter // List of filters to apply to logs
+	logFilters          []*logFilter // List of filters to apply to logs
 	cmd                 *exec.Cmd
 	depProcess          []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
 	nodeProfile         ptpv1.PtpProfile
@@ -467,7 +467,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	return nil
 }
 
-func logFilterFromRegex(regex string, reducers []string, freq int64, summaryText string) logFilter {
+func logFilterFromRegex(regex string, reducers []string, freq int64, summaryText string) *logFilter {
 	var filter logFilter
 	logFilterRegex, regexErr := regexp.Compile(regex)
 	if regexErr != nil {
@@ -492,15 +492,15 @@ func logFilterFromRegex(regex string, reducers []string, freq int64, summaryText
 		}
 		filter.logFilterReducerRegexes = append(filter.logFilterReducerRegexes, reducerRegex)
 	}
-	return filter
+	return &filter
 }
 
-func reprLogFilter(filter logFilter) string {
+func reprLogFilter(filter *logFilter) string {
 	return filter.logFilterRegexStr
 }
 
-func getLogFilters(nodeProfile *ptpv1.PtpProfile) []logFilter {
-	var logFilters []logFilter
+func getLogFilters(nodeProfile *ptpv1.PtpProfile) []*logFilter {
+	var logFilters []*logFilter
 
 	if filter, ok := (*nodeProfile).PtpSettings["stdoutFilter"]; ok {
 		logFilters = append(logFilters, logFilterFromRegex(filter, nil, -1, "")) // Filter anything with specified filter
@@ -986,8 +986,11 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 			continue
 		}
 		if filter.logFilterRegex.MatchString(output) {
+			glog.Infof("a %d %d ", filter.counter, filter.logFilterFrequency)
 			filter.counter++
+			glog.Infof("b %d %d ", filter.counter, filter.logFilterFrequency)
 			filter.counter %= filter.logFilterFrequency
+			glog.Infof("c %d %d ", filter.counter, filter.logFilterFrequency)
 			filteredOutput := output
 			for _, reducer := range filter.logFilterReducerRegexes {
 				filteredOutput = reducer.FindString(filteredOutput)
