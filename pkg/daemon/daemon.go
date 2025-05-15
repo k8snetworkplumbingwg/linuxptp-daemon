@@ -336,6 +336,12 @@ func printWhenNotNil(p interface{}, description string) {
 	}
 }
 
+func printWhenNotEmpty(info string) {
+	if info != "" {
+		glog.Info(info)
+	}
+}
+
 // SetProcessManager in tests
 func (dn *Daemon) SetProcessManager(p *ProcessManager) {
 	dn.processManager = p
@@ -978,7 +984,7 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 	}
 }
 
-func (p *ptpProcess) printFilteredOutput(output string) {
+func (p *ptpProcess) filterOutput(output string) string {
 	skipOutput := false
 	ret := output
 	for _, filter := range p.logFilters {
@@ -1018,13 +1024,13 @@ func (p *ptpProcess) printFilteredOutput(output string) {
 				filter.abssum += math.Abs(filteredVal)
 				skipOutput = true
 			}
-
 		}
 	}
 
-	if !skipOutput {
-		glog.Infof("%s\n", ret)
+	if skipOutput {
+		ret = ""
 	}
+	return ret
 }
 
 // cmdRun runs given ptpProcess and restarts on errors
@@ -1058,7 +1064,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 			go func() {
 				for scanner.Scan() {
 					output := scanner.Text()
-					p.printFilteredOutput(output)
+					printWhenNotEmpty(p.filterOutput(output))
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
 						if strings.Contains(output, ClockClassChangeIndicator) {
@@ -1109,7 +1115,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 						go p.updateClockClass(p.c)
 					}
 
-					p.printFilteredOutput(output)
+					printWhenNotEmpty(p.filterOutput(output))
 					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface name
 					output = fmt.Sprintf("%s\n", p.replaceClockID(output))
 					// for ts2phc, we need to extract metrics to identify GM state
