@@ -38,7 +38,6 @@ func clean(t *testing.T) {
 	assert.NoError(t, err)
 }
 func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
-
 	stopCh := make(<-chan struct{})
 	assert.NoError(t, leap.MockLeapFile())
 	defer func() {
