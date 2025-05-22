@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/features"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
@@ -249,6 +250,10 @@ func New(
 		RegisterMetrics(nodeName)
 	}
 	InitializeOffsetMaps()
+
+	features.Flags.Init()
+	features.Flags.Print()
+
 	pluginManager := registerPlugins(plugins)
 	eventChannel := make(chan event.EventChannel, 100)
 	pm := &ProcessManager{
