@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bigkevmcd/go-configparser"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/features"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/stretchr/testify/assert"
@@ -38,7 +39,7 @@ func clean(t *testing.T) {
 	assert.NoError(t, err)
 }
 func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
-
+	features.SetVersionForTesting(features.VersionLinuxPTP441.String())
 	stopCh := make(<-chan struct{})
 	assert.NoError(t, leap.MockLeapFile())
 	defer func() {
