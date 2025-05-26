@@ -691,10 +691,10 @@ func addFlagsForMonitor(process string, configOpts *string, conf *ptp4lConf, std
 			if !strings.Contains(*configOpts, "--summary_interval") {
 				for index, section := range conf.sections {
 					if section.sectionName == "[global]" {
-						_, exist := section.options["summary_interval"]
+						_, exist := getPtp4lConfOptionOrNil(section.options, "summary_interval")
 						if !exist {
 							glog.Info("adding summary_interval 1 to print summary messages to stdout for ptp4l to use prometheus exporter")
-							section.options["summary_interval"] = "1"
+							section.options = setPtp4lConfOption(section.options, "summary_interval", "1")
 						}
 						conf.sections[index] = section
 					}
