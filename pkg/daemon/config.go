@@ -63,6 +63,13 @@ func (conf *ptp4lConf) getPtp4lConfOptionOrEmptyString(sectionName string, key s
 }
 
 func (conf *ptp4lConf) setPtp4lConfOption(sectionName string, key string, value string, overwrite bool) {
+	_, ok := conf.sections[sectionName]
+	if !ok {
+		conf.sections[sectionName] = ptp4lConfSection{
+			options:     make([]ptp4lConfOption, 0),
+			sectionName: sectionName,
+		}
+	}
 	section := conf.sections[sectionName]
 	if overwrite {
 		for i := range section.options {
@@ -151,7 +158,6 @@ func (conf *ptp4lConf) populatePtp4lConf(config *string) error {
 	var currentSectionName string
 	var currentSection ptp4lConfSection
 	conf.sections = make(map[string]ptp4lConfSection)
-	globalIsDefined := false
 	hasSlaveConfigDefined := false
 
 	if config != nil {
@@ -170,9 +176,6 @@ func (conf *ptp4lConf) populatePtp4lConf(config *string) error {
 				}
 
 				currentSectionName = fmt.Sprintf("%s]", currentLine[0])
-				if currentSectionName == GlobalSectionName {
-					globalIsDefined = true
-				}
 				currentSection = ptp4lConfSection{options: make([]ptp4lConfOption, 0), sectionName: currentSectionName}
 			} else if currentSectionName != "" {
 				split := strings.IndexByte(line, ' ')
@@ -191,13 +194,6 @@ func (conf *ptp4lConf) populatePtp4lConf(config *string) error {
 				return errors.New("Config option not in section: " + line)
 			}
 		}
-		if currentSectionName != "" {
-			conf.sections[currentSectionName] = currentSection
-		}
-	}
-
-	if !globalIsDefined {
-		conf.sections[GlobalSectionName] = ptp4lConfSection{options: make([]ptp4lConfOption, 0), sectionName: GlobalSectionName}
 	}
 
 	if !hasSlaveConfigDefined {
