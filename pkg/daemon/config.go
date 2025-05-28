@@ -327,7 +327,9 @@ func (conf *ptp4lConf) renderSyncE4lConf(ptpSettings map[string]string) (configO
 				deviceIdx++
 			}
 		}
-		for k, v := range section.options {
+		for _, option := range section.options {
+			k := option.key
+			v := option.value
 			configOut = fmt.Sprintf("%s\n%s %s", configOut, k, v)
 		}
 	}
@@ -367,7 +369,9 @@ func (conf *ptp4lConf) renderPtp4lConf() (configOut string, ifaces config.IFaces
 				PhcId:  iface.PhcId,
 			})
 		}
-		for k, v := range section.options {
+		for _, option := range section.options {
+			k := option.key
+			v := option.value
 			configOut = fmt.Sprintf("%s\n%s %s", configOut, k, v)
 		}
 	}
