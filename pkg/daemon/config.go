@@ -53,6 +53,7 @@ type ptp4lConf struct {
 }
 
 func (conf *ptp4lConf) getPtp4lConfOptionOrEmptyString(sectionName string, key string) (string, bool) {
+	glog.Infof("getPtp4lConfOptionOrEmptyString: %s %s", sectionName, key)
 	section := conf.sections[sectionName]
 	for _, option := range section.options {
 		if option.key == key {
@@ -63,6 +64,7 @@ func (conf *ptp4lConf) getPtp4lConfOptionOrEmptyString(sectionName string, key s
 }
 
 func (conf *ptp4lConf) setPtp4lConfOption(sectionName string, key string, value string, overwrite bool) {
+	glog.Infof("setPtp4lConfOption: %s %s %s", sectionName, key, value)
 	_, ok := conf.sections[sectionName]
 	if !ok {
 		conf.sections[sectionName] = ptp4lConfSection{
@@ -70,10 +72,15 @@ func (conf *ptp4lConf) setPtp4lConfOption(sectionName string, key string, value 
 			sectionName: sectionName,
 		}
 	}
+	if key == "" {
+		return
+	}
 	section := conf.sections[sectionName]
 	if overwrite {
 		for i := range section.options {
-			section.options[i] = ptp4lConfOption{key: key, value: value}
+			if section.options[i].key == key {
+				section.options[i] = ptp4lConfOption{key: key, value: value}
+			}
 		}
 	} else {
 		section.options = append(section.options, ptp4lConfOption{key: key, value: value})
@@ -177,6 +184,7 @@ func (conf *ptp4lConf) populatePtp4lConf(config *string) error {
 
 				currentSectionName = fmt.Sprintf("%s]", currentLine[0])
 				currentSection = ptp4lConfSection{options: make([]ptp4lConfOption, 0), sectionName: currentSectionName}
+				conf.setPtp4lConfOption(currentSectionName, "", "", false)
 			} else if currentSectionName != "" {
 				split := strings.IndexByte(line, ' ')
 				if split > 0 {
@@ -336,10 +344,10 @@ func (conf *ptp4lConf) renderPtp4lConf() (configOut string, ifaces config.IFaces
 	configOut = fmt.Sprintf("#profile: %s\n", conf.profile_name)
 	var nmea_source event.EventSource
 
-	for _, section := range conf.sections {
+	for sectionName, section := range conf.sections {
 		configOut = fmt.Sprintf("%s\n%s", configOut, section.sectionName)
 
-		if section.sectionName == "[nmea]" {
+		if sectionName == NmeaSectionName {
 			if source, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "ts2phc.master"); ok {
 				nmea_source = getSource(source)
 			}
