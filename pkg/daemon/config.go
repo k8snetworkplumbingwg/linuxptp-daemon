@@ -53,7 +53,6 @@ type ptp4lConf struct {
 }
 
 func (conf *ptp4lConf) getPtp4lConfOptionOrEmptyString(sectionName string, key string) (string, bool) {
-	glog.Infof("getPtp4lConfOptionOrEmptyString: %s %s", sectionName, key)
 	section := conf.sections[sectionName]
 	for _, option := range section.options {
 		if option.key == key {
@@ -64,7 +63,6 @@ func (conf *ptp4lConf) getPtp4lConfOptionOrEmptyString(sectionName string, key s
 }
 
 func (conf *ptp4lConf) setPtp4lConfOption(sectionName string, key string, value string, overwrite bool) {
-	glog.Infof("setPtp4lConfOption: %s %s %s", sectionName, key, value)
 	_, ok := conf.sections[sectionName]
 	if !ok {
 		conf.sections[sectionName] = ptp4lConfSection{
