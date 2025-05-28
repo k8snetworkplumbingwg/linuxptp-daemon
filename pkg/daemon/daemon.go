@@ -624,15 +624,13 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		}
 
 		if nodeProfile.Interface != nil && *nodeProfile.Interface != "" {
-			output.sections = append([]ptp4lConfSection{{
-				options:     make([]ptp4lConfOption, 0),
-				sectionName: fmt.Sprintf("[%s]", *nodeProfile.Interface)}}, output.sections...)
+			output.addInterfaceSection(*nodeProfile.Interface)
 		} else {
 			iface := string("")
 			nodeProfile.Interface = &iface
 		}
 
-		output.addGlobalSection(messageTag, socketPath, pProcess)
+		output.extendGlobalSection(messageTag, socketPath, pProcess)
 
 		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
 
