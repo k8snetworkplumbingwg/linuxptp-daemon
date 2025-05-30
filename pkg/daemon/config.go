@@ -156,7 +156,7 @@ func (conf *ptp4lConf) populatePtp4lConf(config *string) error {
 	var currentSectionName string
 	conf.sectionOptions = make(map[string][]ptp4lConfOption)
 	hasSlaveConfigDefined := false
-
+	ifaceCount := 0
 	if config != nil {
 		for _, line := range strings.Split(*config, "\n") {
 			line = strings.TrimSpace(line)
@@ -168,6 +168,9 @@ func (conf *ptp4lConf) populatePtp4lConf(config *string) error {
 					return errors.New("Section missing closing ']': " + line)
 				}
 				currentSectionName = fmt.Sprintf("%s]", currentLine[0])
+				if currentSectionName != GlobalSectionName && currentSectionName != NmeaSectionName && currentSectionName != UnicastSectionName {
+					ifaceCount++
+				}
 				conf.setPtp4lConfOption(currentSectionName, "", "", false)
 			} else if currentSectionName != "" {
 				split := strings.IndexByte(line, ' ')
@@ -191,13 +194,14 @@ func (conf *ptp4lConf) populatePtp4lConf(config *string) error {
 	if !hasSlaveConfigDefined {
 		// No Slave Interfaces defined
 		conf.clock_type = event.GM
-	} else if len(conf.sectionOptions) > 2 { //Need to count
+	} else if ifaceCount > 1 {
 		// Multiple interfaces with at least one slave Interface defined
 		conf.clock_type = event.BC
 	} else {
 		// Single slave Interface defined
 		conf.clock_type = event.OC
 	}
+
 	return nil
 }
 
