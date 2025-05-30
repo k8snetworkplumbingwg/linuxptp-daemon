@@ -21,8 +21,9 @@ import (
 
 // predefined config section names
 const (
-	GlobalSectionName = "[global]"
-	NmeaSectionName   = "[nmea]"
+	GlobalSectionName  = "[global]"
+	NmeaSectionName    = "[nmea]"
+	UnicastSectionName = "[unicast_master_table]"
 )
 
 // LinuxPTPUpdate controls whether to update linuxPTP conf
@@ -41,8 +42,7 @@ type ptp4lConfOption struct {
 }
 
 type ptp4lConfSection struct {
-	sectionName string
-	options     []ptp4lConfOption
+	options []ptp4lConfOption
 }
 
 type ptp4lConf struct {
@@ -66,8 +66,7 @@ func (conf *ptp4lConf) setPtp4lConfOption(sectionName string, key string, value 
 	_, ok := conf.sections[sectionName]
 	if !ok {
 		conf.sections[sectionName] = ptp4lConfSection{
-			options:     make([]ptp4lConfOption, 0),
-			sectionName: sectionName,
+			options: make([]ptp4lConfOption, 0),
 		}
 	}
 	if key == "" {
@@ -181,7 +180,6 @@ func (conf *ptp4lConf) populatePtp4lConf(config *string) error {
 				}
 
 				currentSectionName = fmt.Sprintf("%s]", currentLine[0])
-				currentSection = ptp4lConfSection{options: make([]ptp4lConfOption, 0), sectionName: currentSectionName}
 				conf.setPtp4lConfOption(currentSectionName, "", "", false)
 			} else if currentSectionName != "" {
 				split := strings.IndexByte(line, ' ')
@@ -234,8 +232,8 @@ func (conf *ptp4lConf) addInterfaceSection(iface string) {
 	_, ok := conf.sections[ifaceSectionName]
 	if !ok {
 		conf.sections[ifaceSectionName] = ptp4lConfSection{
-			options:     make([]ptp4lConfOption, 0),
-			sectionName: ifaceSectionName}
+			options: make([]ptp4lConfOption, 0),
+		}
 	}
 }
 
@@ -267,8 +265,8 @@ func (conf *ptp4lConf) extractSynceRelations() *synce.Relations {
 	synceRelationInfo := synce.Config{}
 
 	var extendedTlv, networkOption int = synce.ExtendedTLV_DISABLED, synce.SYNCE_NETWORK_OPT_1
-	for _, section := range conf.sections {
-		if strings.HasPrefix(section.sectionName, "[<") {
+	for sectionName := range conf.sections {
+		if strings.HasPrefix(sectionName, "[<") {
 			if synceRelationInfo.Name != "" {
 				if len(ifaces) > 0 {
 					synceRelationInfo.Ifaces = ifaces
@@ -287,23 +285,23 @@ func (conf *ptp4lConf) extractSynceRelations() *synce.Relations {
 			}
 			extendedTlv, networkOption = synce.ExtendedTLV_DISABLED, synce.SYNCE_NETWORK_OPT_1
 
-			synceRelationInfo.Name = re.ReplaceAllString(section.sectionName, "")
-			if networkOptionStr, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "network_option"); ok {
+			synceRelationInfo.Name = re.ReplaceAllString(sectionName, "")
+			if networkOptionStr, ok := conf.getPtp4lConfOptionOrEmptyString(sectionName, "network_option"); ok {
 				if networkOption, err = strconv.Atoi(strings.TrimSpace(networkOptionStr)); err != nil {
 					glog.Errorf("error parsing `network_option`, setting network_option to default 1 : %s", err)
 				}
 			}
-			if extendedTlvStr, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "extended_tlv"); ok {
+			if extendedTlvStr, ok := conf.getPtp4lConfOptionOrEmptyString(sectionName, "extended_tlv"); ok {
 				if extendedTlv, err = strconv.Atoi(strings.TrimSpace(extendedTlvStr)); err != nil {
 					glog.Errorf("error parsing `extended_tlv`, setting extended_tlv to default 1 : %s", err)
 				}
 			}
 			synceRelationInfo.NetworkOption = networkOption
 			synceRelationInfo.ExtendedTlv = extendedTlv
-		} else if strings.HasPrefix(section.sectionName, "[{") {
-			synceRelationInfo.ExternalSource = re.ReplaceAllString(section.sectionName, "")
-		} else if strings.HasPrefix(section.sectionName, "[") && section.sectionName != GlobalSectionName {
-			iface := re.ReplaceAllString(section.sectionName, "")
+		} else if strings.HasPrefix(sectionName, "[{") {
+			synceRelationInfo.ExternalSource = re.ReplaceAllString(sectionName, "")
+		} else if strings.HasPrefix(sectionName, "[") && sectionName != GlobalSectionName {
+			iface := re.ReplaceAllString(sectionName, "")
 			ifaces = append(ifaces, iface)
 		}
 	}
@@ -321,11 +319,11 @@ func (conf *ptp4lConf) renderSyncE4lConf(ptpSettings map[string]string) (configO
 	relations = conf.extractSynceRelations()
 	relations.AddClockIds(ptpSettings)
 	deviceIdx := 0
-	for _, section := range conf.sections {
-		configOut = fmt.Sprintf("%s\n%s", configOut, section.sectionName)
-		if strings.HasPrefix(section.sectionName, "[<") {
-			if _, found := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "clock_id"); !found {
-				conf.setPtp4lConfOption(section.sectionName, "clock_id", relations.Devices[deviceIdx].ClockId, true)
+	for sectionName, section := range conf.sections {
+		configOut = fmt.Sprintf("%s\n%s", configOut, sectionName)
+		if strings.HasPrefix(sectionName, "[<") {
+			if _, found := conf.getPtp4lConfOptionOrEmptyString(sectionName, "clock_id"); !found {
+				conf.setPtp4lConfOption(sectionName, "clock_id", relations.Devices[deviceIdx].ClockId, true)
 				deviceIdx++
 			}
 		}
@@ -343,25 +341,25 @@ func (conf *ptp4lConf) renderPtp4lConf() (configOut string, ifaces config.IFaces
 	var nmea_source event.EventSource
 
 	for sectionName, section := range conf.sections {
-		configOut = fmt.Sprintf("%s\n%s", configOut, section.sectionName)
+		configOut = fmt.Sprintf("%s\n%s", configOut, sectionName)
 
 		if sectionName == NmeaSectionName {
-			if source, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "ts2phc.master"); ok {
+			if source, ok := conf.getPtp4lConfOptionOrEmptyString(sectionName, "ts2phc.master"); ok {
 				nmea_source = getSource(source)
 			}
 		}
-		if section.sectionName != GlobalSectionName && section.sectionName != NmeaSectionName {
-			i := section.sectionName
+		if sectionName != GlobalSectionName && sectionName != NmeaSectionName && sectionName != UnicastSectionName {
+			i := sectionName
 			i = strings.ReplaceAll(i, "[", "")
 			i = strings.ReplaceAll(i, "]", "")
 			iface := config.Iface{Name: i}
-			if source, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "ts2phc.master"); ok {
+			if source, ok := conf.getPtp4lConfOptionOrEmptyString(sectionName, "ts2phc.master"); ok {
 				iface.Source = getSource(source)
 			} else {
 				// if not defined here, use source defined at nmea section
 				iface.Source = nmea_source
 			}
-			if masterOnly, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "masterOnly"); ok {
+			if masterOnly, ok := conf.getPtp4lConfOptionOrEmptyString(sectionName, "masterOnly"); ok {
 				// TODO add error handling
 				iface.IsMaster, _ = strconv.ParseBool(strings.TrimSpace(masterOnly))
 			}
