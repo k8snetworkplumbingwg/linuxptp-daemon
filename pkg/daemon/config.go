@@ -46,15 +46,14 @@ type ptp4lConfSection struct {
 }
 
 type ptp4lConf struct {
-	sections         map[string]ptp4lConfSection
+	sectionOptions   map[string][]ptp4lConfOption
 	profile_name     string
 	clock_type       event.ClockType
 	gnss_serial_port string // gnss serial port
 }
 
 func (conf *ptp4lConf) getPtp4lConfOptionOrEmptyString(sectionName string, key string) (string, bool) {
-	section := conf.sections[sectionName]
-	for _, option := range section.options {
+	for _, option := range conf.sectionOptions[sectionName] {
 		if option.key == key {
 			return option.value, true
 		}
@@ -63,27 +62,22 @@ func (conf *ptp4lConf) getPtp4lConfOptionOrEmptyString(sectionName string, key s
 }
 
 func (conf *ptp4lConf) setPtp4lConfOption(sectionName string, key string, value string, overwrite bool) {
-	_, ok := conf.sections[sectionName]
+	_, ok := conf.sectionOptions[sectionName]
 	if !ok {
-		conf.sections[sectionName] = ptp4lConfSection{
-			options: make([]ptp4lConfOption, 0),
-		}
+		conf.sectionOptions[sectionName] = make([]ptp4lConfOption, 0)
 	}
 	if key == "" {
 		return
 	}
-	section := conf.sections[sectionName]
 	if overwrite {
-		for i := range section.options {
-			if section.options[i].key == key {
-				section.options[i] = ptp4lConfOption{key: key, value: value}
+		for i := range conf.sectionOptions[sectionName] {
+			if conf.sectionOptions[sectionName][i].key == key {
+				conf.sectionOptions[sectionName][i] = ptp4lConfOption{key: key, value: value}
 			}
 		}
 	} else {
-		section.options = append(section.options, ptp4lConfOption{key: key, value: value})
+		conf.sectionOptions[sectionName] = append(conf.sectionOptions[sectionName], ptp4lConfOption{key: key, value: value})
 	}
-
-	conf.sections[sectionName] = section
 }
 
 func NewLinuxPTPConfUpdate() (*LinuxPTPConfUpdate, error) {
@@ -160,8 +154,7 @@ func tryToLoadOldConfig(nodeProfilesJson []byte) ([]ptpv1.PtpProfile, bool) {
 // Takes as input a PtpProfile.Ptp4lConf and outputs as ptp4lConf struct
 func (conf *ptp4lConf) populatePtp4lConf(config *string) error {
 	var currentSectionName string
-	var currentSection ptp4lConfSection
-	conf.sections = make(map[string]ptp4lConfSection)
+	conf.sectionOptions = make(map[string][]ptp4lConfOption)
 	hasSlaveConfigDefined := false
 
 	if config != nil {
@@ -170,15 +163,10 @@ func (conf *ptp4lConf) populatePtp4lConf(config *string) error {
 			if strings.HasPrefix(line, "#") {
 				continue
 			} else if strings.HasPrefix(line, "[") {
-				if currentSectionName != "" {
-					conf.sections[currentSectionName] = currentSection
-				}
 				currentLine := strings.Split(line, "]")
-
 				if len(currentLine) < 2 {
 					return errors.New("Section missing closing ']': " + line)
 				}
-
 				currentSectionName = fmt.Sprintf("%s]", currentLine[0])
 				conf.setPtp4lConfOption(currentSectionName, "", "", false)
 			} else if currentSectionName != "" {
@@ -203,7 +191,7 @@ func (conf *ptp4lConf) populatePtp4lConf(config *string) error {
 	if !hasSlaveConfigDefined {
 		// No Slave Interfaces defined
 		conf.clock_type = event.GM
-	} else if len(conf.sections) > 2 {
+	} else if len(conf.sectionOptions) > 2 { //Need to count
 		// Multiple interfaces with at least one slave Interface defined
 		conf.clock_type = event.BC
 	} else {
@@ -229,11 +217,9 @@ func (conf *ptp4lConf) extendGlobalSection(messageTag string, socketPath string,
 
 func (conf *ptp4lConf) addInterfaceSection(iface string) {
 	ifaceSectionName := fmt.Sprintf("[%s]", iface)
-	_, ok := conf.sections[ifaceSectionName]
+	_, ok := conf.sectionOptions[ifaceSectionName]
 	if !ok {
-		conf.sections[ifaceSectionName] = ptp4lConfSection{
-			options: make([]ptp4lConfOption, 0),
-		}
+		conf.sectionOptions[ifaceSectionName] = make([]ptp4lConfOption, 0)
 	}
 }
 
@@ -265,7 +251,7 @@ func (conf *ptp4lConf) extractSynceRelations() *synce.Relations {
 	synceRelationInfo := synce.Config{}
 
 	var extendedTlv, networkOption int = synce.ExtendedTLV_DISABLED, synce.SYNCE_NETWORK_OPT_1
-	for sectionName := range conf.sections {
+	for sectionName := range conf.sectionOptions {
 		if strings.HasPrefix(sectionName, "[<") {
 			if synceRelationInfo.Name != "" {
 				if len(ifaces) > 0 {
@@ -319,7 +305,7 @@ func (conf *ptp4lConf) renderSyncE4lConf(ptpSettings map[string]string) (configO
 	relations = conf.extractSynceRelations()
 	relations.AddClockIds(ptpSettings)
 	deviceIdx := 0
-	for sectionName, section := range conf.sections {
+	for sectionName, sectionOptions := range conf.sectionOptions {
 		configOut = fmt.Sprintf("%s\n%s", configOut, sectionName)
 		if strings.HasPrefix(sectionName, "[<") {
 			if _, found := conf.getPtp4lConfOptionOrEmptyString(sectionName, "clock_id"); !found {
@@ -327,7 +313,7 @@ func (conf *ptp4lConf) renderSyncE4lConf(ptpSettings map[string]string) (configO
 				deviceIdx++
 			}
 		}
-		for _, option := range section.options {
+		for _, option := range sectionOptions {
 			k := option.key
 			v := option.value
 			configOut = fmt.Sprintf("%s\n%s %s", configOut, k, v)
@@ -340,7 +326,7 @@ func (conf *ptp4lConf) renderPtp4lConf() (configOut string, ifaces config.IFaces
 	configOut = fmt.Sprintf("#profile: %s\n", conf.profile_name)
 	var nmea_source event.EventSource
 
-	for sectionName, section := range conf.sections {
+	for sectionName, sectionOptions := range conf.sectionOptions {
 		configOut = fmt.Sprintf("%s\n%s", configOut, sectionName)
 
 		if sectionName == NmeaSectionName {
@@ -369,7 +355,7 @@ func (conf *ptp4lConf) renderPtp4lConf() (configOut string, ifaces config.IFaces
 				PhcId:  iface.PhcId,
 			})
 		}
-		for _, option := range section.options {
+		for _, option := range sectionOptions {
 			k := option.key
 			v := option.value
 			configOut = fmt.Sprintf("%s\n%s %s", configOut, k, v)
