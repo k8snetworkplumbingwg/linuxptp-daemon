@@ -128,8 +128,15 @@ func main() {
 	tracker := &daemon.ReadyTracker{}
 
 	version := features.GetLinuxPTPPackageVersion()
+	ocpVersion := os.Getenv("BUILD_VERSION")
+	if ocpVersion == "" {
+		ocpVersion = features.LatestOCPInMatrix
+	} else {
+		ocpVersion, _ = strings.CutPrefix(ocpVersion, "v")
+		ocpVersion = strings.Join(strings.Split(ocpVersion, ".")[:2], ".")
+	}
 	// TODO: version needs to be sent to cloud event proxy when we intergrate feature flags there
-	features.Flags.Init(version)
+	features.SetFlags(version, ocpVersion)
 	features.Flags.Print()
 
 	go daemon.New(

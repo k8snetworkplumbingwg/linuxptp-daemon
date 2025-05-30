@@ -249,7 +249,6 @@ func New(
 		RegisterMetrics(nodeName)
 	}
 	InitializeOffsetMaps()
-
 	pluginManager := registerPlugins(plugins)
 	eventChannel := make(chan event.EventChannel, 100)
 	pm := &ProcessManager{
