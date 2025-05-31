@@ -176,7 +176,7 @@ func (conf *ptp4lConf) populatePtp4lConf(config *string) error {
 				split := strings.IndexByte(line, ' ')
 				if split > 0 {
 					key := line[:split]
-					value := line[split:]
+					value := strings.TrimSpace(line[split:])
 					conf.setPtp4lConfOption(currentSectionName, key, value, false)
 					if (key == "masterOnly" && value == "0") ||
 						(key == "serverOnly" && value == "0") ||
@@ -362,6 +362,7 @@ func (conf *ptp4lConf) renderPtp4lConf() (configOut string, ifaces config.IFaces
 		for _, option := range sectionOptions {
 			k := option.key
 			v := option.value
+			glog.Infof("renderPtp4lConf: '%s' '%s'", k, v)
 			configOut = fmt.Sprintf("%s\n%s %s", configOut, k, v)
 		}
 	}
