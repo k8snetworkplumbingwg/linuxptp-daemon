@@ -624,30 +624,15 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		}
 
 		if nodeProfile.Interface != nil && *nodeProfile.Interface != "" {
-			output.sections = append([]ptp4lConfSection{{
-				options:     map[string]string{},
-				sectionName: fmt.Sprintf("[%s]", *nodeProfile.Interface)}}, output.sections...)
+			output.addInterfaceSection(*nodeProfile.Interface)
 		} else {
 			iface := string("")
 			nodeProfile.Interface = &iface
 		}
 
-		for index, section := range output.sections {
-			if section.sectionName == "[global]" {
-				section.options["message_tag"] = messageTag
-				if socketPath != "" {
-					section.options["uds_address"] = socketPath
-				}
-				if gnssSerialPort, ok := section.options["ts2phc.nmea_serialport"]; ok {
-					output.gnss_serial_port = strings.TrimSpace(gnssSerialPort)
-					section.options["ts2phc.nmea_serialport"] = GPSPIPE_SERIALPORT
-				}
-				if _, ok := section.options["leapfile"]; ok || pProcess == ts2phcProcessName { // not required to check process if leapfile is always included
-					section.options["leapfile"] = fmt.Sprintf("%s/%s", config.DefaultLeapConfigPath, os.Getenv("NODE_NAME"))
-				}
-				output.sections[index] = section
-			}
-		}
+		output.extendGlobalSection(messageTag, socketPath, pProcess)
+
+		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
 
 		// This adds the flags needed for monitor
 		addFlagsForMonitor(p, configOpts, output, dn.stdoutToSocket)
