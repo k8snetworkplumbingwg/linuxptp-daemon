@@ -1,0 +1,11 @@
+state := shared.NewSharedState()
+
+ptp4lParser := NewPtp4lParser(state)
+phc2sysParser := NewPhc2sysParser(state)
+ts2phcParser := NewTs2phcParser(state)
+
+You attach this to the process.
+state := PTPSharedState{}
+ext := NewPTP4LExtractor(state)
+
+metrics, err := ext.Extract(messageTag, configName, line, ifaces)
