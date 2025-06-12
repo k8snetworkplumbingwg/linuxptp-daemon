@@ -1,52 +1,10 @@
-name: tbc
+name: 00-tbc-tt
 ptpSettings:
   unitTest: /tmp/test
   clockId[ens4f0]: 5799633565432596414
   clockId[ens5f0]: 5799633565433967128
   clockId[ens8f0]: 5799633565432596448
-phc2sysOpts: -a -r -n 24 -N 8 -R 16 -u 0
-plugins:
-  e810:
-    enableDefaultConfig: false
-    interconnections:
-    - id: ens4f0
-      part: E810-XXVDA4T
-      gnssInput: false
-      phaseOutputConnectors:
-      - SMA1
-      - SMA2
-    - id: ens5f0
-      part: E810-XXVDA4T
-      inputPhaseDelay:
-        connector: SMA1
-        delayPs: 920
-    - id: ens8f0
-      part: E810-XXVDA4T
-      inputPhaseDelay:
-        connector: SMA1
-        delayPs: 920
-      phaseOutputConnectors:
-      - U.FL1
-    pins:
-      ens4f0:
-        SMA1: 2 1
-        SMA2: 2 2
-        U.FL1: 0 1
-        U.FL2: 0 2
-      ens5f0:
-        SMA1: 1 1
-        SMA2: 2 2
-        U.FL1: 0 1
-        U.FL2: 0 2
-      ens8f0:
-        SMA1: 1 1
-        SMA2: 2 2
-        U.FL1: 0 1
-        U.FL2: 0 2
-    settings:
-      LocalHoldoverTimeout: 14400
-      LocalMaxHoldoverOffSet: 1500
-      MaxInSpecOffset: 1500
+  controllingProfile: 01-tbc-tr
 ptp4lConf: |
   [ens4f0]
   masterOnly 1
@@ -161,23 +119,3 @@ ptp4lConf: |
 ptp4lOpts: -2 --summary_interval -4
 ptpSchedulingPolicy: SCHED_FIFO
 ptpSchedulingPriority: 10
-ts2phcConf: |
-  [global]
-  use_syslog  0
-  verbose 1
-  logging_level 7
-  ts2phc.pulsewidth 100000000
-  leapfile  /usr/share/zoneinfo/leap-seconds.list
-  [ens4f0]
-  ts2phc.extts_polarity rising
-  ts2phc.extts_correction 0
-  ts2phc.master 0
-  [ens5f0]
-  ts2phc.extts_polarity rising
-  ts2phc.extts_correction 0
-  ts2phc.master 0
-  [ens8f0]
-  ts2phc.extts_polarity rising
-  ts2phc.extts_correction 0
-  ts2phc.master 0
-ts2phcOpts: '-s generic -a --ts2phc.external_pps 1'
