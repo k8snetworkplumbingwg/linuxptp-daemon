@@ -110,15 +110,100 @@ func Test_applyProfile_synce(t *testing.T) {
 func Test_applyProfile_TBC(t *testing.T) {
 	defer clean(t)
 	testDataFiles := []string{
-		"testdata/profile-tbc.yaml",
+		"testdata/profile-tbc-tt.yaml",
+		"testdata/profile-tbc-tr.yaml",
 	}
+	stopCh := make(<-chan struct{})
+	assert.NoError(t, leap.MockLeapFile())
+	defer func() {
+		close(leap.LeapMgr.Close)
+		// Sleep to allow context to switch
+		time.Sleep(100 * time.Millisecond)
+		assert.Nil(t, leap.LeapMgr)
+	}()
+	dn := New(
+		"test-node-name",
+		"openshift-ptp",
+		false,
+		nil,
+		&LinuxPTPConfUpdate{
+			UpdateCh:     make(chan bool),
+			NodeProfiles: []ptpv1.PtpProfile{},
+		},
+		stopCh,
+		[]string{"e810"},
+		&[]ptpv1.HwConfig{},
+		nil,
+		make(chan bool),
+		30,
+		&ReadyTracker{},
+	)
+	assert.NotNil(t, dn)
 
 	for i := range len(testDataFiles) {
 		mkPath(t)
 		profile, err := loadProfile(testDataFiles[i])
 		assert.NoError(t, err)
 		// Will assert inside in case of error:
-		applyTestProfile(t, profile)
+		err = dn.applyNodePtpProfile(0, profile)
+		assert.NoError(t, err)
 		clean(t)
 	}
+}
+
+func TestGetPTPClockId_ValidInput(t *testing.T) {
+	p := &ptpProcess{
+		nodeProfile: ptpv1.PtpProfile{
+			PtpSettings: map[string]string{
+				"leadingInterface": "eth0",
+				"clockId[eth0]":    "123456",
+			},
+		},
+	}
+
+	expectedClockID := "000000.fffe.01e240"
+	actualClockID, err := p.getPTPClockID()
+	assert.NoError(t, err)
+	assert.Equal(t, expectedClockID, actualClockID)
+}
+
+func TestGetPTPClockId_MissingLeadingInterface(t *testing.T) {
+	p := &ptpProcess{
+		nodeProfile: ptpv1.PtpProfile{
+			PtpSettings: map[string]string{},
+		},
+	}
+
+	_, err := p.getPTPClockID()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "leadingInterface not found in ptpProfile")
+}
+
+func TestGetPTPClockId_MissingClockId(t *testing.T) {
+	p := &ptpProcess{
+		nodeProfile: ptpv1.PtpProfile{
+			PtpSettings: map[string]string{
+				"leadingInterface": "eth0",
+			},
+		},
+	}
+
+	_, err := p.getPTPClockID()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "leading interface ClockId not found in ptpProfile")
+}
+
+func TestGetPTPClockId_ParsingError(t *testing.T) {
+	p := &ptpProcess{
+		nodeProfile: ptpv1.PtpProfile{
+			PtpSettings: map[string]string{
+				"leadingInterface": "eth0",
+				"clockId[eth0]":    "invalid_string",
+			},
+		},
+	}
+
+	_, err := p.getPTPClockID()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse clock ID string invalid_string")
 }
