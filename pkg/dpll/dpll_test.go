@@ -177,7 +177,7 @@ func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 	// event has to be running before dpll is started
 	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
-		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{})
+		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0)
 	d.CmdInit()
 	eventChannel := make(chan event.EventChannel, 10)
 	go eventProcessor.ProcessEvents()
@@ -220,7 +220,7 @@ func TestDpllConfig_MonitorProcessPPS(t *testing.T) {
 	// event has to be running before dpll is started
 	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
-		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{})
+		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0)
 	d.CmdInit()
 	eventChannel := make(chan event.EventChannel, 10)
 	go eventProcessor.ProcessEvents()
@@ -284,7 +284,7 @@ func TestSlopeAndTimer(t *testing.T) {
 	}
 	for _, tt := range testCase {
 		d := dpll.NewDpll(100, tt.localMaxHoldoverOffSet, tt.localHoldoverTimeout, tt.maxInSpecOffset,
-			"test", []event.EventSource{}, dpll.MOCK, map[string]map[string]string{})
+			"test", []event.EventSource{}, dpll.MOCK, map[string]map[string]string{}, 0, 0)
 		assert.Equal(t, tt.localMaxHoldoverOffSet, d.LocalMaxHoldoverOffSet, "localMaxHoldover offset")
 		assert.Equal(t, tt.localHoldoverTimeout, d.LocalHoldoverTimeout, "Local holdover timeout")
 		assert.Equal(t, tt.maxInSpecOffset, d.MaxInSpecOffset, "Max In Spec Offset")
