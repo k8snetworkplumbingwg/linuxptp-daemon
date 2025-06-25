@@ -52,9 +52,9 @@ func (p *phc2sysParsed) Populate(line string, matched, feilds []string) error {
 	p.Raw = line
 	for i, field := range feilds {
 		switch field {
-		case "timestamp":
+		case constants.Timestamp:
 			p.Timestamp = matched[i]
-		case "config_name":
+		case constants.ConfigName:
 			p.ConfigName = matched[i]
 		case "serverity":
 			if matched[i] == "" { // serverity is optional
@@ -67,7 +67,7 @@ func (p *phc2sysParsed) Populate(line string, matched, feilds []string) error {
 			p.ServerityLevel = &serverityLevel
 		case "clock_name":
 			p.ClockName = matched[i]
-		case "offset":
+		case constants.Offset:
 			if matched[i] == "" {
 				return errors.New("offset cannot be empty")
 			}
@@ -103,7 +103,7 @@ func (p *phc2sysParsed) Populate(line string, matched, feilds []string) error {
 				return err
 			}
 			p.Delay = &delay
-		case "servo_state":
+		case constants.ServoState:
 			p.ServoState = matched[i]
 		case "source":
 			p.Source = matched[i]

@@ -58,21 +58,6 @@ func TestPTP4LParser(t *testing.T) {
 				Source:     constants.Master,
 			},
 		},
-		// Current approch these lines are just skipped over
-		// {
-		// 	name:           "Invalid constants.ClockStateLockedog line",
-		// 	configName:     "ptp4l.0.config",
-		// 	logLine:        "invalid log line",
-		// 	expectedError:  true,
-		// 	expectedMetric: nil,
-		// },
-		// {
-		// 	name:           "Empty log line",
-		// 	configName:     "ptp4l.0.config",
-		// 	logLine:        "",
-		// 	expectedError:  true,
-		// 	expectedMetric: nil,
-		// },
 	}
 
 	for _, tt := range tests {
@@ -165,6 +150,63 @@ func TestPTP4LEventParser(t *testing.T) {
 			logLine:       "ptp4l[4268779.809]: [ptp4l.0.config] port 1: INVALID_STATE",
 			expectedError: true,
 		},
+
+		// Clock class change event
+		{
+			name:       "Clock class change event",
+			configName: "ptp4l.0.config",
+			logLine:    "ptp4l[1234.567]: [ptp4l.0.config] CLOCK_CLASS_CHANGE 248",
+			expectedEvent: &parser.PTPEvent{
+				PortID:     0,
+				Role:       constants.PortRoleUnknown,
+				ClockClass: 248,
+				Raw:        "ptp4l[1234.567]: [ptp4l.0.config] CLOCK_CLASS_CHANGE 248",
+			},
+		},
+		{
+			name:       "Clock class change event with severity",
+			configName: "ptp4l.0.config",
+			logLine:    "ptp4l[1234.567]: [ptp4l.0.config:4] CLOCK_CLASS_CHANGE 6",
+			expectedEvent: &parser.PTPEvent{
+				PortID:     0,
+				Role:       constants.PortRoleUnknown,
+				ClockClass: 6,
+				Raw:        "ptp4l[1234.567]: [ptp4l.0.config:4] CLOCK_CLASS_CHANGE 6",
+			},
+		},
+		{
+			name:       "Clock class change to GM class (holdover)",
+			configName: "ptp4l.0.config",
+			logLine:    "ptp4l[5555.111]: [ptp4l.0.config] CLOCK_CLASS_CHANGE 7",
+			expectedEvent: &parser.PTPEvent{
+				PortID:     0,
+				Role:       constants.PortRoleUnknown,
+				ClockClass: 7,
+				Raw:        "ptp4l[5555.111]: [ptp4l.0.config] CLOCK_CLASS_CHANGE 7",
+			},
+		},
+		{
+			name:       "Clock class change to freerun",
+			configName: "ptp4l.1.config",
+			logLine:    "ptp4l[9999.123]: [ptp4l.1.config:6] CLOCK_CLASS_CHANGE 255",
+			expectedEvent: &parser.PTPEvent{
+				PortID:     0,
+				Role:       constants.PortRoleUnknown,
+				ClockClass: 255,
+				Raw:        "ptp4l[9999.123]: [ptp4l.1.config:6] CLOCK_CLASS_CHANGE 255",
+			},
+		},
+		{
+			name:       "Clock class change to locked state",
+			configName: "ptp4l.2.config",
+			logLine:    "ptp4l[7777.999]: [ptp4l.2.config] CLOCK_CLASS_CHANGE 135",
+			expectedEvent: &parser.PTPEvent{
+				PortID:     0,
+				Role:       constants.PortRoleUnknown,
+				ClockClass: 135,
+				Raw:        "ptp4l[7777.999]: [ptp4l.2.config] CLOCK_CLASS_CHANGE 135",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -182,6 +224,7 @@ func TestPTP4LEventParser(t *testing.T) {
 				assert.NotNil(t, event)
 				assert.Equal(t, tt.expectedEvent.PortID, event.PortID)
 				assert.Equal(t, tt.expectedEvent.Role, event.Role)
+				assert.Equal(t, tt.expectedEvent.ClockClass, event.ClockClass)
 				assert.Equal(t, tt.expectedEvent.Raw, event.Raw)
 			}
 		})

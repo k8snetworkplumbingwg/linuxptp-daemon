@@ -40,6 +40,13 @@ var (
 			`\s*(?:path\s+delay\s+(?P<delay>\d+))?` +
 			`$`,
 	)
+
+	// ptp4l clock_class_change regex
+	clockClassChangeRegex = regexp.MustCompile(
+		`^ptp4l\[(?P<timestamp>\d+\.?\d*)\]:` +
+			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +
+			`\s+CLOCK_CLASS_CHANGE\s+(?P<clock_class>\d+)`,
+	)
 )
 
 type ptp4lParsed struct {
@@ -58,8 +65,9 @@ type ptp4lParsed struct {
 	ServoState string
 
 	// Event Fields
-	PortID *int
-	Event  string
+	PortID     *int
+	Event      string
+	ClockClass *int
 }
 
 // Populate ...
@@ -67,9 +75,9 @@ func (p *ptp4lParsed) Populate(line string, matched, feilds []string) error {
 	p.Raw = line
 	for i, field := range feilds {
 		switch field {
-		case "timestamp":
+		case constants.Timestamp:
 			p.Timestamp = matched[i]
-		case "config_name":
+		case constants.ConfigName:
 			p.ConfigName = matched[i]
 		case "serverity":
 			if matched[i] == "" { // serverity is optional
@@ -82,7 +90,7 @@ func (p *ptp4lParsed) Populate(line string, matched, feilds []string) error {
 			p.ServerityLevel = &serverityLevel
 		case constants.Interface:
 			p.Interface = matched[i]
-		case "offset":
+		case constants.Offset:
 			if matched[i] == "" {
 				return errors.New("offset cannot be empty")
 			}
@@ -118,7 +126,7 @@ func (p *ptp4lParsed) Populate(line string, matched, feilds []string) error {
 				return err
 			}
 			p.Delay = &delay
-		case "servo_state":
+		case constants.ServoState:
 			p.ServoState = matched[i]
 		case "port":
 			port, err := strconv.Atoi(matched[i])
@@ -128,6 +136,12 @@ func (p *ptp4lParsed) Populate(line string, matched, feilds []string) error {
 			p.PortID = &port
 		case "event":
 			p.Event = matched[i]
+		case "clock_class":
+			clockClass, err := strconv.Atoi(matched[i])
+			if err != nil {
+				return err
+			}
+			p.ClockClass = &clockClass
 		}
 	}
 	return nil
@@ -160,6 +174,13 @@ func NewPTP4LExtractor() *BaseMetricsExtractor[*ptp4lParsed] {
 					return metric, nil, err
 				},
 			},
+			{
+				Regex: clockClassChangeRegex,
+				Extractor: func(parsed *ptp4lParsed) (*Metrics, *PTPEvent, error) {
+					event, err := extractClockClassChangePTP4l(parsed)
+					return nil, event, err
+				},
+			},
 		},
 	}
 }
@@ -179,6 +200,19 @@ func extractEventPTP4l(parsed *ptp4lParsed) (*PTPEvent, error) {
 		Role:   role,
 		Raw:    parsed.Raw,
 	}, err
+}
+
+func extractClockClassChangePTP4l(parsed *ptp4lParsed) (*PTPEvent, error) {
+	if parsed.ClockClass == nil {
+		return nil, fmt.Errorf("clock class not found")
+	}
+
+	return &PTPEvent{
+		PortID:     0, // Clock class changes are not port-specific
+		Role:       constants.PortRoleUnknown,
+		ClockClass: *parsed.ClockClass,
+		Raw:        parsed.Raw,
+	}, nil
 }
 
 func extractSummaryPTP4l(parsed *ptp4lParsed) (*Metrics, error) {

@@ -151,6 +151,64 @@ func TestPTP4LParser(t *testing.T) {
 				Event:      "UNCALIBRATED to LISTENING on RS_LISTENING",
 			},
 		},
+
+		// Clock class change events
+		{
+			name:    "Clock class change without severity",
+			logLine: "ptp4l[1234.567]: [ptp4l.0.config] CLOCK_CLASS_CHANGE 248",
+			regex:   clockClassChangeRegex,
+			expectedResult: &ptp4lParsed{
+				Timestamp:  "1234.567",
+				ConfigName: "ptp4l.0.config",
+				ClockClass: _ptr(248),
+			},
+		},
+		{
+			name:    "Clock class change with severity",
+			logLine: "ptp4l[9876.543]: [ptp4l.1.config:4] CLOCK_CLASS_CHANGE 6",
+			regex:   clockClassChangeRegex,
+			expectedResult: &ptp4lParsed{
+				Timestamp:      "9876.543",
+				ConfigName:     "ptp4l.1.config",
+				ServerityLevel: _ptr(4),
+				ClockClass:     _ptr(6),
+			},
+		},
+		{
+			name:    "Clock class change to GM class",
+			logLine: "ptp4l[5555.111]: [ptp4l.2.config:6] CLOCK_CLASS_CHANGE 7",
+			regex:   clockClassChangeRegex,
+			expectedResult: &ptp4lParsed{
+				Timestamp:      "5555.111",
+				ConfigName:     "ptp4l.2.config",
+				ServerityLevel: _ptr(6),
+				ClockClass:     _ptr(7),
+			},
+		},
+		{
+			name:    "Clock class change high value",
+			logLine: "ptp4l[7777.999]: [ptp4l.3.config] CLOCK_CLASS_CHANGE 255",
+			regex:   clockClassChangeRegex,
+			expectedResult: &ptp4lParsed{
+				Timestamp:  "7777.999",
+				ConfigName: "ptp4l.3.config",
+				ClockClass: _ptr(255),
+			},
+		},
+		{
+			name:           "Invalid clock class change format",
+			logLine:        "ptp4l[1234.567]: [ptp4l.0.config] CLOCK_CLASS_CHANGE",
+			regex:          clockClassChangeRegex,
+			expectedSkip:   true,
+			expectedResult: nil,
+		},
+		{
+			name:           "Clock class change non-numeric value",
+			logLine:        "ptp4l[1234.567]: [ptp4l.0.config] CLOCK_CLASS_CHANGE abc",
+			regex:          clockClassChangeRegex,
+			expectedSkip:   true,
+			expectedResult: nil,
+		},
 	}
 
 	for _, tt := range tests {
@@ -175,6 +233,7 @@ func TestPTP4LParser(t *testing.T) {
 				assert.Equal(t, tt.expectedResult.ServoState, res.ServoState, "incorrect ServoState")
 				assert.Equal(t, tt.expectedResult.PortID, res.PortID, "incorrect PortID")
 				assert.Equal(t, tt.expectedResult.Event, res.Event, "incorrect Event")
+				assert.Equal(t, tt.expectedResult.ClockClass, res.ClockClass, "incorrect ClockClass")
 				assert.Equal(t, tt.logLine, res.Raw, "incorrect Raw")
 			}
 		})
