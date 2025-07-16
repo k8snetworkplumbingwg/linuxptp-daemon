@@ -56,18 +56,30 @@ type Ptp4lConf struct {
 	gnss_serial_port string // gnss serial port
 }
 
-func (conf *Ptp4lConf) getPtp4lConfOptionOrEmptyString(sectionName string, key string) (string, bool) {
+func getSection(conf *Ptp4lConf, sectionName string) (ptp4lConfSection, bool) {
 	for _, section := range conf.sections {
 		if section.sectionName == sectionName {
-			for _, option := range section.options {
-				if option.key == key {
-					return option.value, true
-				}
-			}
+			return section, true
 		}
 	}
+	return ptp4lConfSection{}, false
+}
 
+func getValueFromSection(section ptp4lConfSection, key string) (string, bool) {
+	for _, option := range section.options {
+		if option.key == key {
+			return option.value, true
+		}
+	}
 	return "", false
+}
+
+func (conf *Ptp4lConf) getPtp4lConfOptionOrEmptyString(sectionName string, key string) (string, bool) {
+	section, found := getSection(conf, sectionName)
+	if !found {
+		return "", false
+	}
+	return getValueFromSection(section, key)
 }
 
 func (conf *Ptp4lConf) setPtp4lConfOption(sectionName string, key string, value string, overwrite bool) {
@@ -179,12 +191,89 @@ func tryToLoadOldConfig(nodeProfilesJson []byte) ([]ptpv1.PtpProfile, bool) {
 	return []ptpv1.PtpProfile{*ptpConfig}, true
 }
 
+func isMasterOnly(section ptp4lConfSection, defaultValue bool) bool {
+	if v, found := getValueFromSection(section, "masterOnly"); found {
+		switch v {
+		case "1":
+			return true
+		case "0":
+			return false
+		}
+	}
+	if v, found := getValueFromSection(section, "serverOnly"); found {
+		switch v {
+		case "1":
+			return true
+		case "0":
+			return false
+		}
+	}
+	return defaultValue
+}
+
+func isSlaveOnly(section ptp4lConfSection, defaultValue bool) bool {
+	if v, found := getValueFromSection(section, "slaveOnly"); found {
+		if v == "1" {
+			return true
+		}
+	}
+	if v, found := getValueFromSection(section, "clientOnly"); found {
+		if v == "1" {
+			return true
+		}
+	}
+	return defaultValue
+}
+
+func (conf *Ptp4lConf) getClockType() event.ClockType {
+	onlySlaveDefault := false
+	onlyMasterDefault := false
+
+	if globalSection, found := getSection(conf, "global"); found {
+		onlySlaveDefault = isSlaveOnly(globalSection, false)
+		onlyMasterDefault = isMasterOnly(globalSection, false)
+	}
+
+	numberOfMasters := 0
+	numberOfSlaves := 0
+	numberOfNiether := 0
+
+	for _, section := range conf.sections {
+		if section.sectionName == "global" {
+			continue
+		}
+
+		onlyMaster := isMasterOnly(section, onlySlaveDefault)
+		onlySlave := isSlaveOnly(section, onlyMasterDefault)
+
+		if onlyMaster && !onlySlave {
+			numberOfMasters++
+		} else if onlySlave && !onlyMaster {
+			numberOfSlaves++
+		} else {
+			numberOfNiether++
+		}
+	}
+
+	// Not sure about the niether ports so for now they are ignored
+	if numberOfMasters > 0 && numberOfSlaves == 0 {
+		// Only defined master ports defined
+		return event.GM
+	} else if (numberOfMasters > 0) && (numberOfSlaves > 0) {
+		// Master and slave ports
+		return event.BC
+	} else if numberOfSlaves > 0 {
+		// Only Slave ports
+		return event.OC
+	}
+	// Default to OC if can't determin
+	return event.OC
+}
+
 // PopulatePtp4lConf takes as input a PtpProfile.Ptp4lConf string and outputs as ptp4lConf struct
 func (conf *Ptp4lConf) PopulatePtp4lConf(config *string) error {
 	var currentSectionName string
 	conf.sections = make([]ptp4lConfSection, 0)
-	hasSlaveConfigDefined := false
-	ifaceCount := 0
 	if config != nil {
 		for _, line := range strings.Split(*config, "\n") {
 			line = strings.TrimSpace(line)
@@ -196,9 +285,6 @@ func (conf *Ptp4lConf) PopulatePtp4lConf(config *string) error {
 					return errors.New("Section missing closing ']': " + line)
 				}
 				currentSectionName = fmt.Sprintf("%s]", currentLine[0])
-				if currentSectionName != GlobalSectionName && currentSectionName != NmeaSectionName && currentSectionName != UnicastSectionName {
-					ifaceCount++
-				}
 				conf.setPtp4lConfOption(currentSectionName, "", "", false)
 			} else if currentSectionName != "" {
 				split := strings.IndexByte(line, ' ')
@@ -206,30 +292,13 @@ func (conf *Ptp4lConf) PopulatePtp4lConf(config *string) error {
 					key := line[:split]
 					value := strings.TrimSpace(line[split:])
 					conf.setPtp4lConfOption(currentSectionName, key, value, false)
-					if (key == "masterOnly" && value == "0" && currentSectionName != GlobalSectionName) ||
-						(key == "serverOnly" && value == "0") ||
-						(key == "slaveOnly" && value == "1") ||
-						(key == "clientOnly" && value == "1") {
-						hasSlaveConfigDefined = true
-					}
 				}
 			} else {
 				return errors.New("Config option not in section: " + line)
 			}
 		}
 	}
-
-	if !hasSlaveConfigDefined {
-		// No Slave Interfaces defined
-		conf.clock_type = event.GM
-	} else if ifaceCount > 1 {
-		// Multiple interfaces with at least one slave Interface defined
-		conf.clock_type = event.BC
-	} else {
-		// Single slave Interface defined
-		conf.clock_type = event.OC
-	}
-
+	conf.clock_type = conf.getClockType()
 	return nil
 }
 
