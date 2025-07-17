@@ -1,0 +1,429 @@
+openapi: 3.0.3
+info:
+  title: DPLL Chain Configuration Schema
+  description: OpenAPI specification for DPLL (Digital Phase-Locked Loop) chain configuration
+
+  version: 1.0.0
+
+components:
+  schemas:
+    ClockChain:
+      type: object
+      required:
+        - dplls
+        # - sources
+        - connections
+      properties:
+        dplls:
+          type: array
+          items:
+            $ref: '#/components/schemas/Dpll'
+          minItems: 1
+          description: Array of DPLLs in the chain (supports various topologies like fan-out, daisy chain, etc.)
+        
+        sources:
+          $ref: '#/components/schemas/Sources'
+          description: Upstream sources for frequency, phase and time reference
+        
+        connections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Connection'
+          description: External physical connections between connectors and standalone connectors
+ 
+      requirements: |
+        - there are one or more leader DPLLs and one or more follower DPLLs in the chain. Different topologies are supported, such as daisy chain, fan-out, etc.
+        - since one DPLL can be a leader and a follower, the chain can be a loop, and the definition of the DPLL should be generic to allow a DPLL to be both leader and follower
+        - a DPLL can receive phase reference from GNSS, PTP hardware clock or another DPLL in the chain
+        - In case of PTP, one or more upstream ports must be provided. 
+        - the phase reference DPLL receives must have configurable frequency, If omitted, the frequency is set to 1 PPS (pulse per second) 
+        - phase reference can be provided using eSync feature, that must have configurable base frequency and phase reference count per second (PPS).
+        - phase reference can be provided theough an external connector, as in the separate module GNSS case, or through an internal connector, as in the case of ptp / internal GNSS module
+        - a DPLL, therefore, will have a single phase input pin and /or connector, and one or more phase output connectors
+        - each of the input and output pins must have an optional phase adjustment field in picoseconds. 
+        - each phase adjustment element is consist of two parts, internal adjustment responsible for internal delays and external adjustment responsible for external delays from cables, connectors, etc.
+        - some of the output connectors can be configured as a frequency reference for other DPLLs in the chain
+        - any DPLL can optionally have frequency reference input and / or output
+      description: |
+        Complete clock chain configuration supporting various topologies.
+        The chain is defined by three elements:
+        - sources: upstream synchronization sources. Explicitly defined here, they remove guesswork from the software 
+        analyzing the ptp profiles
+        - dplls: DPLLs in the chain. All the configurations defined here are directly translated into DPLL device configurations through the Netlink driver.
+        - connections: external physical connections between connectors and standalone connectors. This section replaces the "pins" construct in the current 
+        implementation. It directly translates into ethernet device driver configurations, if required. It is more explicit and easier to understand.
+
+    Dpll:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          description: Default port of the NIC associated with the DPLL
+          pattern: '^[a-zA-Z0-9_-]+$'
+          example: "ens4f0 or dpll1"
+        
+        clockId:
+          type: string
+          description: Optional clock ID for the DPLL. If not provided, the hardware must support clock ID discovery.
+          pattern: '^[0-9]+$'
+          example: "5799633565432596414"
+        
+        phaseInput:
+          $ref: '#/components/schemas/Pin'
+          description: Phase reference input pin
+
+        
+        phaseOutputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Pin'
+          description: Optional phase output pins
+        
+        frequencyOutputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Pin'
+          description: Optional frequency outputs for other devices or measurements
+        
+      description: |
+        Generic DPLL configuration supporting various topologies.
+        Configuration of this section will result in DPLL device configurations through the Netlink driver.
+
+
+
+    ESyncConfig:
+      type: object
+      required:
+        - frequency
+      properties:
+        frequency:
+          type: number
+          minimum: 0
+          description: Configurable frequency for eSync feature in Hz
+          example: 10000000
+      description: eSync feature configuration
+
+    Pin:
+      type: object
+      required:
+        - boardLabel
+      properties:
+        boardLabel:
+          type: string
+          description: Board label or pin name (e.g., GNSS-1PPS, CVL-SDP22, SMA1, ...)
+          pattern: '^[a-zA-Z0-9_-]+$'
+          example: "GNSS-1PPS"
+        
+        sourceId:
+          type: string
+          description: Source identifier to link this pin to a specific source (e.g., "gnss_ens4f0", "gnss_external", "ptp_ens4f0")
+          pattern: '^[a-zA-Z0-9_-]+$'
+          example: "gnss_ens4f0"
+        
+        phaseAdjustment:
+          $ref: '#/components/schemas/PhaseAdjustment'
+          description: Optional phase adjustment in picoseconds
+        
+        frequency:
+          type: number
+          minimum: 0
+          default: 1
+          description: Frequency value in Hz (for frequency pins) or phase reference frequency (for phase pins, defaults to 1 PPS)
+          example: 10000000
+        
+        eSyncConfig:
+          $ref: '#/components/schemas/ESyncConfig'
+          description: Optional eSync configuration for output pins
+      
+      description: Generic pin for DPLL phase or frequency signals with defaults and optional adjustments
+
+    Sources:
+      type: array
+      items:
+        $ref: '#/components/schemas/SourceConfig'
+      description: List of available sources (GNSS modules, PTP ports, etc.)
+
+    SourceConfig:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          description: Unique identifier for this source (e.g., "gnss_ens4f0", "gnss_external", "ptp_ens4f0")
+          pattern: '^[a-zA-Z0-9_-]+$'
+          example: "gnss_ens4f0"
+        
+        ethernet:
+          type: object
+          properties:
+            ports:
+              type: array
+              items:
+                type: string
+                pattern: '^[a-zA-Z0-9_-]+$'
+              description: List of ethernet ports for PTP phase and time reference
+              example: ["ens4f0", "ens4f1"]
+            synchronous:
+              type: boolean
+              default: false
+              description: When true, configures the synchronous Ethernet support.
+          description: Ethernet source configuration
+        
+        gnss:
+          type: object
+          properties:
+            pps:
+              type: number
+              minimum: 1
+              description: GNSS phase reference rate (defaults to 1 PPS)
+              example: 1
+          description: GNSS source configuration.
+      
+      description: Individual source configuration with unique identifier
+
+    PhaseAdjustment:
+      type: object
+      properties:
+        internal:
+          type: integer
+          description: Internal phase adjustment in picoseconds. This usually compensates for the board hardware delays and should not be changed by user
+          example: 100
+        external:
+          type: integer
+          description: External phase adjustment in picoseconds. This is used to compensate for delays introduced by external interconnections, such as cables, connectors, etc.
+          example: 50
+      
+      description: Phase adjustment consisting of internal and external parts
+
+    Connection:
+      type: object
+      properties:
+        from:
+          $ref: '#/components/schemas/ConnectorEndpoint'
+          description: Source connector of the external connection (required for connections with destination)
+        to:
+          $ref: '#/components/schemas/ConnectorEndpoint'
+          description: Destination connector of the external connection (required for connections with source)
+        description:
+          type: string
+          description: Optional description of the connection (e.g., cable type, length)
+          example: "RG58 coaxial cable, 2m"
+      description: External physical connection. Can be single-ended (only 'from' or only 'to') or bidirectional (both 'from' and 'to')
+      anyOf:
+        - required: ['from']
+        - required: ['to']
+        - required: ['from', 'to']
+
+    ConnectorEndpoint:
+      type: object
+      required:
+        - deviceId
+        - id
+      properties:
+        deviceId:
+          type: string
+          description: Device identifier (e.g., "ens4f0", "ens5f0", "motherboard", "gnss_module")
+          pattern: '^[a-zA-Z0-9_-]+$'
+          example: "ens4f0"
+        id:
+          type: string
+          description: Connector identifier on the device (e.g., "sma1", "ufl2", "gnss_sma")
+          pattern: '^[a-zA-Z0-9_-]+$'
+          example: "sma1"
+        frequency:
+          type: number
+          minimum: 0
+          description: Frequency input / output on this connector in Hz
+          example: 10000000
+        eSyncConfig:
+          $ref: '#/components/schemas/ESyncConfig'
+          description: Optional eSync configuration for this connector
+        description:
+          type: string
+          description: Optional description of the connector (e.g., measurement output, test point)
+          example: "10 MHz measurement output"
+      description: External physical connector endpoint with frequency and eSync configuration
+
+
+
+  examples:
+    TGM_FanOutWithGnssExample:
+      summary: Fan-out topology with GNSS source driving one leader and two followers DPLLs
+      value:
+        sources:
+          - id: "gnss_ens4f0"
+            gnss: {}
+        dplls:
+          - id: "ens4f0"
+            phaseInput:
+              boardLabel: "GNSS_1PPS"
+              sourceId: "gnss_ens4f0"
+             # It will be up to the hardware plugin to decide where to compensate, on ts2phc or on dpll
+             # Note: Antenna delay (external) is compensated through UBLOX settings, not through phaseAdjustment
+              phaseAdjustment:
+                internal: 7000
+            phaseOutputs:
+              - boardLabel: "REF-SMA1"
+                phaseAdjustment:
+                  internal: 9034 # 1376 - internal delay for SMA1 output + 7658 - internal delay for SMA1 input on ens5f0
+                  external: 6000 # Cable delay applied to the output side ( w/a for Intel bug )
+              - boardLabel: "REF-SMA2/U.FL2"
+                phaseAdjustment:
+                  internal: 10566 # 7658 - internal delay for SMA1 input on ens8f0 + 2908 - internal delay for SMA2 output
+                  external: 6000 # Cable delay applied to the output side ( w/a for Intel bug )
+          - id: "ens5f0"
+            phaseInput:
+              boardLabel: "SMA1"
+            frequencyOutputs:
+              - boardLabel: "SMA2/U.FL2"
+          - id: "ens8f0"
+            phaseInput:
+              boardLabel: "SMA1"
+            frequencyOutputs:
+              - boardLabel: "SMA2/U.FL2"
+                frequency: 10000000
+        connections:
+          - from:
+              deviceId: "ens4f0"
+              id: "sma1"
+            to:
+              deviceId: "ens5f0"
+              id: "sma1"
+            description: "RG58 coaxial cable, 0.2m"
+          - from:
+              deviceId: "ens4f0"
+              id: "sma2"
+            to:
+              deviceId: "ens8f0"
+              id: "sma1"
+            description: "RG58 coaxial cable, 0.2m"
+          # Standalone measurement outputs
+          - from:
+              deviceId: "ens5f0"
+              id: "sma2"
+            description: "1 PPS measurement output"
+          - from:
+              deviceId: "ens8f0"
+              id: "sma2"
+              frequency: 10000000
+            description: "A single - ended connection for 10 MHz measurement output"
+
+    ExternalGnssExample:
+      summary: External GNSS module connected to NIC
+      value:
+        sources:
+          - id: "gnss_external"
+            gnss: {}
+        dplls:
+          - id: "ens4f0"
+            phaseInput:
+              boardLabel: "SMA1"
+              sourceId: "gnss_external"
+              # It will be up to the hardware plugin to decide where to compensate, on ts2phc or on dpll
+              phaseAdjustment:
+                internal: 7658
+                external: 10000
+            phaseOutputs:
+              - boardLabel: "REF-SMA2/U.FL2"
+                phaseAdjustment:
+                  internal: 10566
+                  external: 6000
+          - id: "ens5f0"
+            phaseInput:
+              boardLabel: "SMA1"
+            frequencyOutputs:
+              - boardLabel: "SMA2/U.FL2"
+        connections:
+          - from:
+              deviceId: "gnss_module"
+              id: "sma_out"
+            to:
+              deviceId: "ens4f0"
+              id: "sma1"
+            description: "RG58 coaxial cable, 1.5m from external GNSS module"
+          - from:
+              deviceId: "ens4f0"
+              id: "sma2"
+            to:
+              deviceId: "ens5f0"
+              id: "sma1"
+            description: "RG58 coaxial cable, 0.2m"
+          - from:
+              deviceId: "ens5f0"
+              id: "sma2"
+            description: "1 PPS measurement output"
+
+    BoundaryClockExample:
+      summary: Boundary clock topology with ethernet sources driving multiple DPLLs and eSync 
+      value:
+        sources:
+        # This definition directly translates into the software settings of sync source and upstream ports
+          - id: "ens4f0"
+            ethernet:
+              ports: ["ens4f0", "ens4f1"]
+        # DPLL settings directly translate into DPLL configuration through the Netlink driver.
+        # DPLL configuration includes frequency, phase adjustments and eSync configuration per pin if relevant
+        dplls:
+          - id: "ens4f0"
+            phaseInput:
+              boardLabel: "CVL-SDP22"
+              sourceId: "ens4f0"
+            phaseOutputs:
+              - boardLabel: "REF-SMA1"
+                phaseAdjustment:
+                  internal: 9034 # 1376 - internal delay for SMA1 output + 7658 - internal delay for SMA1 input on ens5f0
+                  external: 6000 # Cable delay applied to the output side ( w/a for Intel bug )
+                  eSyncConfig:
+                    frequency: 10000000
+              - boardLabel: "REF-SMA2/U.FL2"
+                phaseAdjustment:
+                  internal: 10566 # 7658 - internal delay for SMA1 input on ens8f0 + 2908 - internal delay for SMA2 output
+                  external: 6000 # Cable delay applied to the output side ( w/a for Intel bug )
+                  eSyncConfig:
+                    frequency: 10000000
+          - id: "ens5f0"
+            phaseInput:
+              boardLabel: "SMA1"
+              eSyncConfig:
+                frequency: 10000000
+            frequencyOutputs:
+              - boardLabel: "SMA2/U.FL2"
+          - id: "ens8f0"
+            phaseInput:
+              boardLabel: "SMA1"
+              eSyncConfig:
+                frequency: 10000000
+            frequencyOutputs:
+              - boardLabel: "SMA2/U.FL2"
+                frequency: 10000000
+        # Connections directly translate into ethernet device driver configurations, if required
+        # It replaces the "pins" construct in the current implementation
+        connections:
+          - from:
+              deviceId: "ens4f0"
+              id: "sma1"
+            to:
+              deviceId: "ens5f0"
+              id: "sma1"
+            description: "RG58 coaxial cable, 0.2m"
+          - from:
+              deviceId: "ens4f0"
+              id: "sma2"
+            to:
+              deviceId: "ens8f0"
+              id: "sma1"
+            description: "RG58 coaxial cable, 0.2m"
+          # Standalone measurement outputs
+          - from:
+              deviceId: "ens5f0"
+              id: "sma2"
+            description: "1 PPS measurement output"
+          - from:
+              deviceId: "ens8f0"
+              id: "sma2"
+              frequency: 10000000
+            description: "A single - ended connection for 10 MHz measurement output"
+ 
