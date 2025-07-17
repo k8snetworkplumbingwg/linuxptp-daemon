@@ -709,7 +709,7 @@ connect:
 				} else { // T-BC or T-TSC
 					event = e.convergeConfig(event)
 					dataDetails = e.addEvent(event)
-					clockState = e.updateBCState(event)
+					clockState = e.updateBCState(event, c)
 				}
 				logDataValues = dataDetails.logData
 				if event.WriteToLog && logDataValues != "" {
@@ -799,6 +799,11 @@ connect:
 			if len(logOut) > 0 {
 				if e.stdoutToSocket {
 					for _, l := range logOut {
+						// Remove nmea_status from the output to the sidecar if it is not a GM
+						if strings.Contains(l, "nmea_status") && event.ClockType != GM {
+							out := strings.Fields(l)
+							l = strings.Join(append(out[:2], out[4:]...), " ") + "\n"
+						}
 						fmt.Printf("%s", l)
 						_, err = c.Write([]byte(l))
 						if err != nil {
