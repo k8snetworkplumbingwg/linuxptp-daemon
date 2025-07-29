@@ -11,7 +11,7 @@ require (
 	github.com/golang/glog v1.2.4
 	github.com/google/goexpect v0.0.0-20210430020637-ab937bf7fd6f
 	github.com/jaypipes/ghw v0.12.0
-	github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20250211183822-9567e174177b
+	github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20250729181121-64eff4904bf4
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.2
 	github.com/prometheus/client_golang v1.16.0
