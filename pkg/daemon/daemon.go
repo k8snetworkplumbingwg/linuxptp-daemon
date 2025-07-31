@@ -643,7 +643,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			nodeProfile.Interface = &iface
 		}
 
-		output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
+		if pProcess != chronydProcessName {
+			output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
+		}
 
 		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
 
