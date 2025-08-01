@@ -8,8 +8,10 @@ FROM quay.io/centos/centos:stream9
 RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_install=False -y install linuxptp ethtool hwdata synce4l && yum clean all
 
 RUN yum install -y procps-ng
+RUN yum install -y iputils
+RUN yum install -y nmap
 RUN yum install -y chrony
-RUN yum install -y gpsd-minimal
+RUN yum install -y gpsd
 RUN yum install -y gpsd-minimal-clients
 
 # Create symlinks for executables to match references
