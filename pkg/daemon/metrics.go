@@ -310,6 +310,10 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 						updateClockStateMetrics(processName, masterOffsetIface.get(configName).alias, FREERUN)
 						masterOffsetIface.set(configName, "")
 						slaveIface.set(configName, "")
+					// Reuse the updateClockClass method for elegance and single-responsibility.
+					if p, ok := ptpProcessMap[configName]; ok {
+						go p.updateClockClass(p.c)
+					}
 					}
 				}
 			}
@@ -528,7 +532,7 @@ func UpdateInterfaceRoleMetrics(process string, iface string, role ptpPortRole) 
 }
 
 // UpdateClockClassMetrics ... update clock class metrics
-func UpdateClockClassMetrics(clockClass float64) {
+func UpdateClockClassMetrics(config string , clockClass float64) {
 	ClockClassMetrics.With(prometheus.Labels{
 		"process": ptp4lProcessName, "node": NodeName}).Set(float64(clockClass))
 }
