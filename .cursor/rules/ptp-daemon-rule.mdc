@@ -1,0 +1,449 @@
+# Linux PTP Daemon Development Rules
+
+## Project Overview
+This is a Go-based Linux PTP (Precision Time Protocol) daemon that provides high-precision time synchronization for Kubernetes clusters. The daemon manages PTP processes, monitors clock states, and integrates with the PTP operator for configuration management.
+
+## Code Style & Conventions
+
+### Go Code Standards
+- Use Go 1.23+ features and syntax
+- Follow standard Go naming conventions (PascalCase for exported, camelCase for unexported)
+- Use meaningful variable names that reflect PTP domain concepts
+- Prefer explicit error handling over ignoring errors
+- Use context.Context for cancellation and timeouts
+- Implement proper logging with glog for debugging and monitoring
+
+### Code Reusability & DRY Principle
+- **Don't Repeat Yourself (DRY)**: Extract common functionality into reusable functions
+- Create dedicated functions for complex operations that are used in multiple places
+- Prefer function composition over code duplication
+- When similar logic appears in multiple locations, refactor into a shared function
+- Use helper functions to encapsulate domain-specific operations
+- Consider creating utility packages for commonly used functionality
+- Always look for opportunities to make code more modular and reusable
+
+### Package Structure
+- `cmd/` - Main application entry point
+- `pkg/` - Core library packages
+- `pkg/daemon/` - Main daemon logic and process management
+- `pkg/event/` - Event handling and state management
+- `pkg/parser/` - Log parsing and metrics extraction
+- `pkg/dpll/` - DPLL (Digital Phase-Locked Loop) functionality
+- `pkg/synce/` - SyncE (Synchronous Ethernet) support
+- `pkg/pmc/` - PTP Management Client operations
+- `addons/` - Vendor-specific implementations (Intel, RedHat, etc.)
+
+### Naming Conventions
+- Use descriptive names for PTP processes: `ptp4l`, `phc2sys`, `ts2phc`, `synce`
+- Clock types: `GM` (Grandmaster), `BC` (Boundary Clock), `OC` (Ordinary Clock)
+- PTP states: `LOCKED`, `FREERUN`, `HOLDOVER`, `UNLOCKED`
+- Interface names should be descriptive and match network device names
+
+### Error Handling
+- Always check and handle errors explicitly
+- Use meaningful error messages that include context
+- Log errors with appropriate log levels (Error, Warning, Info)
+- Return errors up the call stack when appropriate
+- Use `fmt.Errorf` with context for error wrapping
+
+### Logging
+- Use `glog` for structured logging
+- Include relevant context in log messages (process name, interface, configuration)
+- Use appropriate log levels:
+  - `glog.Error` for errors that affect functionality
+  - `glog.Warning` for recoverable issues
+  - `glog.Info` for important state changes
+  - `glog.V(1)` and higher for debug information
+
+### Configuration Management
+- Use environment variables for runtime configuration
+- Support both file-based and Kubernetes-based configuration
+- Validate configuration parameters early
+- Use sensible defaults for optional parameters
+- Support hot-reloading of configuration when possible
+
+## PTP-Specific Patterns
+
+### Process Management
+- Implement proper process lifecycle management (start, stop, restart)
+- Use channels for inter-process communication
+- Implement graceful shutdown with cleanup
+- Monitor process health and restart failed processes
+- Use mutexes for thread-safe operations on shared data
+
+### Event Handling
+- Use structured events with timestamps
+- Implement event filtering and routing
+- Support multiple event sources (PTP, SyncE, GNSS)
+- Use channels for event propagation
+- Implement proper event ordering and deduplication
+
+### Metrics and Monitoring
+- Export Prometheus metrics for monitoring
+- Track PTP-specific metrics (offset, state, clock quality)
+- Implement health checks and readiness probes
+- Use appropriate metric types (Gauge, Counter, Histogram)
+- Include labels for process, interface, and configuration identification
+
+### Network Operations
+- Handle network interface changes gracefully
+- Implement retry logic for network operations
+- Use appropriate timeouts for network calls
+- Support both IPv4 and IPv6
+- Handle network partition scenarios
+
+## Testing Guidelines
+
+### Unit Tests
+- Write tests for all exported functions
+- Use table-driven tests for multiple input scenarios
+- Mock external dependencies (network, file system)
+- Test error conditions and edge cases
+- Use `testify` for assertions and mocking
+
+### Integration Tests
+- Test PTP process interactions
+- Verify configuration loading and validation
+- Test event propagation and handling
+- Validate metrics collection and export
+
+### Test Data
+- Use realistic PTP log samples in tests
+- Include various PTP states and transitions
+- Test with different clock types and configurations
+- Use test fixtures for consistent test execution
+
+## Performance Considerations
+
+### Resource Management
+- Implement proper resource cleanup
+- Use connection pooling where appropriate
+- Implement rate limiting for external API calls
+- Monitor memory usage and implement garbage collection tuning
+- Use efficient data structures for large datasets
+
+### Concurrency
+- Use goroutines for I/O-bound operations
+- Implement proper synchronization for shared state
+- Use channels for communication between goroutines
+- Avoid goroutine leaks by implementing proper cleanup
+- Use worker pools for CPU-intensive tasks
+
+## Security Guidelines
+
+### Input Validation
+- Validate all external inputs (configuration, network data)
+- Sanitize log output to prevent log injection
+- Use parameterized queries for database operations
+- Implement proper access controls for sensitive operations
+
+### Network Security
+- Use TLS for secure communications
+- Implement proper authentication and authorization
+- Validate network packet contents
+- Use secure defaults for network configurations
+
+## Kubernetes Integration
+
+### Operator Pattern
+- Follow Kubernetes operator best practices
+- Implement proper resource watching and reconciliation
+- Use finalizers for proper cleanup
+- Implement status updates and conditions
+- Use appropriate API versions and resource types
+
+### Resource Management
+- Implement proper resource limits and requests
+- Use ConfigMaps and Secrets for configuration
+- Implement proper health checks and readiness probes
+- Use appropriate service account permissions
+
+## Documentation
+
+### Code Comments
+- Document all exported functions and types
+- Include usage examples for complex functions
+- Document PTP-specific concepts and terminology
+- Keep comments up-to-date with code changes
+
+### API Documentation
+- Document all public APIs
+- Include parameter descriptions and return values
+- Provide usage examples
+- Document error conditions and handling
+
+## Build and Deployment
+
+### Build Process
+- Use Go modules for dependency management
+- Implement proper versioning and release tagging
+- Use multi-stage Docker builds for efficiency
+- Include proper health checks in container images
+
+### Deployment
+- Support both standalone and Kubernetes deployment
+- Implement proper configuration management
+- Use appropriate resource limits and requests
+- Implement proper monitoring and alerting
+
+## Troubleshooting
+
+### Debug Information
+- Include debug logging for troubleshooting
+- Export debug endpoints when appropriate
+- Implement proper error reporting
+- Use structured logging for easier analysis
+
+### Monitoring
+- Implement comprehensive health checks
+- Export relevant metrics for monitoring
+- Use appropriate alerting thresholds
+- Implement proper log aggregation and analysis
+
+## Code Self-Review Rules
+
+### Self-Review Checklist
+All code should be reviewed against these criteria before committing:
+
+#### 1. Error Handling ✓
+- All errors are properly logged and handled
+- Error messages include sufficient context
+- Errors are propagated up the call stack when appropriate
+- No errors are silently ignored
+
+#### 2. Resource Cleanup ✓
+- All resources (goroutines, processes, channels, files) are properly cleaned up
+- Use `defer` statements for cleanup operations
+- Implement proper cleanup in error paths
+- No resource leaks (goroutines, channels, file descriptors)
+
+#### 3. Loop Control ✓
+- All loops have proper exit conditions
+- Use labeled loops (`loopName:`) for nested loops when needed
+- `break` statements target the correct loop level
+- Infinite loops have clear termination logic
+
+#### 4. Channel Management ✓
+- All channels are properly closed
+- No goroutine leaks from unbuffered channels
+- Channel operations are coordinated with proper cleanup
+- Use buffered channels when appropriate to prevent blocking
+
+#### 5. Timeout Handling ✓
+- All operations have appropriate timeouts
+- Use context.Context for cancellation when possible
+- Implement proper timeout handling for external operations
+- No operations can hang indefinitely
+
+#### 6. Logging ✓
+- All important events are logged with appropriate levels
+- Log messages include relevant context and identifiers
+- Use structured logging for complex data
+- Debug logging is available for troubleshooting
+
+#### 7. Documentation ✓
+- All public functions have clear documentation
+- Include usage examples for complex functions
+- Document error conditions and return values
+- Keep documentation synchronized with code changes
+
+#### 8. Testing Coverage ⚠
+- All functions have corresponding test coverage
+- Test error scenarios and edge cases
+- Include integration tests for complex workflows
+- Test resource cleanup and error handling
+
+#### 9. Performance ✓
+- Avoid unnecessary allocations in hot paths
+- Use efficient data structures and algorithms
+- Implement proper caching where beneficial
+- Monitor memory usage and GC pressure
+
+#### 10. Security ✓
+- Validate all inputs and handle edge cases safely
+- Sanitize output to prevent injection attacks
+- Use secure defaults for configurations
+- Implement proper access controls
+
+### Self-Review Process
+1. **Before committing**: Run through the checklist above
+2. **Mark items**: Use ✓ for completed, ⚠ for needs attention
+3. **Update checklist**: Keep the checklist current with code improvements
+4. **Document decisions**: Add comments explaining any deviations from best practices
+5. **Continuous improvement**: Use the checklist to identify areas for refactoring
+
+### Example Self-Review Comment
+```go
+// SELF-REVIEW: ✓ Error handling, ✓ Resource cleanup, ✓ Loop control
+// ⚠ Testing: Add test coverage for error scenarios
+// ✓ Performance: Efficient channel operations
+// ✓ Security: Safe error handling and input validation
+func ExampleFunction() error {
+    // Implementation...
+}
+```
+
+## Linting and Code Quality Rules
+
+### Mandatory Linting
+**ALWAYS run linters before committing code:**
+
+#### 1. Go Linters (Required)
+```bash
+# Run all Go linters
+go vet ./...
+golangci-lint run
+
+# Or individual linters
+go vet ./pkg/...
+go vet ./cmd/...
+go vet ./addons/...
+```
+
+#### 2. Code Quality Checks
+- **Variable Shadowing**: Never shadow variables, especially errors
+- **Unused Variables**: Remove all unused variables and imports
+- **Error Handling**: Check that all errors are properly handled
+- **Resource Leaks**: Ensure proper cleanup in all code paths
+
+### Common Issues to Avoid
+
+#### Variable Shadowing (CRITICAL)
+```go
+// ❌ WRONG - Variable shadowing
+func badExample() error {
+    err := someOperation()
+    if err != nil {
+        return err
+    }
+    
+    // This shadows the outer 'err' variable!
+    if err := anotherOperation(); err != nil {
+        return err // This returns the inner err, not the outer one
+    }
+    return err // This returns nil because outer err was never set
+}
+
+// ✅ CORRECT - No shadowing
+func goodExample() error {
+    err := someOperation()
+    if err != nil {
+        return err
+    }
+    
+    // Use different variable name or reuse existing
+    if err2 := anotherOperation(); err2 != nil {
+        return err2
+    }
+    return nil
+}
+```
+
+#### Error Variable Reuse
+```go
+// ❌ WRONG - Reusing error variable incorrectly
+func badErrorHandling() error {
+    var err error
+    
+    if err = operation1(); err != nil {
+        return err
+    }
+    
+    // This overwrites the previous error!
+    if err = operation2(); err != nil {
+        return err // Lost the original error context
+    }
+    
+    return nil
+}
+
+// ✅ CORRECT - Proper error handling
+func goodErrorHandling() error {
+    if err := operation1(); err != nil {
+        return fmt.Errorf("operation1 failed: %w", err)
+    }
+    
+    if err := operation2(); err != nil {
+        return fmt.Errorf("operation2 failed: %w", err)
+    }
+    
+    return nil
+}
+```
+
+### Linting Configuration
+
+#### .golangci.yml (Recommended)
+```yaml
+linters:
+  enable:
+    - gofmt
+    - goimports
+    - govet
+    - errcheck
+    - shadow
+    - unused
+    - gosimple
+    - staticcheck
+    - gosec
+    - ineffassign
+    - misspell
+    - unparam
+    - gocritic
+
+linters-settings:
+  shadow:
+    strict: true
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+```
+
+### Pre-commit Checklist
+Before committing any code:
+
+1. **Run linters**: `golangci-lint run`
+2. **Check for shadowing**: Look for variable reuse in same scope
+3. **Verify error handling**: Ensure all errors are properly handled
+4. **Check resource cleanup**: Verify proper cleanup in all paths
+5. **Run tests**: `go test ./...`
+6. **Check formatting**: `go fmt ./...`
+
+### IDE Integration
+Configure your IDE to:
+- **Show linting errors** in real-time
+- **Highlight variable shadowing** warnings
+- **Auto-format** on save
+- **Run linters** on file save
+- **Display unused imports** warnings
+
+### Continuous Integration
+Ensure CI/CD pipelines include:
+```yaml
+- name: Run Go linters
+  run: |
+    go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+    golangci-lint run --timeout=5m
+
+- name: Check for shadowing
+  run: |
+    go vet -shadow ./...
+```
+description:
+globs:
+alwaysApply: false
+---
