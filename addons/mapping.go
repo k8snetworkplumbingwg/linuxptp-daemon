@@ -8,5 +8,6 @@ import (
 
 var PluginMapping = map[string]plugin.New{
 	"reference": generic.Reference,
+	"failover":  generic.Failover,
 	"e810":      intel.E810,
 }
