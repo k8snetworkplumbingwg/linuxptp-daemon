@@ -1064,6 +1064,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 			go func() {
 				for scanner.Scan() {
 					output := scanner.Text()
+					output = pm.ProcessLog(p.name, output)
 					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {

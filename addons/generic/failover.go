@@ -42,6 +42,14 @@ func RegisterProcessFailover(data *interface{}, pname string, cmdRun func(bool, 
 	}
 }
 
+func ProcessLogFailover(data *interface{}, pname string, log string) string {
+	ret := log
+	if data != nil {
+		//print("failover %s %s", pname, log)
+	}
+	return ret
+}
+
 func Failover(name string) (*plugin.Plugin, *interface{}) {
 	if name != "failover" {
 		glog.Errorf("Plugin must be initialized as 'failover'")
@@ -49,7 +57,9 @@ func Failover(name string) (*plugin.Plugin, *interface{}) {
 	}
 	_plugin := plugin.Plugin{Name: "failover",
 		OnPTPConfigChange: OnPTPConfigChangeFailover,
-		RegisterProcess:   RegisterProcessFailover}
+		RegisterProcess:   RegisterProcessFailover,
+		ProcessLog:        ProcessLogFailover,
+	}
 	pluginData := FailoverPluginData{}
 	pluginData.cmdRun = make(map[string]func(bool, *plugin.PluginManager))
 	pluginData.cmdStop = make(map[string]func())
