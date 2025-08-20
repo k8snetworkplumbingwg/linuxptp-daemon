@@ -27,8 +27,8 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
 

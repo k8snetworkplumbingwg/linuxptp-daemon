@@ -6,7 +6,6 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 )
 
-
 func registerPlugins(plugins []string) plugin.PluginManager {
 	glog.Infof("Begin plugin registration...")
 	manager := plugin.PluginManager{Plugins: make(map[string]*plugin.Plugin),
@@ -32,4 +31,3 @@ func registerPlugin(name string) (*plugin.Plugin, *interface{}) {
 	glog.Errorf("Plugin not found: " + name)
 	return nil, nil
 }
-
