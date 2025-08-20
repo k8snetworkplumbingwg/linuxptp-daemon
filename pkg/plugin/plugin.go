@@ -11,6 +11,7 @@ type Plugin struct {
 	AfterRunPTPCommand AfterRunPTPCommand
 	PopulateHwConfig   PopulateHwConfig
 	RegisterProcess    RegisterProcess
+	ProcessLog         ProcessLog
 }
 
 type PluginManager struct {
@@ -23,6 +24,7 @@ type OnPTPConfigChange func(*interface{}, *ptpv1.PtpProfile) error
 type PopulateHwConfig func(*interface{}, *[]ptpv1.HwConfig) error
 type AfterRunPTPCommand func(*interface{}, *ptpv1.PtpProfile, string) error
 type RegisterProcess func(*interface{}, string, func(bool, *PluginManager), func(), bool, *PluginManager)
+type ProcessLog func(*interface{}, string, string) string
 
 func (pm *PluginManager) OnPTPConfigChange(nodeProfile *ptpv1.PtpProfile) {
 	for pluginName, pluginObject := range pm.Plugins {
@@ -58,4 +60,15 @@ func (pm *PluginManager) RegisterProcess(pname string, cmdRun func(bool, *Plugin
 			pluginFunc(pm.Data[pluginName], pname, cmdRun, cmdStop, stdoutToSocket, pm)
 		}
 	}
+}
+
+func (pm *PluginManager) ProcessLog(pname string, log string) string {
+	ret := log
+	for pluginName, pluginObject := range pm.Plugins {
+		pluginFunc := pluginObject.ProcessLog
+		if pluginFunc != nil {
+			ret = pluginFunc(pm.Data[pluginName], pname, ret)
+		}
+	}
+	return ret
 }
