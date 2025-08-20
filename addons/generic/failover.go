@@ -7,10 +7,10 @@ import (
 )
 
 type FailoverPluginData struct {
-	cmdStop map[string]func()
-	cmdRun map[string]func(bool, *plugin.PluginManager)
+	cmdStop        map[string]func()
+	cmdRun         map[string]func(bool, *plugin.PluginManager)
 	stdoutToSocket bool
-	pm *plugin.PluginManager
+	pm             *plugin.PluginManager
 }
 
 func OnPTPConfigChangeFailover(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
@@ -29,7 +29,12 @@ func RegisterProcessFailover(data *interface{}, pname string, cmdRun func(bool, 
 		_data := *data
 		var pluginData *FailoverPluginData = _data.(*FailoverPluginData)
 		_pluginData := *pluginData
-		
+		if _pluginData.cmdRun == nil {
+			_pluginData.cmdRun = make(map[string]func(bool, *plugin.PluginManager))
+		}
+		if _pluginData.cmdStop == nil {
+			_pluginData.cmdStop = make(map[string]func())
+		}
 		_pluginData.cmdStop[pname] = cmdStop
 		_pluginData.cmdRun[pname] = cmdRun
 		_pluginData.stdoutToSocket = stdoutToSocket
@@ -46,6 +51,8 @@ func Failover(name string) (*plugin.Plugin, *interface{}) {
 		OnPTPConfigChange: OnPTPConfigChangeFailover,
 		RegisterProcess:   RegisterProcessFailover}
 	pluginData := FailoverPluginData{}
+	pluginData.cmdRun = make(map[string]func(bool, *plugin.PluginManager))
+	pluginData.cmdStop = make(map[string]func())
 	var iface interface{} = &pluginData
 	return &_plugin, &iface
 }

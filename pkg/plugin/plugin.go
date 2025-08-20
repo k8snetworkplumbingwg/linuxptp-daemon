@@ -13,12 +13,10 @@ type Plugin struct {
 	RegisterProcess    RegisterProcess
 }
 
-
 type PluginManager struct {
 	Plugins map[string]*Plugin
 	Data    map[string]*interface{}
 }
-
 
 type New func(string) (*Plugin, *interface{})
 type OnPTPConfigChange func(*interface{}, *ptpv1.PtpProfile) error
@@ -28,24 +26,36 @@ type RegisterProcess func(*interface{}, string, func(bool, *PluginManager), func
 
 func (pm *PluginManager) OnPTPConfigChange(nodeProfile *ptpv1.PtpProfile) {
 	for pluginName, pluginObject := range pm.Plugins {
-		pluginObject.OnPTPConfigChange(pm.Data[pluginName], nodeProfile)
+		pluginFunc := pluginObject.OnPTPConfigChange
+		if pluginFunc != nil {
+			pluginFunc(pm.Data[pluginName], nodeProfile)
+		}
 	}
 }
 
 func (pm *PluginManager) AfterRunPTPCommand(nodeProfile *ptpv1.PtpProfile, command string) {
 	for pluginName, pluginObject := range pm.Plugins {
-		pluginObject.AfterRunPTPCommand(pm.Data[pluginName], nodeProfile, command)
+		pluginFunc := pluginObject.AfterRunPTPCommand
+		if pluginFunc != nil {
+			pluginFunc(pm.Data[pluginName], nodeProfile, command)
+		}
 	}
 }
 
 func (pm *PluginManager) PopulateHwConfig(hwconfigs *[]ptpv1.HwConfig) {
 	for pluginName, pluginObject := range pm.Plugins {
-		pluginObject.PopulateHwConfig(pm.Data[pluginName], hwconfigs)
+		pluginFunc := pluginObject.PopulateHwConfig
+		if pluginFunc != nil {
+			pluginFunc(pm.Data[pluginName], hwconfigs)
+		}
 	}
 }
 
 func (pm *PluginManager) RegisterProcess(pname string, cmdRun func(bool, *PluginManager), cmdStop func(), stdoutToSocket bool) {
 	for pluginName, pluginObject := range pm.Plugins {
-		pluginObject.RegisterProcess(pm.Data[pluginName], pname, cmdRun, cmdStop, stdoutToSocket, pm)
+		pluginFunc := pluginObject.RegisterProcess
+		if pluginFunc != nil {
+			pluginFunc(pm.Data[pluginName], pname, cmdRun, cmdStop, stdoutToSocket, pm)
+		}
 	}
 }
