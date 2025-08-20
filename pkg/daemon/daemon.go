@@ -29,6 +29,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
 
@@ -309,7 +310,7 @@ type Daemon struct {
 	pmcPollInterval int
 
 	// Allow vendors to include plugins
-	pluginManager PluginManager
+	pluginManager plugin.PluginManager
 }
 
 // New LinuxPTP is called by daemon to generate new linuxptp instance
@@ -890,6 +891,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 		printNodeProfile(nodeProfile)
 		dn.processManager.process = append(dn.processManager.process, &dprocess)
+		dn.pluginManager.RegisterProcess(dprocess.name, dprocess.cmdRun, dprocess.cmdStop, dn.stdoutToSocket)
 
 	}
 	return nil
@@ -1010,7 +1012,7 @@ func (p *ptpProcess) emitClockClassLogs(c net.Conn) {
 	}
 }
 
-func (p *ptpProcess) tBCTransitionCheck(output string, pm *PluginManager) {
+func (p *ptpProcess) tBCTransitionCheck(output string, pm *plugin.PluginManager) {
 	if strings.Contains(output, p.tBCAttributes.trIfaceName) {
 		if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
 			glog.Info("T-BC MOVE TO NORMAL")
@@ -1028,7 +1030,7 @@ func (p *ptpProcess) tBCTransitionCheck(output string, pm *PluginManager) {
 }
 
 // cmdRun runs given ptpProcess and restarts on errors
-func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
+func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 	done := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
 	defer func() {
 		if stdoutToSocket && p.c != nil {
