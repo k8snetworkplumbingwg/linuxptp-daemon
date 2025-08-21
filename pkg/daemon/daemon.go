@@ -654,6 +654,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				ifaces[i].PhcId = ptpnetwork.GetPhcId(ifaces[i].Name)
 			}
 		}
+		utils.Aliases.Populate(&ifaces)
 
 		if configInput != nil {
 			*configInput = configOutput
