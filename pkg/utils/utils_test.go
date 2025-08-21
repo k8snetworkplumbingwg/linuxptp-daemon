@@ -1,7 +1,6 @@
 package utils_test
 
 import (
-	"fmt"
 	"os"
 	"testing"
 
@@ -21,15 +20,31 @@ type testCase struct {
 	expectedAlias string
 }
 
-func Test_GetAlias(t *testing.T) {
+// testIfaceCollection implements utils.iFaceCollection for testing
+type testIfaceCollection struct {
+	phcToIfnames map[string][]string
+}
+
+func (c testIfaceCollection) GetIfNamesGroupedByPhc() map[string][]string {
+	return c.phcToIfnames
+}
+
+func Test_GetAlias_ByPhcID(t *testing.T) {
+	am := &utils.AliasManager{}
+	am.Populate(testIfaceCollection{phcToIfnames: map[string][]string{
+		"ptp0": {"ens1f1", "ens1f0"}, // ensure sorting within alias
+		"ptp1": {"ens2f0"},
+	}})
+
 	testCases := []testCase{
-		{"eth0", "ethx"},
-		{"eth1.100", "ethx.100"},
-		{"eth1.100.XYZ", "ethx.100.XYZ"},
+		{ifname: "ptp0", expectedAlias: "ens1f0_ens1f1"},
+		{ifname: "ptp1", expectedAlias: "ens2f0"},
+		{ifname: "", expectedAlias: ""},                       // empty string should return empty string
+		{ifname: "unknown-phc", expectedAlias: "unknown-phc"}, // unknown phc should return unknown-phc
 	}
 	for _, tc := range testCases {
-		t.Run(fmt.Sprintf("%s->%s", tc.ifname, tc.expectedAlias), func(t *testing.T) {
-			assert.Equal(t, tc.expectedAlias, utils.GetAlias(tc.ifname))
+		t.Run(tc.ifname, func(t *testing.T) {
+			assert.Equal(t, tc.expectedAlias, am.GetAlias(tc.ifname))
 		})
 	}
 }

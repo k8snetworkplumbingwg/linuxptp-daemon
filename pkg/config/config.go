@@ -64,6 +64,28 @@ func (i *IFaces) GetPhcID2IFace(phcId string) string {
 	return phcId
 }
 
+// GetIfNamesGroupedByPhc returns names of the interfaces for a given phcID
+func (i *IFaces) GetIfNamesGroupedByPhc() map[string][]string {
+	phcMap := make(map[string][]string)
+	for _, ii := range *i {
+		phcMap[ii.PhcId] = append(phcMap[ii.PhcId], ii.Name)
+	}
+	return phcMap
+}
+
+// GetPhcIDs returns a list of all phcIDs
+func (i *IFaces) GetPhcIDs() []string {
+	phcIDs := make(map[string]bool)
+	for _, ii := range *i {
+		phcIDs[ii.PhcId] = true
+	}
+	keys := make([]string, 0, len(phcIDs))
+	for k := range phcIDs {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // String ... get string
 func (i *IFaces) String() string {
 	b := strings.Builder{}
