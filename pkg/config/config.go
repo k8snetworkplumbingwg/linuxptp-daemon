@@ -64,6 +64,28 @@ func (i *IFaces) GetPhcID2IFace(phcId string) string {
 	return phcId
 }
 
+func (i *IFaces) GetIfnamesForPhcID(phcId string) []string {
+	var ifaces []string
+	for _, ii := range *i {
+		if ii.PhcId == phcId {
+			ifaces = append(ifaces, ii.Name)
+		}
+	}
+	return ifaces
+}
+
+func (i *IFaces) GetPhcIDs() []string {
+	phcIDs := make(map[string]bool)
+	for _, ii := range *i {
+		phcIDs[ii.PhcId] = true
+	}
+	keys := make([]string, 0, len(phcIDs))
+	for k := range phcIDs {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // String ... get string
 func (i *IFaces) String() string {
 	b := strings.Builder{}
