@@ -64,10 +64,18 @@ func (pm *PluginManager) RegisterProcess(pname string, cmdRun func(bool, *Plugin
 
 func (pm *PluginManager) ProcessLog(pname string, log string) string {
 	ret := log
+	print("In ProcessLog")
+	print(pm)
+	print(pm.Plugins)
 	for pluginName, pluginObject := range pm.Plugins {
+		print(pluginName)
+		print(pluginObject)
 		pluginFunc := pluginObject.ProcessLog
+		print(pluginFunc)
 		if pluginFunc != nil {
-			ret = pluginFunc(pm.Data[pluginName], pname, ret)
+			pluginData := pm.Data
+			pluginDataName := pluginData[pluginName]
+			ret = pluginFunc(pluginDataName, pname, ret)
 		}
 	}
 	return ret
