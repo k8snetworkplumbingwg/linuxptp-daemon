@@ -687,7 +687,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			configName:           configFile,
 			messageTag:           messageTag,
 			exitCh:               make(chan bool),
-			stopped:              false,
+			stopped:              true,
 			logFilters:           logfilter.GetLogFilters(pProcess, messageTag, (*nodeProfile).PtpSettings),
 			cmd:                  cmd,
 			depProcess:           []process{},
@@ -949,6 +949,14 @@ func (p *ptpProcess) tBCTransitionCheck(output string, pm *plugin.PluginManager)
 
 // cmdRun runs given ptpProcess and restarts on errors
 func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
+	glog.Infof("FAILOVER cmdRun for %s", p.name)
+	if !p.Stopped() {
+		glog.Infof("%s is already running", p.name)
+		return
+	} else {
+		p.setStopped(false)
+	}
+
 	done := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
 	defer func() {
 		if stdoutToSocket && p.c != nil {
@@ -956,7 +964,9 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 				glog.Errorf("closing connection returned error %s", err)
 			}
 		}
+		glog.Infof("FAILOVER %s writing true to p.exitCh", p.name)
 		p.exitCh <- true
+		glog.Infof("FAILOVER %s done writing true to p.exitCh", p.name)
 	}()
 
 	profileClockType, pctFound := p.nodeProfile.PtpSettings["clockType"]
@@ -1135,8 +1145,13 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 
 // cmdStop stops ptpProcess launched by cmdRun
 func (p *ptpProcess) cmdStop() {
+	glog.Infof("FAILOVER cmdStop for %s", p.name)
 	glog.Infof("stopping %s...", p.name)
 	if p.cmd == nil {
+		return
+	}
+	if p.Stopped() {
+		glog.Infof("%s is already stopped", p.name)
 		return
 	}
 	p.setStopped(true)
@@ -1149,13 +1164,14 @@ func (p *ptpProcess) cmdStop() {
 			return
 		}
 	}
-	glog.Infof("removing config path %s for %s ", p.processConfigPath, p.name)
-	if p.processConfigPath != "" {
-		err := os.Remove(p.processConfigPath)
-		if err != nil {
-			glog.Errorf("failed to remove ptp4l config path %s: %v", p.processConfigPath, err)
-		}
-	}
+	//glog.Infof("removing config path %s for %s ", p.processConfigPath, p.name)
+	//if p.processConfigPath != "" {
+	//	err := os.Remove(p.processConfigPath)
+	//	if err != nil {
+	//		glog.Errorf("failed to remove ptp4l config path %s: %v", p.processConfigPath, err)
+	//	}
+	//}
+	glog.Infof("FAILOVER %s reading from p.exitCh", p.name)
 	<-p.exitCh
 	glog.Infof("Process %s (%d) terminated", p.name, p.cmd.Process.Pid)
 }
