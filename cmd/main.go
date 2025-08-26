@@ -133,7 +133,7 @@ func main() {
 	features.SetFlags(version, ocpVersion)
 	features.Flags.Print()
 
-	go daemon.New(
+	daemonInstance := daemon.New(
 		nodeName,
 		daemon.PtpNamespace,
 		stdoutToSocket,
@@ -146,7 +146,8 @@ func main() {
 		closeProcessManager,
 		cp.pmcPollInterval,
 		tracker,
-	).Run()
+	)
+	go daemonInstance.Run()
 
 	tickerPull := time.NewTicker(time.Second * time.Duration(cp.updateInterval))
 	defer tickerPull.Stop()
@@ -171,7 +172,12 @@ func main() {
 			glog.Infof("ticker pull")
 			// Run a loop to update the device status
 			if refreshNodePtpDevice {
-				go daemon.RunDeviceStatusUpdate(ptpClient, nodeName, &hwconfigs)
+				go func() {
+					daemon.RunDeviceStatusUpdate(ptpClient, nodeName, &hwconfigs)
+					if stdoutToSocket {
+						daemonInstance.LogAliases()
+					}
+				}()
 				refreshNodePtpDevice = false
 			}
 

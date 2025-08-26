@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -54,6 +56,19 @@ func (a *AliasManager) GetAlias(ifname string) string {
 		}
 	}
 	return ifname
+}
+
+// LogAliases ...
+func (a *AliasManager) LogAliases(c net.Conn) {
+	if c == nil {
+		return
+	}
+	a.lock.RLock()
+	defer a.lock.RUnlock()
+
+	for name, alias := range a.values {
+		c.Write([]byte(fmt.Sprintf("ALIAS: %s -> %s\n", name, alias)))
+	}
 }
 
 // GetAlias masks interface names for metric reporting

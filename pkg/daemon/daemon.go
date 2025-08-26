@@ -1620,3 +1620,13 @@ func (p *ptpProcess) sendPtp4lEvent() {
 	default:
 	}
 }
+
+// LogAliases ...
+func (dn *Daemon) LogAliases() {
+	for len(dn.processManager.process) == 0 {
+		time.Sleep(1 * time.Microsecond)
+	}
+	if dn.processManager.process[0].c != nil {
+		utils.Aliases.LogAliases(*dn.processManager.process[0].c)
+	}
+}
