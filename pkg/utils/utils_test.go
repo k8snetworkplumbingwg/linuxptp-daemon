@@ -20,25 +20,17 @@ type testCase struct {
 	expectedAlias string
 }
 
-// testIfaceCollection implements utils.iFaceCollection for testing
-type testIfaceCollection struct {
-	phcToIfnames map[string][]string
-}
-
-func (c testIfaceCollection) GetIfNamesGroupedByPhc() map[string][]string {
-	return c.phcToIfnames
-}
-
 func Test_GetAlias_ByPhcID(t *testing.T) {
 	am := &utils.AliasManager{}
-	am.Populate(testIfaceCollection{phcToIfnames: map[string][]string{
+	am.Populate(map[string][]string{
 		"ptp0": {"ens1f1", "ens1f0"}, // ensure sorting within alias
 		"ptp1": {"ens2f0"},
-	}})
+	})
 
 	testCases := []testCase{
-		{ifname: "ptp0", expectedAlias: "ens1f0_ens1f1"},
-		{ifname: "ptp1", expectedAlias: "ens2f0"},
+		{ifname: "ens1f0", expectedAlias: "ens1f0_ens1f1"},
+		{ifname: "ens1f1", expectedAlias: "ens1f0_ens1f1"},
+		{ifname: "ens2f0", expectedAlias: "ens2f0"},
 		{ifname: "", expectedAlias: ""},                       // empty string should return empty string
 		{ifname: "unknown-phc", expectedAlias: "unknown-phc"}, // unknown phc should return unknown-phc
 	}

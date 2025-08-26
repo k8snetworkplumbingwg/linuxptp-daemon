@@ -20,15 +20,7 @@ func calculateAlias(a []string) string {
 	return strings.Join(a, "_")
 }
 
-type iFace interface {
-	GetName() string
-	GetPhcID() string
-}
-
-type iFaceCollection interface {
-	GetIfNamesGroupedByPhc() map[string][]string
-}
-
+// Clear will remove all aliases
 func (a *AliasManager) Clear() {
 	a.lock.Lock()
 	defer a.lock.Unlock()
@@ -36,14 +28,14 @@ func (a *AliasManager) Clear() {
 }
 
 // Populate takes an interface collection to populate aliases
-func (a *AliasManager) Populate(ifaces iFaceCollection) {
+func (a *AliasManager) Populate(ifaces map[string][]string) {
 	a.lock.Lock()
 	defer a.lock.Unlock()
 
 	if a.values == nil {
 		a.values = make(map[string]string)
 	}
-	for _, ifNames := range ifaces.GetIfNamesGroupedByPhc() {
+	for _, ifNames := range ifaces {
 		alias := calculateAlias(ifNames)
 		for _, name := range ifNames {
 			a.values[name] = alias

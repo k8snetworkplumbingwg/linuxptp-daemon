@@ -544,8 +544,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		clockType = ptp4lOutput.clock_type
 	}
 
-	utils.Aliases.Clear()
-
 	for _, pProcess := range ptpProcesses {
 		controlledConfigFile := ""
 		switch pProcess {
@@ -656,8 +654,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				ifaces[i].PhcId = ptpnetwork.GetPhcId(ifaces[i].Name)
 			}
 		}
-
-		utils.Aliases.Populate(&ifaces)
 
 		if configInput != nil {
 			*configInput = configOutput
