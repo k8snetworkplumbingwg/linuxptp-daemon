@@ -135,6 +135,13 @@ func (p *ProcessManager) SetTestData(name, msgTag string, ifaces config.IFaces) 
 	p.process[0].messageTag = msgTag
 	p.process[0].ifaces = ifaces
 	p.process[0].logParser = getParser(name)
+
+	utils.Aliases.Clear()
+	ifMap := make(map[string][]string)
+	for _, intFace := range ifaces {
+		ifMap[intFace.PhcId] = append(ifMap[intFace.PhcId], intFace.Name)
+	}
+	utils.Aliases.Populate(ifMap)
 }
 
 // RunProcessPTPMetrics is used by unit tests
