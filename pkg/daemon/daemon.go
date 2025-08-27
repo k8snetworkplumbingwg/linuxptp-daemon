@@ -1177,7 +1177,23 @@ func (p *ptpProcess) cmdStop() {
 }
 
 func (p *ptpProcess) cmdSetEnabled(pname string, enabled bool) {
-	glog.Infof("FAILOVER cmdSetEnabled %s set to %d", p.name, enabled)
+	glog.Infof("FAILOVER cmdSetEnabled %s set to %t", p.name, enabled)
+	switch pname {
+	case "chronyd":
+		if enabled {
+			exec.Command("chmod", "755", "/usr/sbin/chronyd").Output()
+		} else {
+			exec.Command("chmod", "644", "/usr/sbin/chronyd").Output()
+			exec.Command("pkill", "chronyd").Output()
+		}
+	case "phc2sys":
+		if enabled {
+			exec.Command("chmod", "755", "/usr/sbin/phc2sys").Output()
+		} else {
+			exec.Command("chmod", "644", "/usr/sbin/phc2sys").Output()
+			exec.Command("pkill", "phc2sys").Output()
+		}
+	}
 }
 
 func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
