@@ -119,17 +119,16 @@ func ProcessLogNtpFailover(data *interface{}, pname string, log string) string {
 					}
 				case PCSMS_STARTUP_BOTH:
 					print("FAILOVER: PCSMS_STARTUP_BOTH\n")
-					//cmdStop, ok := _pluginData.cmdStop["chronyd"]
-					//if ok {
-					//	print("FAILOVER: Disabling chronyd at startup\n")
-					//	cmdStop()
-					//}
+					chronydSetEnabled, ok := _pluginData.cmdSetEnabled["chronyd"]
+					if ok {
+						print("FAILOVER: Disabling chronyd at startup\n")
+						chronydSetEnabled("chronyd", false)
+					}
 					print("FAILOVER: DONE disabling chronyd at startup\n")
-					//cmdRun, ok := _pluginData.cmdRun["phc2sys"]
-					//if ok {
-					//	print("FAILOVER: Enabling phc2sys at startup\n")
-					//	cmdRun(_pluginData.stdoutToSocket, _pluginData.pm)
-					//}
+					phc2sysSetEnabled, ok := _pluginData.cmdSetEnabled["phc2sys"]
+					if ok {
+						phc2sysSetEnabled("phc2sys", true)
+					}
 					_pluginData.pcfsmState = PCSMS_ACTIVE
 					print("FAILOVER: goto PCSMS_ACTIVE\n")
 					continue
@@ -147,6 +146,14 @@ func ProcessLogNtpFailover(data *interface{}, pname string, log string) string {
 						if currentTime.After(_pluginData.expiryTime) {
 							print("FAILOVER: switching to ntp time source\n")
 							_pluginData.pcfsmState = PCSMS_FAILOVER
+							chronydSetEnabled, ok := _pluginData.cmdSetEnabled["chronyd"]
+							if ok {
+								chronydSetEnabled("chronyd", true)
+							}
+							phc2sysSetEnabled, ok := _pluginData.cmdSetEnabled["phc2sys"]
+							if ok {
+								phc2sysSetEnabled("phc2sys", false)
+							}
 							continue
 						}
 					}
