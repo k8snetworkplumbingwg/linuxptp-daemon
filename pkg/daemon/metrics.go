@@ -256,7 +256,7 @@ func updatePTPMetrics(from, process, iface string, ptpOffset, maxPtpOffset, freq
 }
 
 // extractMetrics ...
-func extractMetrics(messageTag string, processName string, ifaces config.IFaces, output string) (configName, source string, offset float64, state string, iface string) {
+func extractMetrics(messageTag string, processName string, ifaces config.IFaces, output string, updateClockClassFn func()) (configName, source string, offset float64, state string, iface string) {
 	configName = strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
 	if configName != "" {
 		configName = strings.Split(configName, MessageTagSuffixSeperator)[0] // remove any suffix added to the configName
@@ -310,6 +310,7 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 						updateClockStateMetrics(processName, masterOffsetIface.get(configName).alias, FREERUN)
 						masterOffsetIface.set(configName, "")
 						slaveIface.set(configName, "")
+						updateClockClassFn()
 					}
 				}
 			}
@@ -528,7 +529,7 @@ func UpdateInterfaceRoleMetrics(process string, iface string, role ptpPortRole) 
 }
 
 // UpdateClockClassMetrics ... update clock class metrics
-func UpdateClockClassMetrics(clockClass float64) {
+func UpdateClockClassMetrics(config string, clockClass float64) {
 	ClockClassMetrics.With(prometheus.Labels{
 		"process": ptp4lProcessName, "node": NodeName}).Set(float64(clockClass))
 }

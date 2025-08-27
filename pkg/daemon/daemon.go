@@ -28,6 +28,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
 
@@ -92,7 +93,9 @@ type ProcessManager struct {
 
 // NewProcessManager is used by unit tests
 func NewProcessManager() *ProcessManager {
-	processPTP := &ptpProcess{}
+	processPTP := &ptpProcess{
+		clockClassMutex: sync.RWMutex{},
+	}
 	processPTP.ptpClockThreshold = &ptpv1.PtpClockThreshold{
 		HoldOverTimeout:    5,
 		MaxOffsetThreshold: 100,
@@ -198,6 +201,7 @@ type ptpProcess struct {
 	hasCollectedMetrics   bool
 	tBCAttributes         tBCProcessAttributes
 	GrandmasterClockClass uint8
+	clockClassMutex       sync.RWMutex // Protects GrandmasterClockClass field
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -211,6 +215,20 @@ func (p *ptpProcess) setStopped(val bool) {
 	p.execMutex.Lock()
 	p.stopped = val
 	p.execMutex.Unlock()
+}
+
+// getGrandmasterClockClass returns the current grandmaster clock class in a thread-safe manner
+func (p *ptpProcess) getGrandmasterClockClass() uint8 {
+	p.clockClassMutex.RLock()
+	defer p.clockClassMutex.RUnlock()
+	return p.GrandmasterClockClass
+}
+
+// setGrandmasterClockClass sets the grandmaster clock class in a thread-safe manner
+func (p *ptpProcess) setGrandmasterClockClass(clockClass uint8) {
+	p.clockClassMutex.Lock()
+	defer p.clockClassMutex.Unlock()
+	p.GrandmasterClockClass = clockClass
 }
 
 // Daemon is the main structure for linuxptp instance.
@@ -686,6 +704,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			logParser:            getParser(pProcess),
 			tBCAttributes:        tBCProcessAttributes{controlledPortsConfigFile: controlledConfigFile},
 			lastTransitionResult: event.PTP_NOTSET,
+			clockClassMutex:      sync.RWMutex{},
 		}
 
 		if pProcess == ptp4lProcessName {
@@ -896,16 +915,18 @@ func (p *ptpProcess) updateClockClass(c *net.Conn) {
 	if r, e := pmc.RunPMCExpGetParentDS(p.configName); e == nil {
 		glog.Infof("%++v", r)
 
-		if r.GrandmasterClockClass != p.GrandmasterClockClass {
-			glog.Infof("clock change event identified: %d -> %d", p.GrandmasterClockClass, r.GrandmasterClockClass)
-			p.GrandmasterClockClass = r.GrandmasterClockClass
+		currentClockClass := p.getGrandmasterClockClass()
+		if r.GrandmasterClockClass != currentClockClass {
+			glog.Infof("clock change event identified: %d -> %d", currentClockClass, r.GrandmasterClockClass)
+			p.setGrandmasterClockClass(r.GrandmasterClockClass)
 		}
 		//ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
 		// change to pint every minute or when the clock class changes
+		currentClockClass = p.getGrandmasterClockClass()
 		if c == nil {
-			UpdateClockClassMetrics(float64(p.GrandmasterClockClass)) // no socket then update metrics
+			UpdateClockClassMetrics(p.configName, float64(currentClockClass)) // no socket then update metrics
 		} else {
-			clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", p.name, time.Now().Unix(), p.configName, p.GrandmasterClockClass)
+			clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", p.name, time.Now().Unix(), p.configName, currentClockClass)
 			_, err := (*c).Write([]byte(clockClassOut))
 			if err != nil {
 				glog.Errorf("failed to write class change event %s", err.Error())
@@ -931,6 +952,72 @@ func (p *ptpProcess) tBCTransitionCheck(output string, pm *PluginManager) {
 			p.sendPtp4lEvent()
 		}
 	}
+}
+
+// startClockClassEventSubscription starts a PMC subscription to monitor clock class changes
+// for ptp4l processes. It runs in a separate goroutine and automatically stops when
+// the process exits via exitCh.
+//
+// This function handles REAL-TIME clock class monitoring via PMC subscription events.
+// Manual clock class requests are handled by the event handler (event.go).
+// This separation eliminates duplicate socket writes and provides efficient event-driven updates.
+func (p *ptpProcess) startClockClassEventSubscription() {
+	if p.name != ptp4lProcessName {
+		return
+	}
+
+	go func() {
+		// Wait longer for ptp4l to fully start up and be ready for PMC connections
+		// This helps avoid race conditions where ptp4l gets recreated or isn't ready
+		time.Sleep(5 * time.Second)
+
+		// Additional check to ensure ptp4l is actually running and ready
+		// Check if the process is still running and not stopped
+		if p.Stopped() {
+			glog.Warningf("ptp4l process stopped, skipping PMC subscription for %s", p.name)
+			return
+		}
+
+		// Check if the ptp4l socket file exists and is accessible
+		socketPath := "/var/run/" + p.configName
+		if _, err := os.Stat(socketPath); os.IsNotExist(err) {
+			glog.Warningf("ptp4l socket %s does not exist yet, waiting...", socketPath)
+			// Wait a bit more for the socket to be created
+			time.Sleep(2 * time.Second)
+			if _, err := os.Stat(socketPath); os.IsNotExist(err) {
+				glog.Errorf("ptp4l socket %s still does not exist, skipping PMC subscription", socketPath)
+				return
+			}
+		}
+
+		// Create stopCh and close it when exitCh closes
+		stopCh := make(chan struct{})
+
+		glog.Infof("Starting clock class event subscription for %s", p.name)
+		err := pmc.SubscribeToClockClassEvents(p.configName, func(clockClass uint8, parentDS *protocol.ParentDataSet) {
+			glog.Infof("Clock class changed: %d", clockClass)
+
+			// Update clock class in a thread-safe manner
+			p.setGrandmasterClockClass(clockClass)
+
+			// Update metrics and send to socket if available
+			UpdateClockClassMetrics(p.configName, float64(clockClass))
+			if p.c != nil {
+				clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", p.name, time.Now().Unix(), p.configName, clockClass)
+				_, err := (*p.c).Write([]byte(clockClassOut))
+				if err != nil {
+					glog.Errorf("failed to write class change event %s", err.Error())
+				}
+			}
+		}, stopCh)
+		if err != nil {
+			glog.Errorf("SubscribeToClockClassEvents exited: %v", err)
+		}
+
+		// Wait for exitCh to close, then close stopCh
+		<-p.exitCh
+		close(stopCh)
+	}()
 }
 
 // cmdRun runs given ptpProcess and restarts on errors
@@ -965,18 +1052,17 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 		if !stdoutToSocket {
 			scanner := bufio.NewScanner(cmdReader)
 			processStatus(nil, p.name, p.messageTag, PtpProcessUp)
+
+			// Start clock class event subscription for ptp4l processes
+			p.startClockClassEventSubscription()
+
 			go func() {
 				for scanner.Scan() {
 					output := scanner.Text()
 					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
-						if strings.Contains(output, ClockClassChangeIndicator) {
-							go p.updateClockClass(nil)
-						} else if p.pmcCheck {
-							p.pmcCheck = false
-							go p.updateClockClass(nil)
-						}
+						// No need to call updateClockClass here since startClockClassEventSubscription handles it.
 						if profileClockType == TBC {
 							p.tBCTransitionCheck(output, pm)
 						}
@@ -1008,21 +1094,19 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 						d.ProcessStatus(p.c, PtpProcessUp)
 					}
 				}
+
+				// Start clock class event subscription for ptp4l processes in a separate goroutine
+				p.startClockClassEventSubscription()
 				for scanner.Scan() {
 					output := scanner.Text()
-					if p.pmcCheck {
-						p.pmcCheck = false
-						go p.updateClockClass(p.c)
-					}
 					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
 					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface name
 					output = fmt.Sprintf("%s\n", p.replaceClockID(output))
 					// for ts2phc, we need to extract metrics to identify GM state
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
-						if strings.Contains(output, ClockClassChangeIndicator) {
-							go p.updateClockClass(p.c)
-						}
+						// Clock class changes are now handled by startClockClassEventSubscription
+						// No need to call updateClockClass here since PMC subscription handles real-time updates
 						if profileClockType == TBC {
 							p.tBCTransitionCheck(output, pm)
 						}
@@ -1092,7 +1176,7 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 		logEntry := synce.ParseLog(output)
 		p.ProcessSynceEvents(logEntry)
 	} else {
-		configName, source, ptpOffset, clockState, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output)
+		configName, source, ptpOffset, clockState, iface := extractMetrics(p.messageTag, p.name, p.ifaces, output, func() { p.updateClockClass(p.c) })
 		p.hasCollectedMetrics = true
 		if iface != "" { // for ptp4l/phc2sys this function only update metrics
 			var values map[event.ValueType]interface{}
@@ -1124,6 +1208,7 @@ func (p *ptpProcess) cmdStop() {
 	if p.cmd == nil {
 		return
 	}
+
 	p.setStopped(true)
 	if p.cmd.Process != nil {
 		glog.Infof("Sending TERM to (%s) PID: %d", p.name, p.cmd.Process.Pid)

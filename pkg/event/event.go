@@ -607,34 +607,25 @@ connect:
 					glog.Errorf("restored from clock class update: %s", err)
 				}
 			}()
-			cfgName := ""
-			classTicker := time.NewTicker(60 * time.Second)
+			
+			// Only handle manual clock class requests
+			// Real-time updates are now handled by daemon PMC subscription
+			// This separation eliminates duplicate socket writes and provides efficient event-driven updates.
 			for {
 				select {
 				case clk := <-clockClassRequestCh:
 					e.UpdateClockClass(c, clk)
-					cfgName = clk.cfgName
 				case <-e.closeCh:
 					return
-				case <-classTicker.C: // send clock class event 60 secs interval
-					if cfgName != "" {
-						clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), cfgName, e.clockClass)
-						if e.stdoutToSocket {
-							if c != nil {
-								_, err := c.Write([]byte(clockClassOut))
-								if err != nil {
-									glog.Errorf("failed to write class change event %s", err.Error())
-								}
-							} else {
-								glog.Errorf("failed to write class change event, connection is nil")
-							}
-						}
-					}
 				}
 			}
 		}(&c)
 		redialClockClass = false
 	}
+	// Clock Class Management:
+	// - Manual requests: Handled here via clockClassRequestCh
+	// - Real-time updates: Handled by daemon PMC subscription (eliminates duplicate socket writes)
+	
 	// call all monitoring candidates; verify every 5 secs for any new
 	ticker := time.NewTicker(5 * time.Second)
 	go func() {
