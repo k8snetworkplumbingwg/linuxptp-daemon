@@ -22,7 +22,7 @@ type NtpFailoverPluginData struct {
 }
 
 const ( // phc2sys/chronyd Finite State Machine States
-	PCSMS_STARTUP_UNKNOWN int = iota // Just started, both are unknown
+	PCSMS_STARTUP_DEFAULT int = iota // Just started, both are unknown
 	PCSMS_STARTUP_PHC2SYS            // phc2sys setting time
 	PCSMS_STARTUP_CHRONYD            // phc2sys setting time
 	PCSMS_STARTUP_BOTH               // phc2sys setting time
@@ -100,8 +100,8 @@ func ProcessLogNtpFailover(data *interface{}, pname string, log string) string {
 		done:
 			for {
 				switch _pluginData.pcfsmState {
-				case PCSMS_STARTUP_UNKNOWN:
-					print("FAILOVER: PCSMS_STARTUP_UNKNOWN\n")
+				case PCSMS_STARTUP_DEFAULT:
+					print("FAILOVER: PCSMS_STARTUP_DEFAULT\n")
 					_, foundChronyd := _pluginData.cmdStop["chronyd"]
 					_, foundPhc2Sys := _pluginData.cmdRun["phc2sys"]
 					if foundChronyd && foundPhc2Sys {
@@ -168,7 +168,7 @@ func ProcessLogNtpFailover(data *interface{}, pname string, log string) string {
 					if pname == "ts2phc" {
 						if currentTime.Before(_pluginData.expiryTime) {
 							print("FAILOVER: recovering\n")
-							_pluginData.pcfsmState = PCSMS_STARTUP_UNKNOWN
+							_pluginData.pcfsmState = PCSMS_STARTUP_DEFAULT
 							continue
 						}
 					}
@@ -198,7 +198,7 @@ func NtpFailover(name string) (*plugin.Plugin, *interface{}) {
 		RegisterProcess:   RegisterProcessNtpFailover,
 		ProcessLog:        ProcessLogNtpFailover,
 	}
-	pluginData := NtpFailoverPluginData{pcfsmState: PCSMS_STARTUP_UNKNOWN,
+	pluginData := NtpFailoverPluginData{pcfsmState: PCSMS_STARTUP_DEFAULT,
 		pcfsmMutex: sync.Mutex{}}
 	pluginData.cmdRun = make(map[string]func(bool, *plugin.PluginManager))
 	pluginData.cmdStop = make(map[string]func())
