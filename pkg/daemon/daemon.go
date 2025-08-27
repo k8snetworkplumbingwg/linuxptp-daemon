@@ -662,6 +662,16 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			}
 		}
 
+		if pProcess == ptp4lProcessName {
+			ifMap := make(map[string][]string)
+			for _, iFace := range ifaces {
+				ifMap[iFace.PhcId] = append(ifMap[iFace.PhcId], iFace.Name)
+			}
+
+			utils.Aliases.Clear()
+			utils.Aliases.Populate(ifMap)
+		}
+
 		if configInput != nil {
 			*configInput = configOutput
 		}
@@ -1618,15 +1628,5 @@ func (p *ptpProcess) sendPtp4lEvent() {
 		},
 	}:
 	default:
-	}
-}
-
-// LogAliases ...
-func (dn *Daemon) LogAliases() {
-	for len(dn.processManager.process) == 0 {
-		time.Sleep(1 * time.Microsecond)
-	}
-	if dn.processManager.process[0].c != nil {
-		utils.Aliases.LogAliases(*dn.processManager.process[0].c)
 	}
 }

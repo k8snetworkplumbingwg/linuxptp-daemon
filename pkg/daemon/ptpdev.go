@@ -10,7 +10,6 @@ import (
 	ptpclient "github.com/k8snetworkplumbingwg/ptp-operator/pkg/client/clientset/versioned"
 
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
 func populateNodePTPDevices(nodePTPDev *ptpv1.NodePtpDevice, hwconfigs *[]ptpv1.HwConfig) (*ptpv1.NodePtpDevice, error) {
@@ -45,14 +44,6 @@ func runDeviceStatusUpdate(ptpClient *ptpclient.Clientset, nodeName string, hwco
 		glog.Errorf("discover PTP devices failed: %v", err)
 	}
 	glog.Infof("PTP capable NICs: %v", ptpDevs)
-
-	ifMap := make(map[string][]string)
-	for _, ifName := range ptpDevs {
-		ifMap[ptpnetwork.GetPhcId(ifName)] = append(ifMap[ptpnetwork.GetPhcId(ifName)], ifName)
-	}
-
-	utils.Aliases.Clear()
-	utils.Aliases.Populate(ifMap)
 
 	// Assume NodePtpDevice CR for this particular node
 	// is already created manually or by PTP-Operator.
