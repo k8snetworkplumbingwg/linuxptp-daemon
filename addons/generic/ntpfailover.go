@@ -10,8 +10,7 @@ import (
 )
 
 type NtpFailoverPluginData struct {
-	cmdStop        map[string]func()
-	cmdRun         map[string]func(bool, *plugin.PluginManager)
+	cmdSetEnabled  map[string]func(string, bool)
 	stdoutToSocket bool
 	pm             *plugin.PluginManager
 	pcfsmState     int
@@ -41,37 +40,26 @@ func OnPTPConfigChangeNtpFailover(data *interface{}, nodeProfile *ptpv1.PtpProfi
 		_data := *data
 		var pluginData *NtpFailoverPluginData = _data.(*NtpFailoverPluginData)
 		_pluginData := *pluginData
-		if _pluginData.cmdRun == nil {
-			_pluginData.cmdRun = make(map[string]func(bool, *plugin.PluginManager))
+		if _pluginData.cmdSetEnabled == nil {
+			_pluginData.cmdSetEnabled = make(map[string]func(string, bool))
 			print("FAILOVER: OnPTPConfigChangeFailover rebuild cmdRun dict")
-		}
-		if _pluginData.cmdStop == nil {
-			_pluginData.cmdStop = make(map[string]func())
-			print("FAILOVER: OnPTPConfigChangeFailover rebuild cmdStop dict")
 		}
 	}
 	return nil
 }
 
-func RegisterProcessNtpFailover(data *interface{}, pname string, cmdRun func(bool, *plugin.PluginManager), cmdStop func(), stdoutToSocket bool, pm *plugin.PluginManager) {
+func RegisterProcessNtpFailover(data *interface{}, pname string, cmdSetEnabled func(string, bool)) {
 	print("FAILOVER: RegisterProcessFailover")
 	if data != nil {
 		print("RegisterProcessFailover " + pname + "\n")
 		_data := *data
 		var pluginData *NtpFailoverPluginData = _data.(*NtpFailoverPluginData)
 		_pluginData := *pluginData
-		if _pluginData.cmdRun == nil {
-			_pluginData.cmdRun = make(map[string]func(bool, *plugin.PluginManager))
-			print("FAILOVER: RegisterProcessFailover rebuild cmdRun dict")
+		if _pluginData.cmdSetEnabled == nil {
+			_pluginData.cmdSetEnabled = make(map[string]func(string, bool))
+			print("FAILOVER: RegisterProcessNtpFailover rebuild cmdRun dict")
 		}
-		if _pluginData.cmdStop == nil {
-			_pluginData.cmdStop = make(map[string]func())
-			print("FAILOVER: RegisterProcessFailover rebuild cmdStop dict")
-		}
-		_pluginData.cmdStop[pname] = cmdStop
-		_pluginData.cmdRun[pname] = cmdRun
-		_pluginData.stdoutToSocket = stdoutToSocket
-		_pluginData.pm = pm
+		_pluginData.cmdSetEnabled[pname] = cmdSetEnabled
 	}
 }
 
@@ -102,8 +90,8 @@ func ProcessLogNtpFailover(data *interface{}, pname string, log string) string {
 				switch _pluginData.pcfsmState {
 				case PCSMS_STARTUP_DEFAULT:
 					print("FAILOVER: PCSMS_STARTUP_DEFAULT\n")
-					_, foundChronyd := _pluginData.cmdStop["chronyd"]
-					_, foundPhc2Sys := _pluginData.cmdRun["phc2sys"]
+					_, foundChronyd := _pluginData.cmdSetEnabled["chronyd"]
+					_, foundPhc2Sys := _pluginData.cmdSetEnabled["phc2sys"]
 					if foundChronyd && foundPhc2Sys {
 						_pluginData.pcfsmState = PCSMS_STARTUP_BOTH
 					} else if foundChronyd {
@@ -115,7 +103,7 @@ func ProcessLogNtpFailover(data *interface{}, pname string, log string) string {
 					}
 				case PCSMS_STARTUP_PHC2SYS:
 					print("FAILOVER: PCSMS_STARTUP_PHC2SYS\n")
-					_, foundChronyd := _pluginData.cmdStop["chronyd"]
+					_, foundChronyd := _pluginData.cmdSetEnabled["chronyd"]
 					if foundChronyd {
 						_pluginData.pcfsmState = PCSMS_STARTUP_BOTH
 					} else {
@@ -123,7 +111,7 @@ func ProcessLogNtpFailover(data *interface{}, pname string, log string) string {
 					}
 				case PCSMS_STARTUP_CHRONYD:
 					print("FAILOVER: PCSMS_STARTUP_CHRONYD\n")
-					_, foundPhc2Sys := _pluginData.cmdStop["phc2sys"]
+					_, foundPhc2Sys := _pluginData.cmdSetEnabled["phc2sys"]
 					if foundPhc2Sys {
 						_pluginData.pcfsmState = PCSMS_STARTUP_BOTH
 					} else {
@@ -200,8 +188,8 @@ func NtpFailover(name string) (*plugin.Plugin, *interface{}) {
 	}
 	pluginData := NtpFailoverPluginData{pcfsmState: PCSMS_STARTUP_DEFAULT,
 		pcfsmMutex: sync.Mutex{}}
-	pluginData.cmdRun = make(map[string]func(bool, *plugin.PluginManager))
-	pluginData.cmdStop = make(map[string]func())
+	pluginData.cmdSetEnabled = make(map[string]func(string, bool))
+	print("FAILOVER: OnPTPConfigChangeFailover rebuild cmdRun dict")
 	pluginData.gnssValidity, _ = time.ParseDuration("30s")
 	pluginData.expiryTime = time.Now().Add(pluginData.gnssValidity)
 	var iface interface{} = &pluginData

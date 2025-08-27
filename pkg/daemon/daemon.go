@@ -825,7 +825,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 		printNodeProfile(nodeProfile)
 		dn.processManager.process = append(dn.processManager.process, &dprocess)
-		dn.pluginManager.RegisterProcess(dprocess.name, dprocess.cmdRun, dprocess.cmdStop, dn.stdoutToSocket)
+		dn.pluginManager.RegisterProcess(dprocess.name, dprocess.cmdSetEnabled)
 
 	}
 	return nil
@@ -1174,6 +1174,10 @@ func (p *ptpProcess) cmdStop() {
 	glog.Infof("FAILOVER %s reading from p.exitCh", p.name)
 	<-p.exitCh
 	glog.Infof("Process %s (%d) terminated", p.name, p.cmd.Process.Pid)
+}
+
+func (p *ptpProcess) cmdSetEnabled(pname string, enabled bool) {
+	glog.Infof("FAILOVER cmdSetEnabled %s set to %d", p.name, enabled)
 }
 
 func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
