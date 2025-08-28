@@ -135,13 +135,6 @@ func (p *ProcessManager) SetTestData(name, msgTag string, ifaces config.IFaces) 
 	p.process[0].messageTag = msgTag
 	p.process[0].ifaces = ifaces
 	p.process[0].logParser = getParser(name)
-
-	utils.Aliases.Clear()
-	ifMap := make(map[string][]string)
-	for _, intFace := range ifaces {
-		ifMap[intFace.PhcId] = append(ifMap[intFace.PhcId], intFace.Name)
-	}
-	utils.Aliases.Populate(ifMap)
 }
 
 // RunProcessPTPMetrics is used by unit tests
@@ -653,6 +646,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		if pProcess == syncEProcessName {
 			configOutput, relations = output.RenderSyncE4lConf(nodeProfile.PtpSettings)
 		} else {
+			utils.Aliases.Clear()
 			configOutput, ifaces = output.RenderPtp4lConf()
 			for i := range ifaces {
 				if upstreamPort != "" && leadingNic == ifaces[i].Name {
@@ -660,16 +654,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				}
 				ifaces[i].PhcId = ptpnetwork.GetPhcId(ifaces[i].Name)
 			}
-		}
-
-		if pProcess == ptp4lProcessName {
-			ifMap := make(map[string][]string)
-			for _, iFace := range ifaces {
-				ifMap[iFace.PhcId] = append(ifMap[iFace.PhcId], iFace.Name)
-			}
-
-			utils.Aliases.Clear()
-			utils.Aliases.Populate(ifMap)
 		}
 
 		if configInput != nil {

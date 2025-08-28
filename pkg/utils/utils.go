@@ -1,77 +1,89 @@
 package utils
 
 import (
-	"fmt"
-	"net"
-	"sort"
+	"os"
+	"path/filepath"
 	"strings"
-	"sync"
+
+	"github.com/golang/glog"
 )
 
-// Aliases instance of the alias manager
+// GetAlias the old an deprecated function for masking interfaces
+func GetOldAlias(ifname string) string {
+	alias := ""
+	if ifname != "" {
+		// Aliases the interface name or <interface_name>.<vlan>
+		dotIndex := strings.Index(ifname, ".")
+		if dotIndex == -1 {
+			// e.g. ens1f0 -> ens1fx
+			alias = ifname[:len(ifname)-1] + "x"
+		} else {
+			// e.g ens1f0.100 -> ens1fx.100
+			alias = ifname[:dotIndex-1] + "x" + ifname[dotIndex:]
+		}
+	}
+	return alias
+}
+
+func LookupPCIBusID(ifname string) string {
+	base_dir := "/sys/class/net/" + ifname
+	path, err := os.Readlink(base_dir + "/device")
+	if path == "" || err != nil {
+		entries, err := os.ReadDir(base_dir)
+		if err != nil {
+			return ""
+		}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), "lower_") {
+				path, err = os.Readlink(base_dir + "/" + entry.Name())
+				if err != nil {
+					glog.Errorf("failed to find pci bus ID for interface '%s': %s", ifname, err)
+					return ""
+				}
+				list := strings.Split(path, "/")
+				return list[len(list)-3]
+			}
+		}
+	}
+	return filepath.Base(string(path))
+}
+
+// Aliases ...
 var Aliases = &AliasManager{}
 
 // AliasManager ...
 type AliasManager struct {
-	lock   sync.RWMutex
 	values map[string]string
 }
 
-func calculateAlias(a []string) string {
-	sort.Strings(a)
-	return strings.Join(a, "_")
-}
-
-// Clear will remove all aliases
-func (a *AliasManager) Clear() {
-	a.lock.Lock()
-	defer a.lock.Unlock()
-	a.values = make(map[string]string)
-}
-
-// Populate takes an interface collection to populate aliases
-func (a *AliasManager) Populate(ifaces map[string][]string) {
-	a.lock.Lock()
-	defer a.lock.Unlock()
-
+// PopulateBusIDs ...
+func (a *AliasManager) PopulateBusIDs(ifNames ...string) {
 	if a.values == nil {
 		a.values = make(map[string]string)
 	}
-	for _, ifNames := range ifaces {
-		alias := calculateAlias(ifNames)
-		for _, name := range ifNames {
-			a.values[name] = alias
+
+	for _, ifName := range ifNames {
+		busID := LookupPCIBusID(ifName)
+		if busID != "" {
+			a.values[ifName] = busID[:len(busID)-1] + "x"
 		}
 	}
 }
 
-// GetAlias returns a interface name and returns the alias
-func (a *AliasManager) GetAlias(ifname string) string {
-	a.lock.RLock()
-	defer a.lock.RUnlock()
-
-	if ifname != "" {
-		if alias, ok := a.values[ifname]; ok {
-			return alias
-		}
-	}
-	return ifname
+// Clear ...
+func (a *AliasManager) Clear() {
+	a.values = make(map[string]string)
 }
 
-// LogAliases ...
-func (a *AliasManager) LogAliases(c net.Conn) {
-	if c == nil {
-		return
+// GetAlias ...
+func (a *AliasManager) GetAlias(ifName string) string {
+	if alias, ok := a.values[ifName]; ok {
+		return alias
 	}
-	a.lock.RLock()
-	defer a.lock.RUnlock()
-
-	for name, alias := range a.values {
-		c.Write([]byte(fmt.Sprintf("ALIAS: %s -> %s\n", name, alias)))
-	}
+	return ""
 }
 
-// GetAlias masks interface names for metric reporting
-func GetAlias(ifname string) string {
-	return Aliases.GetAlias(ifname)
+// GetAlias ...
+func GetAlias(ifName string) string {
+	return Aliases.GetAlias(ifName)
 }

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
@@ -375,6 +376,8 @@ func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces
 			i = strings.ReplaceAll(i, "[", "")
 			i = strings.ReplaceAll(i, "]", "")
 			iface := config.Iface{Name: i}
+			utils.Aliases.PopulateBusIDs(i)
+			configOut = fmt.Sprintf("%s\n# alias: %s", configOut, utils.GetAlias(i))
 			if source, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "ts2phc.master"); ok {
 				iface.Source = getSource(source)
 			} else {
