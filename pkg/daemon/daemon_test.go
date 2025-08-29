@@ -135,7 +135,7 @@ var testCases = []TestCase{
 		Name:                        "ts2phc_interface_negative_offset_locked",
 		from:                        "master",
 		process:                     "ts2phc",
-		iface:                       "ens2fx",
+		iface:                       "ens2f0",
 		expectedOffset:              -1,
 		expectedMaxOffset:           -1,
 		expectedFrequencyAdjustment: -2,
@@ -152,7 +152,7 @@ var testCases = []TestCase{
 		Name:                        "ts2phc_phc_device_negative_offset_locked",
 		from:                        "master",
 		process:                     "ts2phc",
-		iface:                       "ens2fx",
+		iface:                       "ens2f0",
 		expectedOffset:              -1,
 		expectedMaxOffset:           -1,
 		expectedFrequencyAdjustment: -2,
@@ -164,7 +164,13 @@ var testCases = []TestCase{
 		expectedInterfaceRole:       SKIP,
 		Ifaces: []config.Iface{
 			{
-				Name:     "ens2fx",
+				Name:     "ens2f0",
+				IsMaster: false,
+				Source:   "",
+				PhcId:    "dev/ptp4",
+			},
+			{
+				Name:     "ens2f1",
 				IsMaster: false,
 				Source:   "",
 				PhcId:    "dev/ptp4",
@@ -177,7 +183,7 @@ var testCases = []TestCase{
 		Name:                        "ts2phc_positive_offset_freerun",
 		from:                        "master",
 		process:                     "ts2phc",
-		iface:                       "ens2fx",
+		iface:                       "ens2f0",
 		expectedOffset:              3,
 		expectedMaxOffset:           3,
 		expectedFrequencyAdjustment: 4,
@@ -214,12 +220,13 @@ var testCases = []TestCase{
 		},
 	},
 	{
+		// Note: this test can not be run in isolation as it requires the to_slave transition to setup state"
 		log:                         "ptp4l[8537738.636]: [ptp4l.0.config] port 1: SLAVE to FAULTY on FAULT_DETECTED (FT_UNSPECIFIED)",
 		MessageTag:                  "[ptp4l.0.config]",
 		Name:                        "ptp4l_slave_to_faulty_fault_detection",
 		from:                        "master",
 		process:                     "ptp4l",
-		iface:                       "ens3fx",
+		iface:                       "ens3f2",
 		expectedOffset:              999999, // faultyOffset
 		expectedMaxOffset:           999999, // faultyOffset
 		expectedFrequencyAdjustment: 0,
@@ -279,7 +286,7 @@ var testCases = []TestCase{
 		Name:                        "ts2phc_small_negative_values_locked",
 		from:                        "master",
 		process:                     "ts2phc",
-		iface:                       "ens10fx",
+		iface:                       "ens10f0",
 		expectedOffset:              -5,
 		expectedMaxOffset:           -5,
 		expectedFrequencyAdjustment: -3,
@@ -331,7 +338,7 @@ var testCases = []TestCase{
 		Name:                        "ts2phc_large_positive_offset_freerun",
 		from:                        "master",
 		process:                     "ts2phc",
-		iface:                       "ens15fx",
+		iface:                       "ens15f1",
 		expectedOffset:              99999,
 		expectedMaxOffset:           99999,
 		expectedFrequencyAdjustment: 500000,
@@ -348,7 +355,7 @@ var testCases = []TestCase{
 		Name:                        "ts2phc_phc_device_freerun",
 		from:                        "master",
 		process:                     "ts2phc",
-		iface:                       "ens20fx",
+		iface:                       "ens20f1",
 		expectedOffset:              777,
 		expectedMaxOffset:           777,
 		expectedFrequencyAdjustment: -88888,
@@ -360,7 +367,13 @@ var testCases = []TestCase{
 		expectedInterfaceRole:       SKIP,
 		Ifaces: []config.Iface{
 			{
-				Name:     "ens20fx",
+				Name:     "ens20f1",
+				IsMaster: false,
+				Source:   "",
+				PhcId:    "dev/ptp12",
+			},
+			{
+				Name:     "ens20f2",
 				IsMaster: false,
 				Source:   "",
 				PhcId:    "dev/ptp12",
@@ -490,7 +503,7 @@ var testCases = []TestCase{
 		Name:                        "ts2phc_positive_values_locked",
 		from:                        "master",
 		process:                     "ts2phc",
-		iface:                       "ens40fx",
+		iface:                       "ens40f0",
 		expectedOffset:              1234,
 		expectedMaxOffset:           1234,
 		expectedFrequencyAdjustment: -5678,
@@ -524,7 +537,7 @@ var testCases = []TestCase{
 		Name:                        "ts2phc_minimal_values_phc_device_locked",
 		from:                        "master",
 		process:                     "ts2phc",
-		iface:                       "ens99fx",
+		iface:                       "ens99f1",
 		expectedOffset:              -1,
 		expectedMaxOffset:           -1,
 		expectedFrequencyAdjustment: 1,
@@ -536,7 +549,7 @@ var testCases = []TestCase{
 		expectedInterfaceRole:       SKIP,
 		Ifaces: []config.Iface{
 			{
-				Name:     "ens99fx",
+				Name:     "ens99f1",
 				IsMaster: false,
 				Source:   "",
 				PhcId:    "dev/ptp99",
@@ -818,7 +831,7 @@ func initPopulateAndRenderPtp4lConfTestCase() []populateAndRenderPtp4lConfTestCa
 		{
 			profileName:    "OC",
 			testConf:       "[global]\nslaveOnly 1",
-			expectedOutput: "#profile: OC\n\n[global]\nslaveOnly 1\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens2f0]",
+			expectedOutput: "#profile: OC\n\n[global]\nslaveOnly 1\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens2f0]\n# alias: ens2f0",
 			testName:       "Basic OC test",
 			iface:          "ens2f0",
 			messageTag:     "test message_tag",
@@ -828,7 +841,7 @@ func initPopulateAndRenderPtp4lConfTestCase() []populateAndRenderPtp4lConfTestCa
 		{
 			profileName:    "BC",
 			testConf:       "[global]\nslaveOnly 0\n[ens1f0]\nmasterOnly 0\n[ens1f1]\nmasterOnly 1",
-			expectedOutput: "#profile: BC\n\n[global]\nslaveOnly 0\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens1f0]\nmasterOnly 0\n[ens1f1]\nmasterOnly 1",
+			expectedOutput: "#profile: BC\n\n[global]\nslaveOnly 0\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens1f0]\n# alias: ens1f0\nmasterOnly 0\n[ens1f1]\n# alias: ens1f1\nmasterOnly 1",
 			testName:       "Basic BC test",
 			iface:          "",
 			messageTag:     "test message_tag",
@@ -838,7 +851,7 @@ func initPopulateAndRenderPtp4lConfTestCase() []populateAndRenderPtp4lConfTestCa
 		{
 			profileName:    "GM",
 			testConf:       "[global]\nslaveOnly 0\n[ens1f0]\nmasterOnly 1\n[ens1f1]\nmasterOnly 1",
-			expectedOutput: "#profile: GM\n\n[global]\nslaveOnly 0\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens1f0]\nmasterOnly 1\n[ens1f1]\nmasterOnly 1",
+			expectedOutput: "#profile: GM\n\n[global]\nslaveOnly 0\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens1f0]\n# alias: ens1f0\nmasterOnly 1\n[ens1f1]\n# alias: ens1f1\nmasterOnly 1",
 			testName:       "Basic GM test",
 			iface:          "",
 			messageTag:     "test message_tag",
@@ -848,7 +861,7 @@ func initPopulateAndRenderPtp4lConfTestCase() []populateAndRenderPtp4lConfTestCa
 		{
 			profileName:    "SyncE",
 			testConf:       "[global]\nlogging_level 7\nuse_syslog 0\nverbose 1\n[<synce1>]\ndnu_prio 0xFF\nnetwork_option 2\nextended_tlv 1\nrecover_time 60\nclock_id\nmodule_name ice\n[enp59s0f0np0]\n[{SMA1}]\nboard_label SMA1\ninput_QL 0x1",
-			expectedOutput: "#profile: SyncE\n\n[global]\nlogging_level 7\nuse_syslog 0\nverbose 1\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[<synce1>]\ndnu_prio 0xFF\nnetwork_option 2\nextended_tlv 1\nrecover_time 60\nmodule_name ice\n[enp59s0f0np0]\n[{SMA1}]\nboard_label SMA1\ninput_QL 0x1",
+			expectedOutput: "#profile: SyncE\n\n[global]\nlogging_level 7\nuse_syslog 0\nverbose 1\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[<synce1>]\n# alias: <synce1>\ndnu_prio 0xFF\nnetwork_option 2\nextended_tlv 1\nrecover_time 60\nmodule_name ice\n[enp59s0f0np0]\n# alias: enp59s0f0np0\n[{SMA1}]\n# alias: {SMA1}\nboard_label SMA1\ninput_QL 0x1",
 			testName:       "Basic SyncE test",
 			iface:          "",
 			messageTag:     "test message_tag",
@@ -862,13 +875,15 @@ func initPopulateAndRenderPtp4lConfTestCase() []populateAndRenderPtp4lConfTestCa
 func TestDaemon_PopulateAndRenderPtp4lConf(t *testing.T) {
 	testCases := initPopulateAndRenderPtp4lConfTestCase()
 	for _, tc := range testCases {
-		conf := &daemon.Ptp4lConf{}
-		conf.PopulatePtp4lConf(&tc.testConf)
-		if tc.iface != "" {
-			conf.AddInterfaceSection(tc.iface)
-		}
-		conf.ExtendGlobalSection(tc.profileName, tc.messageTag, tc.socketPath, tc.pProcess)
-		actualOutput, _ := conf.RenderPtp4lConf()
-		assert.Equal(t, tc.expectedOutput, actualOutput, fmt.Sprintf("Rendered output doesn't match expected: %s", tc.testName))
+		t.Run(tc.testName, func(t *testing.T) {
+			conf := &daemon.Ptp4lConf{}
+			conf.PopulatePtp4lConf(&tc.testConf)
+			if tc.iface != "" {
+				conf.AddInterfaceSection(tc.iface)
+			}
+			conf.ExtendGlobalSection(tc.profileName, tc.messageTag, tc.socketPath, tc.pProcess)
+			actualOutput, _ := conf.RenderPtp4lConf()
+			assert.Equal(t, tc.expectedOutput, actualOutput, fmt.Sprintf("Rendered output doesn't match expected: %s", tc.testName))
+		})
 	}
 }

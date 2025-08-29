@@ -665,6 +665,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		if pProcess == syncEProcessName {
 			configOutput, relations = output.RenderSyncE4lConf(nodeProfile.PtpSettings)
 		} else {
+			utils.Aliases.Clear()
 			configOutput, ifaces = output.RenderPtp4lConf()
 			for i := range ifaces {
 				if upstreamPort != "" && leadingNic == ifaces[i].Name {
