@@ -1,14 +1,13 @@
 package utils
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/golang/glog"
 )
 
-// GetAlias the old an deprecated function for masking interfaces
+// GetOldAlias the old an deprecated function for masking interfaces
 func GetOldAlias(ifname string) string {
 	alias := ""
 	if ifname != "" {
@@ -25,17 +24,17 @@ func GetOldAlias(ifname string) string {
 	return alias
 }
 
-func LookupPCIBusID(ifname string) string {
-	base_dir := "/sys/class/net/" + ifname
-	path, err := os.Readlink(base_dir + "/device")
-	if path == "" || err != nil {
-		entries, err := os.ReadDir(base_dir)
-		if err != nil {
+func lookupPCIBusID(ifname string) string {
+	baseDir := "/sys/class/net/" + ifname
+	path, err := FileSystem.Readlink(baseDir + "/device")
+	if err != nil || path == "" {
+		entries, err2 := FileSystem.ReadDir(baseDir)
+		if err2 != nil {
 			return ""
 		}
 		for _, entry := range entries {
 			if strings.HasPrefix(entry.Name(), "lower_") {
-				path, err = os.Readlink(base_dir + "/" + entry.Name())
+				path, err = FileSystem.Readlink(baseDir + "/" + entry.Name())
 				if err != nil {
 					glog.Errorf("failed to find pci bus ID for interface '%s': %s", ifname, err)
 					return ""
@@ -45,7 +44,7 @@ func LookupPCIBusID(ifname string) string {
 			}
 		}
 	}
-	return filepath.Base(string(path))
+	return filepath.Base(path)
 }
 
 // Aliases ...
@@ -63,7 +62,7 @@ func (a *AliasManager) PopulateBusIDs(ifNames ...string) {
 	}
 
 	for _, ifName := range ifNames {
-		busID := LookupPCIBusID(ifName)
+		busID := lookupPCIBusID(ifName)
 		if busID != "" {
 			a.values[ifName] = busID[:len(busID)-1] + "x"
 		}
@@ -80,7 +79,7 @@ func (a *AliasManager) GetAlias(ifName string) string {
 	if alias, ok := a.values[ifName]; ok {
 		return alias
 	}
-	return ""
+	return ifName
 }
 
 // GetAlias ...
