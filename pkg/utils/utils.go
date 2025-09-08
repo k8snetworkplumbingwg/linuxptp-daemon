@@ -1,7 +1,9 @@
 package utils
 
 import (
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/golang/glog"
@@ -32,17 +34,25 @@ func lookupPCIBusID(ifname string) string {
 		if err2 != nil {
 			return ""
 		}
+		slices.SortFunc(entries, func(a, b os.DirEntry) int {
+			return strings.Compare(a.Name(), b.Name())
+		})
 		for _, entry := range entries {
 			if strings.HasPrefix(entry.Name(), "lower_") {
 				path, err = FileSystem.Readlink(baseDir + "/" + entry.Name())
 				if err != nil {
 					glog.Errorf("failed to find pci bus ID for interface '%s': %s", ifname, err)
-					return ""
+					continue
 				}
 				list := strings.Split(path, "/")
+				if len(list) < 3 {
+					continue
+				}
 				return list[len(list)-3]
 			}
 		}
+		glog.Errorf("failed to find pci bus ID for interface '%s'", ifname)
+		return ""
 	}
 	return filepath.Base(path)
 }
