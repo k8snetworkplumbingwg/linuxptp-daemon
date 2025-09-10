@@ -1281,7 +1281,7 @@ func (p *ptpProcess) cmdStop() {
 }
 
 func (p *ptpProcess) cmdSetEnabled(pname string, enabled bool) {
-	glog.Infof("FAILOVER cmdSetEnabled %s set to %d", p.name, enabled)
+	glog.Infof("FAILOVER cmdSetEnabled %s set to %t", p.name, enabled)
 }
 
 func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
