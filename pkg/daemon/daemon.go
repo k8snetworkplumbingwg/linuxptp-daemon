@@ -250,6 +250,7 @@ type ptpProcess struct {
 	tBCAttributes         tBCProcessAttributes
 	GrandmasterClockClass uint8
 	handler               *event.EventHandler
+	dn                    *Daemon
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -765,6 +766,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			tBCAttributes:        tBCProcessAttributes{controlledPortsConfigFile: controlledConfigFile},
 			lastTransitionResult: event.PTP_NOTSET,
 			handler:              dn.processManager.ptpEventHandler,
+			dn:                   dn,
 		}
 
 		if pProcess == ptp4lProcessName {
@@ -1047,7 +1049,7 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 			}
 		}
 		glog.Infof("FAILOVER %s writing true to p.exitCh", p.name)
-		p.exitCh <- true
+		//p.exitCh <- true
 		glog.Infof("FAILOVER %s done writing true to p.exitCh", p.name)
 	}()
 
@@ -1276,8 +1278,8 @@ func (p *ptpProcess) cmdStop() {
 	//	}
 	//}
 	glog.Infof("FAILOVER %s reading from p.exitCh", p.name)
-	<-p.exitCh
-	glog.Infof("Process %s (%d) terminated", p.name, p.cmd.Process.Pid)
+	//<-p.exitCh
+	//glog.Infof("Process %s (%d) terminated", p.name, p.cmd.Process.Pid)
 }
 
 func (p *ptpProcess) cmdSetEnabled(pname string, enabled bool) {
@@ -1285,16 +1287,18 @@ func (p *ptpProcess) cmdSetEnabled(pname string, enabled bool) {
 	switch pname {
 	case "chronyd":
 		if enabled {
-			exec.Command("chronyc", "offline").Output()
-		} else {
 			exec.Command("chronyc", "online").Output()
+		} else {
+			exec.Command("chronyc", "offline").Output()
 		}
 	case "phc2sys":
 		if enabled {
-			exec.Command("chmod", "755", "/usr/sbin/phc2sys").Output()
+			newCmd := exec.Command(p.cmd.Args[0], p.cmd.Args[1:]...)
+			p.cmd = newCmd
+
+			go p.cmdRun(p.dn.stdoutToSocket, &(p.dn.pluginManager))
 		} else {
-			exec.Command("chmod", "644", "/usr/sbin/phc2sys").Output()
-			exec.Command("pkill", "phc2sys").Output()
+			p.cmdStop()
 		}
 	}
 }
