@@ -156,8 +156,9 @@ func ProcessLogNtpFailover(data *interface{}, pname string, log string) string {
 							}
 							continue
 						}
+
 					}
-					_pluginData.pcfsmState = PCSMS_FAILOVER
+
 					break done
 				case PCSMS_FAILOVER:
 					if pname == "ts2phc" {
@@ -197,7 +198,7 @@ func NtpFailover(name string) (*plugin.Plugin, *interface{}) {
 		pcfsmMutex: sync.Mutex{}}
 	pluginData.cmdSetEnabled = make(map[string]func(string, bool))
 	print("FAILOVER: OnPTPConfigChangeFailover rebuild cmdRun dict")
-	pluginData.gnssValidity, _ = time.ParseDuration("30s")
+	pluginData.gnssValidity, _ = time.ParseDuration("3s")
 	pluginData.expiryTime = time.Now().Add(pluginData.gnssValidity)
 	var iface interface{} = &pluginData
 	return &_plugin, &iface
