@@ -486,3 +486,79 @@ func RunPMCExpGetMultiple(configFileName string) (results MultipleResults, err e
 
 	return results, nil
 }
+
+const (
+	pollTimeout = (3 * time.Second)
+)
+
+var (
+	subscribedEventsRegExp = regexp.MustCompile((&protocol.SubscribedEvents{}).RegEx())
+)
+
+func ProcessMessage[T protocol.DataSet](matches []string) (T, error) {
+	var result T
+	keys := result.Keys()
+	if len(matches)-1 < len(keys) {
+		return result, fmt.Errorf("short match expected=%d found=%d", len(keys), len(matches)-1)
+	}
+
+	for i, m := range matches[1:] {
+		if i < len(keys) {
+			result.Update(keys[i], m)
+		}
+	}
+
+	return result, nil
+}
+
+func getSubcribeEvents(exp *expect.GExpect) (*protocol.SubscribedEvents, error) {
+	err := exp.Send("GET SUBSCRIBE_EVENTS_NP\n")
+	if err != nil {
+		return nil, err
+	}
+	_, matches, err := exp.Expect(subscribedEventsRegExp, pollTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return ProcessMessage[*protocol.SubscribedEvents](matches)
+}
+
+func GetPMCMontior(configFileName string) (*expect.GExpect, <-chan error, error) {
+	timeout := time.After(30 * time.Second) // TODO factor out time
+	for {
+		exp, r, err := expect.Spawn(fmt.Sprintf(pmcCmdConstPart, configFileName), -1)
+		if err != nil {
+			glog.Errorf("Failed to spawn moniotring pmc process")
+		}
+		select {
+		case <-timeout:
+			return exp, r, fmt.Errorf("timed out waiting for pmc to start")
+		case <-r:
+			return exp, r, fmt.Errorf("pmc need to be restarted")
+		default:
+			_, err := getSubcribeEvents(exp)
+			if err != nil {
+				continue
+			}
+			return exp, r, nil
+		}
+	}
+}
+
+func GetMonitorRegex(monitorParentData bool) *regexp.Regexp {
+	parts := make([]string, 0)
+	// TODO: Find port state message and make regex
+	// if pmc.monitorPortState {
+	// 		parts = append(parts, )
+	// }
+
+	// TODO: find PMC TimeSync message and make regex
+	// if pmc.monitorTimeSync {
+	// 		parts = append(parts, )
+	// }
+
+	if monitorParentData {
+		parts = append(parts, parentDataSetRegExp.String())
+	}
+	return regexp.MustCompile(strings.Join(parts, `|`))
+}

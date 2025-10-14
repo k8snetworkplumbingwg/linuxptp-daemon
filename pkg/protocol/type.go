@@ -17,6 +17,14 @@ const (
 	ClockClassOutOfSpec     protocol.ClockClass = 140
 )
 
+type DataSet interface {
+	Keys() []string
+	Update(key string, value string)
+	ValueRegEx() map[string]string
+	RegEx() string
+	String() string
+}
+
 type GrandmasterSettings struct {
 	ClockQuality     protocol.ClockQuality
 	TimePropertiesDS TimePropertiesDS
@@ -151,6 +159,19 @@ func stob(s string) bool {
 	return s == "1"
 }
 
+// ootob on|off to bool
+func ootob(s string) bool {
+	return s == "on"
+}
+
+// btooo bool to on|off
+func btooo(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
 func stou8(s string) uint8 {
 	uint64Value, err := strconv.ParseUint(s, 10, 8)
 	if err != nil {
@@ -207,7 +228,7 @@ func stou32h(s string) uint32 {
 }
 
 // ValueRegEx provides the regex method for the ParentDS values matching
-func (p *ParentDataSet) ValueRegEx() map[string]string {
+func (se *ParentDataSet) ValueRegEx() map[string]string {
 	return map[string]string{
 		"parentPortIdentity":                    `(.*)`,
 		"parentStats":                           `(\d+)`,
@@ -223,16 +244,16 @@ func (p *ParentDataSet) ValueRegEx() map[string]string {
 }
 
 // RegEx generates the ParentDataSet command regex
-func (p *ParentDataSet) RegEx() string {
+func (se *ParentDataSet) RegEx() string {
 	result := ""
-	for _, k := range p.Keys() {
-		result += `[[:space:]]+` + k + `[[:space:]]+` + p.ValueRegEx()[k]
+	for _, k := range se.Keys() {
+		result += `[[:space:]]+` + k + `[[:space:]]+` + se.ValueRegEx()[k]
 	}
 	return result
 }
 
 // Keys provides the keys method for the ParentDS values
-func (p *ParentDataSet) Keys() []string {
+func (se *ParentDataSet) Keys() []string {
 	return []string{
 		"parentPortIdentity",
 		"parentStats",
@@ -248,29 +269,48 @@ func (p *ParentDataSet) Keys() []string {
 }
 
 // Update provides the Update method for the ParentDS values
-func (p *ParentDataSet) Update(key string, value string) {
+func (se *ParentDataSet) Update(key string, value string) {
 	switch key {
 	case "parentPortIdentity":
-		p.ParentPortIdentity = value
+		se.ParentPortIdentity = value
 	case "parentStats":
-		p.ParentStats = (stou8(value))
+		se.ParentStats = (stou8(value))
 	case "observedParentOffsetScaledLogVariance":
-		p.ObservedParentOffsetScaledLogVariance = stou16h(value)
+		se.ObservedParentOffsetScaledLogVariance = stou16h(value)
 	case "observedParentClockPhaseChangeRate":
-		p.ObservedParentClockPhaseChangeRate = stou32h(value)
+		se.ObservedParentClockPhaseChangeRate = stou32h(value)
 	case "grandmasterPriority1":
-		p.GrandmasterPriority1 = stou8(value)
+		se.GrandmasterPriority1 = stou8(value)
 	case "gm.ClockClass":
-		p.GrandmasterClockClass = stou8(value)
+		se.GrandmasterClockClass = stou8(value)
 	case "gm.ClockAccuracy":
-		p.GrandmasterClockAccuracy = stou8h(value)
+		se.GrandmasterClockAccuracy = stou8h(value)
 	case "gm.OffsetScaledLogVariance":
-		p.GrandmasterOffsetScaledLogVariance = stou16h(value)
+		se.GrandmasterOffsetScaledLogVariance = stou16h(value)
 	case "grandmasterPriority2":
-		p.GrandmasterPriority2 = stou8(value)
+		se.GrandmasterPriority2 = stou8(value)
 	case "grandmasterIdentity":
-		p.GrandmasterIdentity = value
+		se.GrandmasterIdentity = value
 	}
+}
+
+func (se *ParentDataSet) String() string {
+	if se == nil {
+		glog.Error("returned empty parentDataSet")
+		return ""
+
+	}
+	result := fmt.Sprintf("parentPortIdentity                    %s\n", se.ParentPortIdentity)
+	result += fmt.Sprintf("parentStats                           %d\n", se.ParentStats)
+	result += fmt.Sprintf("observedParentOffsetScaledLogVariance 0x%x\n", se.ObservedParentOffsetScaledLogVariance)
+	result += fmt.Sprintf("observedParentClockPhaseChangeRate    0x%x\n", se.ObservedParentClockPhaseChangeRate)
+	result += fmt.Sprintf("grandmasterPriority1                  %d\n", se.GrandmasterPriority1)
+	result += fmt.Sprintf("gm.ClockClass                         %d\n", se.GrandmasterClockClass)
+	result += fmt.Sprintf("gm.ClockAccuracy                      0x%x\n", se.GrandmasterClockAccuracy)
+	result += fmt.Sprintf("gm.OffsetScaledLogVariance            0x%x\n", se.GrandmasterOffsetScaledLogVariance)
+	result += fmt.Sprintf("grandmasterPriority2                  %d\n", se.GrandmasterPriority2)
+	result += fmt.Sprintf("grandmasterIdentity                   %s\n", se.GrandmasterIdentity)
+	return result
 }
 
 // ValueRegEx provides the regex method for the ExternalGrandmasterProperties values matching
@@ -400,4 +440,73 @@ func (tp *TimePropertiesDS) Update(key string, value string) {
 	case "timeSource":
 		tp.TimeSource = protocol.TimeSource(stou8h(value))
 	}
+}
+
+type SubscribedEvents struct {
+	Duration               int32
+	NOTIFY_PORT_STATE      bool
+	NOTIFY_TIME_SYNC       bool
+	NOTIFY_PARENT_DATA_SET bool
+	NOTIFY_CMLDS           bool
+}
+
+// ValueRegEx provides the regex method for the SubscribedEvents values matching
+func (se *SubscribedEvents) ValueRegEx() map[string]string {
+	return map[string]string{
+		"duration":               `(-?\d+)`,
+		"NOTIFY_PORT_STATE":      `(on|off)`,
+		"NOTIFY_TIME_SYNC":       `(on|off)`,
+		"NOTIFY_PARENT_DATA_SET": `(on|off)`,
+		"NOTIFY_CMLDS":           `(on|off)`,
+	}
+}
+
+// RegEx generates the SubscribedEvents command regex
+func (se *SubscribedEvents) RegEx() string {
+	result := ""
+	for _, k := range se.Keys() {
+		result += `[[:space:]]+` + k + `[[:space:]]+` + se.ValueRegEx()[k]
+	}
+	return result
+}
+
+// Keys provides the keys method for the SubscribedEvents values
+func (se *SubscribedEvents) Keys() []string {
+	return []string{
+		"duration",
+		"NOTIFY_PORT_STATE",
+		"NOTIFY_TIME_SYNC",
+		"NOTIFY_PARENT_DATA_SET",
+		"NOTIFY_CMLDS",
+	}
+}
+
+// Update provides the Update method for the SubscribedEvents values
+func (se *SubscribedEvents) Update(key string, value string) {
+	switch key {
+	case "duration":
+		se.Duration = stoi32(value)
+	case "NOTIFY_PORT_STATE":
+		se.NOTIFY_PORT_STATE = ootob(value)
+	case "NOTIFY_TIME_SYNC":
+		se.NOTIFY_TIME_SYNC = ootob(value)
+	case "NOTIFY_PARENT_DATA_SET":
+		se.NOTIFY_PARENT_DATA_SET = ootob(value)
+	case "NOTIFY_CMLDS":
+		se.NOTIFY_CMLDS = ootob(value)
+	}
+}
+
+func (se *SubscribedEvents) String() string {
+	if se == nil {
+		glog.Error("returned empty SubscribedEvents")
+		return ""
+
+	}
+	result := fmt.Sprintf("duration               %d\n", se.Duration)
+	result += fmt.Sprintf("NOTIFY_PORT_STATE      %s\n", btooo(se.NOTIFY_PORT_STATE))
+	result += fmt.Sprintf("NOTIFY_TIME_SYNC       %s\n", btooo(se.NOTIFY_TIME_SYNC))
+	result += fmt.Sprintf("NOTIFY_PARENT_DATA_SET %s\n", btooo(se.NOTIFY_PARENT_DATA_SET))
+	result += fmt.Sprintf("NOTIFY_CMLDS           %s\n", btooo(se.NOTIFY_CMLDS))
+	return result
 }

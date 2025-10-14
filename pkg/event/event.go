@@ -656,7 +656,8 @@ connect:
 		case event := <-e.processChannel: // for non GM this thread will be in sleep forever
 			// ts2phc[123455]:[ts2phc.0.config] 12345 s0 offset/gps
 			// replace ts2phc logs here
-			if event.Reset { // clean up
+			if event.Reset {
+				// clean up
 				debug.ClearState() // clear any state data used for debug
 				e.LeadingClockData = &LeadingClockParams{}
 				if event.ProcessName == TS2PHC {
