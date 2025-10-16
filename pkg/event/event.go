@@ -28,6 +28,7 @@ type ValueType string
 const (
 	PTPNamespace = "openshift"
 	PTPSubsystem = "ptp"
+	WindowSize   = 50
 )
 
 // nolint:all
@@ -655,7 +656,8 @@ connect:
 		case event := <-e.processChannel: // for non GM this thread will be in sleep forever
 			// ts2phc[123455]:[ts2phc.0.config] 12345 s0 offset/gps
 			// replace ts2phc logs here
-			if event.Reset { // clean up
+			if event.Reset {
+				// clean up
 				debug.ClearState() // clear any state data used for debug
 				e.LeadingClockData = &LeadingClockParams{}
 				if event.ProcessName == TS2PHC {
@@ -1029,6 +1031,7 @@ func (e *EventHandler) GetData(cfgName string, processName EventSource) *Data {
 	d := &Data{
 		ProcessName: processName,
 		State:       PTP_UNKNOWN,
+		window:      *utils.NewWindow(WindowSize),
 	}
 	e.data[cfgName] = append(e.data[cfgName], d)
 	return d
@@ -1044,6 +1047,27 @@ func (e *EventHandler) addEvent(event EventChannel) *DataDetails {
 	return d.GetDataDetails(event.IFace)
 }
 
+// AnnounceClockClass announces clock class changes to the event handler and writes to the connection.
+func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn) {
+	e.clockClass = clockClass
+	e.clockAccuracy = clockAcc
+	message := utils.GetClockClassLogMessage(PTP4lProcessName, cfgName, clockClass)
+	if e.stdoutToSocket {
+		if c != nil {
+			_, err := c.Write([]byte(message))
+			if err != nil {
+				glog.Errorf("failed to write class change event %s", err.Error())
+			}
+		} else {
+			glog.Errorf("failed to write class change event, connection is nil")
+		}
+	} else if e.clockClassMetric != nil {
+		e.clockClassMetric.With(prometheus.Labels{
+			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
+	}
+	glog.Infof("%s", message)
+}
+
 // UpdateClockClass ... update clock class
 func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
 	classErr, clockClass, clockAccuracy := e.updateClockClass(clk.cfgName, clk.clockClass, clk.clockType, clk.clockAccuracy,
@@ -1055,21 +1079,7 @@ func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
 		glog.Infof("updated clock class for last clock class %d to %d with clock accuracy %d", clk.clockClass, clockClass, clockAccuracy)
 		e.clockClass = clockClass
 		e.clockAccuracy = clockAccuracy
-		clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", PTP4l, time.Now().Unix(), clk.cfgName, clockClass)
-		if e.stdoutToSocket {
-			if c != nil {
-				_, err := c.Write([]byte(clockClassOut))
-				if err != nil {
-					glog.Errorf("failed to write class change event %s", err.Error())
-				}
-			} else {
-				glog.Errorf("failed to write class change event, connection is nil")
-			}
-		} else if e.clockClassMetric != nil {
-			e.clockClassMetric.With(prometheus.Labels{
-				"process": PTP4lProcessName, "config": clk.cfgName, "node": e.nodeName}).Set(float64(clockClass))
-		}
-		fmt.Printf("%s", clockClassOut)
+		e.AnnounceClockClass(clk.clockClass, clockAccuracy, clk.cfgName, c)
 	}
 }
 

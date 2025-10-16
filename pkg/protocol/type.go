@@ -17,6 +17,15 @@ const (
 	ClockClassOutOfSpec     protocol.ClockClass = 140
 )
 
+// DataSet is an interface for PTP data sets that can be parsed from PMC output.
+type DataSet interface {
+	Keys() []string
+	Update(key string, value string)
+	ValueRegEx() map[string]string
+	RegEx() string
+	String() string
+}
+
 type GrandmasterSettings struct {
 	ClockQuality     protocol.ClockQuality
 	TimePropertiesDS TimePropertiesDS
@@ -151,6 +160,19 @@ func stob(s string) bool {
 	return s == "1"
 }
 
+// ootob on|off to bool
+func ootob(s string) bool {
+	return s == "on"
+}
+
+// btooo bool to on|off
+func btooo(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
 func stou8(s string) uint8 {
 	uint64Value, err := strconv.ParseUint(s, 10, 8)
 	if err != nil {
@@ -273,6 +295,24 @@ func (p *ParentDataSet) Update(key string, value string) {
 	}
 }
 
+func (p *ParentDataSet) String() string {
+	if p == nil {
+		glog.Error("returned empty parentDataSet")
+		return ""
+	}
+	result := fmt.Sprintf("parentPortIdentity                    %s\n", p.ParentPortIdentity)
+	result += fmt.Sprintf("parentStats                           %d\n", p.ParentStats)
+	result += fmt.Sprintf("observedParentOffsetScaledLogVariance 0x%x\n", p.ObservedParentOffsetScaledLogVariance)
+	result += fmt.Sprintf("observedParentClockPhaseChangeRate    0x%x\n", p.ObservedParentClockPhaseChangeRate)
+	result += fmt.Sprintf("grandmasterPriority1                  %d\n", p.GrandmasterPriority1)
+	result += fmt.Sprintf("gm.ClockClass                         %d\n", p.GrandmasterClockClass)
+	result += fmt.Sprintf("gm.ClockAccuracy                      0x%x\n", p.GrandmasterClockAccuracy)
+	result += fmt.Sprintf("gm.OffsetScaledLogVariance            0x%x\n", p.GrandmasterOffsetScaledLogVariance)
+	result += fmt.Sprintf("grandmasterPriority2                  %d\n", p.GrandmasterPriority2)
+	result += fmt.Sprintf("grandmasterIdentity                   %s\n", p.GrandmasterIdentity)
+	return result
+}
+
 // ValueRegEx provides the regex method for the ExternalGrandmasterProperties values matching
 func (e *ExternalGrandmasterProperties) ValueRegEx() map[string]string {
 	return map[string]string{
@@ -351,6 +391,17 @@ func (c *CurrentDS) Update(key string, value string) {
 	}
 }
 
+func (c *CurrentDS) String() string {
+	if c == nil {
+		glog.Error("returned empty SubscribedEvents")
+		return ""
+	}
+	result := fmt.Sprintf(" stepsRemoved     %d\n", c.StepsRemoved)
+	result += fmt.Sprintf(" offsetFromMaster %.1f\n", c.offsetFromMaster)
+	result += fmt.Sprintf(" meanPathDelay    %.1f\n", c.meanPathDelay)
+	return result
+}
+
 // ValueRegEx provides the regex method for the CurrentDS values matching
 func (tp *TimePropertiesDS) ValueRegEx() map[string]string {
 	return map[string]string{
@@ -400,4 +451,106 @@ func (tp *TimePropertiesDS) Update(key string, value string) {
 	case "timeSource":
 		tp.TimeSource = protocol.TimeSource(stou8h(value))
 	}
+}
+
+func (tp *TimePropertiesDS) String() string {
+	if tp == nil {
+		glog.Error("returned empty TimePropertiesDS")
+		return ""
+	}
+	result := fmt.Sprintf(" currentUtcOffset        %d\n", tp.CurrentUtcOffset)
+	result += fmt.Sprintf(" currentUtcOffsetValid   %d\n", btoi(tp.CurrentUtcOffsetValid))
+	result += fmt.Sprintf(" leap59                  %d\n", btoi(tp.Leap59))
+	result += fmt.Sprintf(" leap61                  %d\n", btoi(tp.Leap61))
+	result += fmt.Sprintf(" timeTraceable           %d\n", btoi(tp.TimeTraceable))
+	result += fmt.Sprintf(" frequencyTraceable      %d\n", btoi(tp.FrequencyTraceable))
+	result += fmt.Sprintf(" ptpTimescale            %d\n", btoi(tp.PtpTimescale))
+	result += fmt.Sprintf(" timeSource              0x%x\n", uint(tp.TimeSource))
+	return result
+}
+
+// SubscribedEvents represents the subscription events configuration for PTP notifications.
+type SubscribedEvents struct {
+	Duration            int32
+	NotifyPortState     bool
+	NotifyTimeSync      bool
+	NotifyParentDataSet bool
+	NotifyCmlds         bool
+}
+
+// ValueRegEx provides the regex method for the SubscribedEvents values matching
+func (se *SubscribedEvents) ValueRegEx() map[string]string {
+	return map[string]string{
+		"duration":               `(-?\d+)`,
+		"NOTIFY_PORT_STATE":      `(on|off)`,
+		"NOTIFY_TIME_SYNC":       `(on|off)`,
+		"NOTIFY_PARENT_DATA_SET": `(on|off)`,
+		"NOTIFY_CMLDS":           `(on|off)`,
+	}
+}
+
+// RegEx generates the SubscribedEvents command regex
+func (se *SubscribedEvents) RegEx() string {
+	result := ""
+	for _, k := range se.Keys() {
+		result += `[[:space:]]+` + k + `[[:space:]]+` + se.ValueRegEx()[k]
+	}
+	return result
+}
+
+// Keys provides the keys method for the SubscribedEvents values
+func (se *SubscribedEvents) Keys() []string {
+	return []string{
+		"duration",
+		"NOTIFY_PORT_STATE",
+		"NOTIFY_TIME_SYNC",
+		"NOTIFY_PARENT_DATA_SET",
+		"NOTIFY_CMLDS",
+	}
+}
+
+// Update provides the Update method for the SubscribedEvents values
+func (se *SubscribedEvents) Update(key string, value string) {
+	switch key {
+	case "duration":
+		se.Duration = stoi32(value)
+	case "NOTIFY_PORT_STATE":
+		se.NotifyPortState = ootob(value)
+	case "NOTIFY_TIME_SYNC":
+		se.NotifyTimeSync = ootob(value)
+	case "NOTIFY_PARENT_DATA_SET":
+		se.NotifyParentDataSet = ootob(value)
+	case "NOTIFY_CMLDS":
+		se.NotifyCmlds = ootob(value)
+	}
+}
+
+func (se *SubscribedEvents) String() string {
+	if se == nil {
+		glog.Error("returned empty SubscribedEvents")
+		return ""
+	}
+	result := fmt.Sprintf(" duration               %d\n", se.Duration)
+	result += fmt.Sprintf(" NOTIFY_PORT_STATE      %s\n", btooo(se.NotifyPortState))
+	result += fmt.Sprintf(" NOTIFY_TIME_SYNC       %s\n", btooo(se.NotifyTimeSync))
+	result += fmt.Sprintf(" NOTIFY_PARENT_DATA_SET %s\n", btooo(se.NotifyParentDataSet))
+	result += fmt.Sprintf(" NOTIFY_CMLDS           %s\n", btooo(se.NotifyCmlds))
+	return result
+}
+
+// ProcessMessage parses PMC output matches into a DataSet structure.
+func ProcessMessage[T DataSet](matches []string) (T, error) {
+	var result T
+	keys := result.Keys()
+	if len(matches)-1 < len(keys) {
+		return result, fmt.Errorf("short match expected=%d found=%d", len(keys), len(matches)-1)
+	}
+
+	for i, m := range matches[1:] {
+		if i < len(keys) {
+			result.Update(keys[i], m)
+		}
+	}
+
+	return result, nil
 }
