@@ -228,7 +228,7 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 
 	if updateDownstreamData {
 		if gSycState.state == PTP_LOCKED {
-			go e.downstreamAnnounceIWF(cfgName, c)
+			go e.DownstreamAnnounceIWF(cfgName, c)
 		} else {
 			go e.announceLocalData(cfgName, c)
 		}
@@ -247,9 +247,8 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 	return rclockSyncState
 }
 
-func (e *EventHandler) announceClockClass(clockClass int, cfgName string, c net.Conn) {
-	message := fmt.Sprintf("ptp4l[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", time.Now().Unix(),
-		cfgName, clockClass)
+func (e *EventHandler) AnnounceClockClass(clockClass int, cfgName string, c net.Conn) {
+	message := utils.GetClockClassLogMessage(PTP4lProcessName, cfgName, uint8(clockClass))
 	if e.stdoutToSocket {
 		if c != nil {
 			_, err := c.Write([]byte(message))
@@ -276,7 +275,7 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 	}
 	glog.Infof("EGP %++v", egp)
 	go pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, egp)
-	e.announceClockClass(int(e.clkSyncState[cfgName].clockClass), cfgName, c)
+	e.AnnounceClockClass(int(e.clkSyncState[cfgName].clockClass), cfgName, c)
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
 			ClockClass:              e.clkSyncState[cfgName].clockClass,
@@ -321,7 +320,7 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 }
 
 // this function runs in a goroutine
-func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
+func (e *EventHandler) DownstreamAnnounceIWF(cfgName string, c net.Conn) {
 	ptpCfgName := strings.Replace(cfgName, "ts2phc", "ptp4l", 1)
 	glog.Infof("downstreamAnnounceIWF: %s", ptpCfgName)
 	results, err := pmc.RunPMCExpGetMultiple(ptpCfgName)
@@ -346,7 +345,7 @@ func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
 		StepsRemoved: results.CurrentDS.StepsRemoved,
 	}
 	glog.Infof("%++v", es)
-	e.announceClockClass(int(gs.ClockQuality.ClockClass), cfgName, c)
+	e.AnnounceClockClass(int(gs.ClockQuality.ClockClass), cfgName, c)
 	if err = pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, es); err != nil {
 		glog.Error(err)
 	}

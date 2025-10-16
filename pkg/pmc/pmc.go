@@ -5,12 +5,12 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/golang/glog"
 	expect "github.com/google/goexpect"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
 var (
@@ -21,8 +21,9 @@ var (
 	cmdSetExternalGMPropertiesNP = "SET EXTERNAL_GRANDMASTER_PROPERTIES_NP"
 	cmdGetTimePropertiesDS       = "GET TIME_PROPERTIES_DATA_SET"
 	cmdGetCurrentDS              = "GET CURRENT_DATA_SET"
-	cmdTimeout                   = 2000 * time.Millisecond
-	sigTimeout                   = 500 * time.Millisecond
+	cmdTimeout                   = 2 * time.Second
+	pollTimeout                  = 3 * time.Second
+	montiorStartTimeout          = time.Minute
 	numRetry                     = 6
 	pmcCmdConstPart              = "pmc -u -b 0 -f /var/run/"
 	grandmasterSettingsNPRegExp  = regexp.MustCompile((&protocol.GrandmasterSettings{}).RegEx())
@@ -30,6 +31,7 @@ var (
 	externalGMPropertiesNPRegExp = regexp.MustCompile((&protocol.ExternalGrandmasterProperties{}).RegEx())
 	timePropertiesDSRegExp       = regexp.MustCompile((&protocol.TimePropertiesDS{}).RegEx())
 	currentDSRegExp              = regexp.MustCompile((&protocol.CurrentDS{}).RegEx())
+	subscribedEventsRegExp       = regexp.MustCompile((&protocol.SubscribedEvents{}).RegEx())
 )
 
 // RunPMCExp ... go expect to run PMC util cmd
@@ -40,20 +42,7 @@ func RunPMCExp(configFileName, cmdStr string, promptRE *regexp.Regexp) (result s
 	if err != nil {
 		return "", []string{}, err
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	if err = e.Send(cmdStr + "\n"); err == nil {
 		result, matches, err = e.Expect(promptRE, cmdTimeout)
@@ -75,20 +64,7 @@ func RunPMCExpGetGMSettings(configFileName string) (g protocol.GrandmasterSettin
 	if err != nil {
 		return g, err
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	for i := 0; i < numRetry; i++ {
 		if err = e.Send(cmdStr + "\n"); err == nil {
@@ -119,20 +95,7 @@ func RunPMCExpSetGMSettings(configFileName string, g protocol.GrandmasterSetting
 	if err != nil {
 		return err
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	if err = e.Send(cmdStr + "\n"); err == nil {
 		result, _, err1 := e.Expect(grandmasterSettingsNPRegExp, cmdTimeout)
@@ -154,20 +117,7 @@ func RunPMCExpGetParentDS(configFileName string) (p protocol.ParentDataSet, err 
 	if err != nil {
 		return p, err
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	for i := 0; i < numRetry; i++ {
 		glog.Infof("%s retry %d", cmdGetParentDataSet, i)
@@ -199,20 +149,7 @@ func RunPMCExpGetExternalGMPropertiesNP(configFileName string) (egp protocol.Ext
 	if err != nil {
 		return
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	for i := 0; i < numRetry; i++ {
 		if err = e.Send(cmdStr + "\n"); err == nil {
@@ -245,20 +182,7 @@ func RunPMCExpSetExternalGMPropertiesNP(configFileName string, egp protocol.Exte
 	if err != nil {
 		return err
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	if err = e.Send(cmdStr + "\n"); err == nil {
 		result, dbg, err1 := e.Expect(externalGMPropertiesNPRegExp, cmdTimeout)
@@ -281,20 +205,7 @@ func RunPMCExpGetTimePropertiesDS(configFileName string) (tp protocol.TimeProper
 	if err != nil {
 		return
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	for i := 0; i < numRetry; i++ {
 		if err = e.Send(cmdStr + "\n"); err == nil {
@@ -325,20 +236,7 @@ func RunPMCExpGetCurrentDS(configFileName string) (cds protocol.CurrentDS, err e
 	if err != nil {
 		return
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	for i := 0; i < numRetry; i++ {
 		if err = e.Send(cmdStr + "\n"); err == nil {
@@ -415,100 +313,80 @@ func RunPMCExpGetMultiple(configFileName string) (results MultipleResults, err e
 	if err != nil {
 		return results, err
 	}
-	defer func() {
-		e.SendSignal(syscall.SIGTERM)
-		for timeout := time.After(sigTimeout); ; {
-			select {
-			case <-r:
-				e.Close()
-				return
-			case <-timeout:
-				e.Send("\x03")
-				e.Close()
-				return
-			}
-		}
-	}()
+	defer utils.CloseExpect(e, r)
 
 	// Command 1: GET PARENT_DATA_SET
-	glog.Infof("Sending command: %s", cmdGetParentDataSet)
-	if err = e.Send(cmdGetParentDataSet + "\n"); err != nil {
-		return results, fmt.Errorf("failed to send PARENT_DATA_SET command: %v", err)
+	parentDS, err := getParentDS(e)
+	if err != nil {
+		return results, err
 	}
-
-	result, matches, err1 := e.Expect(parentDataSetRegExp, cmdTimeout)
-	if err1 != nil {
-		glog.Errorf("PARENT_DATA_SET result match error: %v", err1)
-		return results, fmt.Errorf("failed to parse PARENT_DATA_SET output: %v", err1)
-	}
-	glog.Infof("PARENT_DATA_SET result: %s", result)
-	for i, m := range matches[1:] {
-		if i < len(results.ParentDataSet.Keys()) {
-			results.ParentDataSet.Update(results.ParentDataSet.Keys()[i], m)
-		}
-	}
+	results.ParentDataSet = *parentDS
 
 	// Command 2: GET TIME_PROPERTIES_DATA_SET
-	glog.Infof("Sending command: %s", cmdGetTimePropertiesDS)
-	if err = e.Send(cmdGetTimePropertiesDS + "\n"); err != nil {
-		return results, fmt.Errorf("failed to send TIME_PROPERTIES_DATA_SET command: %v", err)
+	timePropertiesDS, err := getTimePropertiesDS(e)
+	if err != nil {
+		return results, err
 	}
-
-	result, matches, err1 = e.Expect(timePropertiesDSRegExp, cmdTimeout)
-	if err1 != nil {
-		glog.Errorf("TIME_PROPERTIES_DATA_SET result match error: %v", err1)
-		return results, fmt.Errorf("failed to parse TIME_PROPERTIES_DATA_SET output: %v", err1)
-	}
-	glog.Infof("TIME_PROPERTIES_DATA_SET result: %s", result)
-	for i, m := range matches[1:] {
-		if i < len(results.TimePropertiesDS.Keys()) {
-			results.TimePropertiesDS.Update(results.TimePropertiesDS.Keys()[i], m)
-		}
-	}
+	results.TimePropertiesDS = *timePropertiesDS
 
 	// Command 3: GET CURRENT_DATA_SET
-	glog.Infof("Sending command: %s", cmdGetCurrentDS)
-	if err = e.Send(cmdGetCurrentDS + "\n"); err != nil {
-		return results, fmt.Errorf("failed to send CURRENT_DATA_SET command: %v", err)
+	currentDS, err := getCurrentDS(e)
+	if err != nil {
+		return results, err
 	}
-
-	result, matches, err1 = e.Expect(currentDSRegExp, cmdTimeout)
-	if err1 != nil {
-		glog.Errorf("CURRENT_DATA_SET result match error: %v", err1)
-		return results, fmt.Errorf("failed to parse CURRENT_DATA_SET output: %v", err1)
-	}
-	glog.Infof("CURRENT_DATA_SET result: %s", result)
-	for i, m := range matches[1:] {
-		if i < len(results.CurrentDS.Keys()) {
-			results.CurrentDS.Update(results.CurrentDS.Keys()[i], m)
-		}
-	}
+	results.CurrentDS = *currentDS
 
 	return results, nil
 }
 
-const (
-	pollTimeout = (3 * time.Second)
-)
+func getParentDS(exp *expect.GExpect) (*protocol.ParentDataSet, error) {
+	results := &protocol.ParentDataSet{}
 
-var (
-	subscribedEventsRegExp = regexp.MustCompile((&protocol.SubscribedEvents{}).RegEx())
-)
-
-func ProcessMessage[T protocol.DataSet](matches []string) (T, error) {
-	var result T
-	keys := result.Keys()
-	if len(matches)-1 < len(keys) {
-		return result, fmt.Errorf("short match expected=%d found=%d", len(keys), len(matches)-1)
+	glog.Infof("Sending command: %s", cmdGetParentDataSet)
+	if err := exp.Send(cmdGetParentDataSet + "\n"); err != nil {
+		return results, fmt.Errorf("failed to send PARENT_DATA_SET command: %v", err)
 	}
 
-	for i, m := range matches[1:] {
-		if i < len(keys) {
-			result.Update(keys[i], m)
-		}
+	matched, matches, err := exp.Expect(parentDataSetRegExp, cmdTimeout)
+	if err != nil {
+		glog.Errorf("PARENT_DATA_SET result match error: %v", err)
+		return results, fmt.Errorf("failed to parse PARENT_DATA_SET output: %v", err)
+	}
+	glog.Infof("PARENT_DATA_SET result: %s", matched)
+	return protocol.ProcessMessage[*protocol.ParentDataSet](matches)
+}
+
+func getTimePropertiesDS(exp *expect.GExpect) (*protocol.TimePropertiesDS, error) {
+	results := &protocol.TimePropertiesDS{}
+	glog.Infof("Sending command: %s", cmdGetTimePropertiesDS)
+	if err := exp.Send(cmdGetTimePropertiesDS + "\n"); err != nil {
+		return results, fmt.Errorf("failed to send TIME_PROPERTIES_DATA_SET command: %v", err)
 	}
 
-	return result, nil
+	matched, matches, err := exp.Expect(timePropertiesDSRegExp, cmdTimeout)
+	if err != nil {
+		glog.Errorf("TIME_PROPERTIES_DATA_SET result match error: %v", err)
+		return results, fmt.Errorf("failed to parse TIME_PROPERTIES_DATA_SET output: %v", err)
+	}
+	glog.Infof("TIME_PROPERTIES_DATA_SET result: %s", matched)
+	return protocol.ProcessMessage[*protocol.TimePropertiesDS](matches)
+}
+
+func getCurrentDS(exp *expect.GExpect) (*protocol.CurrentDS, error) {
+	results := &protocol.CurrentDS{}
+
+	glog.Infof("Sending command: %s", cmdGetCurrentDS)
+	if err := exp.Send(cmdGetCurrentDS + "\n"); err != nil {
+		return results, fmt.Errorf("failed to send CURRENT_DATA_SET command: %v", err)
+	}
+
+	matched, matches, err := exp.Expect(currentDSRegExp, cmdTimeout)
+	if err != nil {
+		glog.Errorf("CURRENT_DATA_SET result match error: %v", err)
+		return results, fmt.Errorf("failed to parse CURRENT_DATA_SET output: %v", err)
+	}
+	glog.Infof("CURRENT_DATA_SET result: %s", matched)
+	return protocol.ProcessMessage[*protocol.CurrentDS](matches)
 }
 
 func getSubcribeEvents(exp *expect.GExpect) (*protocol.SubscribedEvents, error) {
@@ -520,11 +398,11 @@ func getSubcribeEvents(exp *expect.GExpect) (*protocol.SubscribedEvents, error) 
 	if err != nil {
 		return nil, err
 	}
-	return ProcessMessage[*protocol.SubscribedEvents](matches)
+	return protocol.ProcessMessage[*protocol.SubscribedEvents](matches)
 }
 
 func GetPMCMontior(configFileName string) (*expect.GExpect, <-chan error, error) {
-	timeout := time.After(30 * time.Second) // TODO factor out time
+	timeout := time.After(montiorStartTimeout)
 	for {
 		exp, r, err := expect.Spawn(fmt.Sprintf(pmcCmdConstPart, configFileName), -1)
 		if err != nil {

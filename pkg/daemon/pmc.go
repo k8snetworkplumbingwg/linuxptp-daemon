@@ -10,6 +10,7 @@ import (
 	"github.com/golang/glog"
 	expect "github.com/google/goexpect"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	pmcPkg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
@@ -20,7 +21,7 @@ const (
 	PMCProcessName = "pmc"
 )
 
-func NewPMCProcess(runID int) *PMCProcess {
+func NewPMCProcess(runID int, eventHandler *event.EventHandler) *PMCProcess {
 	return &PMCProcess{
 		configFileName:    fmt.Sprintf("ptp4l.%d.config", runID),
 		messageTag:        fmt.Sprintf("[ptp4l.%d.config:{level}]", runID),
@@ -42,6 +43,7 @@ type PMCProcess struct {
 	c                     net.Conn
 	messageTag            string
 	cmdLine               string
+	eventHandler          *event.EventHandler
 }
 
 func (pmc *PMCProcess) Name() string {
@@ -94,6 +96,13 @@ const (
 	pollTimeout = 3 * time.Second
 )
 
+func (pmc *PMCProcess) EmitClockClassLogs(c net.Conn) {
+	if c != nil {
+		pmc.c = c
+	}
+	utils.EmitClockClass(c, ptp4lProcessName, pmc.configFileName, pmc.GrandmasterClockClass)
+}
+
 func (pmc *PMCProcess) PollClockClass() error {
 	parentDS, err := pmcPkg.RunPMCExpGetParentDS(pmc.configFileName)
 	if err != nil {
@@ -125,21 +134,6 @@ func (pmc *PMCProcess) CmdRun(stdToSocket bool) {
 			}
 		}
 	}()
-}
-
-func (pmc *PMCProcess) emit(c net.Conn) {
-	//ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
-	// change to pint every minute or when the clock class changes
-	if c == nil {
-		UpdateClockClassMetrics(ptp4lProcessName, float64(pmc.GrandmasterClockClass)) // no socket then update metrics
-	} else {
-		utils.EmitClockClass(c, ptp4lProcessName, pmc.configFileName, pmc.GrandmasterClockClass)
-	}
-}
-
-func (pmc *PMCProcess) update(dataSet *protocol.ParentDataSet) {
-	// TODO: Update downstream data
-	// return
 }
 
 func (pmc *PMCProcess) monitor(c net.Conn) error {
@@ -174,16 +168,16 @@ func (pmc *PMCProcess) monitor(c net.Conn) error {
 				continue
 			}
 			if strings.Contains(matches[0], "PARENT_DATA_SET") {
-				processedMessage, err := pmcPkg.ProcessMessage[*protocol.ParentDataSet](matches)
+				processedMessage, err := protocol.ProcessMessage[*protocol.ParentDataSet](matches)
 				if err != nil {
 					glog.Warningf("failed to process message for PARENT_DATA_SET: %s", err)
 				}
-				if pmc.GrandmasterClockClass == processedMessage.GrandmasterClockClass {
+				if pmc.GrandmasterClockClass != processedMessage.GrandmasterClockClass {
 					pmc.GrandmasterClockClass = processedMessage.GrandmasterClockClass
-					pmc.emit(c)
+					pmc.eventHandler.AnnounceClockClass(int(pmc.GrandmasterClockClass), pmc.configFileName, pmc.c)
 				}
 				if pmc.profileClockType == TBC {
-					pmc.update(processedMessage)
+					pmc.eventHandler.DownstreamAnnounceIWF(pmc.configFileName, pmc.c)
 				}
 			}
 		}
@@ -207,5 +201,4 @@ func (pmc *PMCProcess) ExitCh() chan struct{} {
 }
 
 func (pmc *PMCProcess) MonitorProcess(processCfg config.ProcessConfig) {
-	return
 }

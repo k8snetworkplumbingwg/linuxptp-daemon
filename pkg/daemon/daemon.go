@@ -212,7 +212,7 @@ func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
 					if pmc.GrandmasterClockClass == 0 {
 						pmc.PollClockClass()
 					}
-					pmc.emit(c)
+					pmc.EmitClockClassLogs(c)
 				}
 			}
 		}
@@ -251,10 +251,9 @@ type ptpProcess struct {
 	c                    net.Conn
 	hasCollectedMetrics  bool
 	tBCAttributes        tBCProcessAttributes
-	// GrandmasterClockClass uint8
-	handler            *event.EventHandler
-	dn                 *Daemon
-	cmdSetEnabledMutex sync.Mutex
+	handler              *event.EventHandler
+	dn                   *Daemon
+	cmdSetEnabledMutex   sync.Mutex
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -791,7 +790,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 		// TODO HARDWARE PLUGIN for e810
 		if pProcess == ptp4lProcessName {
-			pmcProcess := NewPMCProcess(runID)
+			pmcProcess := NewPMCProcess(runID, dn.processManager.ptpEventHandler)
 			pmcProcess.CmdInit()
 			// TOOD addScheduling
 			dprocess.depProcess = append(dprocess.depProcess, pmcProcess)

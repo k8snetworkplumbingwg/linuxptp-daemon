@@ -228,7 +228,7 @@ func stou32h(s string) uint32 {
 }
 
 // ValueRegEx provides the regex method for the ParentDS values matching
-func (se *ParentDataSet) ValueRegEx() map[string]string {
+func (p *ParentDataSet) ValueRegEx() map[string]string {
 	return map[string]string{
 		"parentPortIdentity":                    `(.*)`,
 		"parentStats":                           `(\d+)`,
@@ -244,16 +244,16 @@ func (se *ParentDataSet) ValueRegEx() map[string]string {
 }
 
 // RegEx generates the ParentDataSet command regex
-func (se *ParentDataSet) RegEx() string {
+func (p *ParentDataSet) RegEx() string {
 	result := ""
-	for _, k := range se.Keys() {
-		result += `[[:space:]]+` + k + `[[:space:]]+` + se.ValueRegEx()[k]
+	for _, k := range p.Keys() {
+		result += `[[:space:]]+` + k + `[[:space:]]+` + p.ValueRegEx()[k]
 	}
 	return result
 }
 
 // Keys provides the keys method for the ParentDS values
-func (se *ParentDataSet) Keys() []string {
+func (p *ParentDataSet) Keys() []string {
 	return []string{
 		"parentPortIdentity",
 		"parentStats",
@@ -269,47 +269,47 @@ func (se *ParentDataSet) Keys() []string {
 }
 
 // Update provides the Update method for the ParentDS values
-func (se *ParentDataSet) Update(key string, value string) {
+func (p *ParentDataSet) Update(key string, value string) {
 	switch key {
 	case "parentPortIdentity":
-		se.ParentPortIdentity = value
+		p.ParentPortIdentity = value
 	case "parentStats":
-		se.ParentStats = (stou8(value))
+		p.ParentStats = (stou8(value))
 	case "observedParentOffsetScaledLogVariance":
-		se.ObservedParentOffsetScaledLogVariance = stou16h(value)
+		p.ObservedParentOffsetScaledLogVariance = stou16h(value)
 	case "observedParentClockPhaseChangeRate":
-		se.ObservedParentClockPhaseChangeRate = stou32h(value)
+		p.ObservedParentClockPhaseChangeRate = stou32h(value)
 	case "grandmasterPriority1":
-		se.GrandmasterPriority1 = stou8(value)
+		p.GrandmasterPriority1 = stou8(value)
 	case "gm.ClockClass":
-		se.GrandmasterClockClass = stou8(value)
+		p.GrandmasterClockClass = stou8(value)
 	case "gm.ClockAccuracy":
-		se.GrandmasterClockAccuracy = stou8h(value)
+		p.GrandmasterClockAccuracy = stou8h(value)
 	case "gm.OffsetScaledLogVariance":
-		se.GrandmasterOffsetScaledLogVariance = stou16h(value)
+		p.GrandmasterOffsetScaledLogVariance = stou16h(value)
 	case "grandmasterPriority2":
-		se.GrandmasterPriority2 = stou8(value)
+		p.GrandmasterPriority2 = stou8(value)
 	case "grandmasterIdentity":
-		se.GrandmasterIdentity = value
+		p.GrandmasterIdentity = value
 	}
 }
 
-func (se *ParentDataSet) String() string {
-	if se == nil {
+func (p *ParentDataSet) String() string {
+	if p == nil {
 		glog.Error("returned empty parentDataSet")
 		return ""
 
 	}
-	result := fmt.Sprintf("parentPortIdentity                    %s\n", se.ParentPortIdentity)
-	result += fmt.Sprintf("parentStats                           %d\n", se.ParentStats)
-	result += fmt.Sprintf("observedParentOffsetScaledLogVariance 0x%x\n", se.ObservedParentOffsetScaledLogVariance)
-	result += fmt.Sprintf("observedParentClockPhaseChangeRate    0x%x\n", se.ObservedParentClockPhaseChangeRate)
-	result += fmt.Sprintf("grandmasterPriority1                  %d\n", se.GrandmasterPriority1)
-	result += fmt.Sprintf("gm.ClockClass                         %d\n", se.GrandmasterClockClass)
-	result += fmt.Sprintf("gm.ClockAccuracy                      0x%x\n", se.GrandmasterClockAccuracy)
-	result += fmt.Sprintf("gm.OffsetScaledLogVariance            0x%x\n", se.GrandmasterOffsetScaledLogVariance)
-	result += fmt.Sprintf("grandmasterPriority2                  %d\n", se.GrandmasterPriority2)
-	result += fmt.Sprintf("grandmasterIdentity                   %s\n", se.GrandmasterIdentity)
+	result := fmt.Sprintf("parentPortIdentity                    %s\n", p.ParentPortIdentity)
+	result += fmt.Sprintf("parentStats                           %d\n", p.ParentStats)
+	result += fmt.Sprintf("observedParentOffsetScaledLogVariance 0x%x\n", p.ObservedParentOffsetScaledLogVariance)
+	result += fmt.Sprintf("observedParentClockPhaseChangeRate    0x%x\n", p.ObservedParentClockPhaseChangeRate)
+	result += fmt.Sprintf("grandmasterPriority1                  %d\n", p.GrandmasterPriority1)
+	result += fmt.Sprintf("gm.ClockClass                         %d\n", p.GrandmasterClockClass)
+	result += fmt.Sprintf("gm.ClockAccuracy                      0x%x\n", p.GrandmasterClockAccuracy)
+	result += fmt.Sprintf("gm.OffsetScaledLogVariance            0x%x\n", p.GrandmasterOffsetScaledLogVariance)
+	result += fmt.Sprintf("grandmasterPriority2                  %d\n", p.GrandmasterPriority2)
+	result += fmt.Sprintf("grandmasterIdentity                   %s\n", p.GrandmasterIdentity)
 	return result
 }
 
@@ -391,6 +391,18 @@ func (c *CurrentDS) Update(key string, value string) {
 	}
 }
 
+func (c *CurrentDS) String() string {
+	if c == nil {
+		glog.Error("returned empty SubscribedEvents")
+		return ""
+
+	}
+	result := fmt.Sprintf(" stepsRemoved     %d\n", c.StepsRemoved)
+	result += fmt.Sprintf(" offsetFromMaster %.1f\n", c.offsetFromMaster)
+	result += fmt.Sprintf(" meanPathDelay    %.1f\n", c.meanPathDelay)
+	return result
+}
+
 // ValueRegEx provides the regex method for the CurrentDS values matching
 func (tp *TimePropertiesDS) ValueRegEx() map[string]string {
 	return map[string]string{
@@ -440,6 +452,23 @@ func (tp *TimePropertiesDS) Update(key string, value string) {
 	case "timeSource":
 		tp.TimeSource = protocol.TimeSource(stou8h(value))
 	}
+}
+
+func (tp *TimePropertiesDS) String() string {
+	if tp == nil {
+		glog.Error("returned empty TimePropertiesDS")
+		return ""
+
+	}
+	result := fmt.Sprintf(" currentUtcOffset        %d\n", tp.CurrentUtcOffset)
+	result += fmt.Sprintf(" currentUtcOffsetValid   %d\n", btoi(tp.CurrentUtcOffsetValid))
+	result += fmt.Sprintf(" leap59                  %d\n", btoi(tp.Leap59))
+	result += fmt.Sprintf(" leap61                  %d\n", btoi(tp.Leap61))
+	result += fmt.Sprintf(" timeTraceable           %d\n", btoi(tp.TimeTraceable))
+	result += fmt.Sprintf(" frequencyTraceable      %d\n", btoi(tp.FrequencyTraceable))
+	result += fmt.Sprintf(" ptpTimescale            %d\n", btoi(tp.PtpTimescale))
+	result += fmt.Sprintf(" timeSource              0x%x\n", uint(tp.TimeSource))
+	return result
 }
 
 type SubscribedEvents struct {
@@ -503,10 +532,26 @@ func (se *SubscribedEvents) String() string {
 		return ""
 
 	}
-	result := fmt.Sprintf("duration               %d\n", se.Duration)
-	result += fmt.Sprintf("NOTIFY_PORT_STATE      %s\n", btooo(se.NOTIFY_PORT_STATE))
-	result += fmt.Sprintf("NOTIFY_TIME_SYNC       %s\n", btooo(se.NOTIFY_TIME_SYNC))
-	result += fmt.Sprintf("NOTIFY_PARENT_DATA_SET %s\n", btooo(se.NOTIFY_PARENT_DATA_SET))
-	result += fmt.Sprintf("NOTIFY_CMLDS           %s\n", btooo(se.NOTIFY_CMLDS))
+	result := fmt.Sprintf(" duration               %d\n", se.Duration)
+	result += fmt.Sprintf(" NOTIFY_PORT_STATE      %s\n", btooo(se.NOTIFY_PORT_STATE))
+	result += fmt.Sprintf(" NOTIFY_TIME_SYNC       %s\n", btooo(se.NOTIFY_TIME_SYNC))
+	result += fmt.Sprintf(" NOTIFY_PARENT_DATA_SET %s\n", btooo(se.NOTIFY_PARENT_DATA_SET))
+	result += fmt.Sprintf(" NOTIFY_CMLDS           %s\n", btooo(se.NOTIFY_CMLDS))
 	return result
+}
+
+func ProcessMessage[T DataSet](matches []string) (T, error) {
+	var result T
+	keys := result.Keys()
+	if len(matches)-1 < len(keys) {
+		return result, fmt.Errorf("short match expected=%d found=%d", len(keys), len(matches)-1)
+	}
+
+	for i, m := range matches[1:] {
+		if i < len(keys) {
+			result.Update(keys[i], m)
+		}
+	}
+
+	return result, nil
 }
