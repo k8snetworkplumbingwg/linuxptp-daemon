@@ -7,62 +7,67 @@ import (
 	"strings"
 	"time"
 
+	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
-	expect "github.com/google/goexpect"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	pmcPkg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
 const (
-	pmcCmdPrefix   = `pmc -u -b 0 -f /var/run/%s "%s"`
+	// PMCProcessName is the name identifier for PMC processes
 	PMCProcessName = "pmc"
 )
 
+// NewPMCProcess creates a new PMC process instance for monitoring PTP events.
 func NewPMCProcess(runID int, eventHandler *event.EventHandler) *PMCProcess {
 	return &PMCProcess{
 		configFileName:    fmt.Sprintf("ptp4l.%d.config", runID),
 		messageTag:        fmt.Sprintf("[ptp4l.%d.config:{level}]", runID),
 		monitorParentData: true,
+		eventHandler:      eventHandler,
 	}
 }
 
+// PMCProcess manages a PMC (PTP Management Client) process for monitoring PTP events.
 type PMCProcess struct {
-	configFileName        string
-	stopped               bool
-	cmd                   *expect.GExpect
-	monitorPortState      bool
-	monitorTimeSync       bool
-	monitorParentData     bool
-	monitorCMLDS          bool
-	GrandmasterClockClass uint8
-	exitCh                chan struct{}
-	profileClockType      string
-	c                     net.Conn
-	messageTag            string
-	cmdLine               string
-	eventHandler          *event.EventHandler
+	configFileName    string
+	stopped           bool
+	monitorPortState  bool
+	monitorTimeSync   bool
+	monitorParentData bool
+	monitorCMLDS      bool
+	parentDs          *protocol.ParentDataSet
+	exitCh            chan struct{}
+	profileClockType  string
+	c                 net.Conn
+	messageTag        string
+	eventHandler      *event.EventHandler
 }
 
+// Name returns the process name.
 func (pmc *PMCProcess) Name() string {
 	return PMCProcessName
 }
 
+// Stopped returns whether the process has been stopped.
 func (pmc *PMCProcess) Stopped() bool {
 	return pmc.stopped
 }
 
+// CmdStop signals the process to stop.
 func (pmc *PMCProcess) CmdStop() {
 	pmc.stopped = true
 	pmc.exitCh <- struct{}{}
 }
 
+// CmdInit initializes the process state.
 func (pmc *PMCProcess) CmdInit() {
 	pmc.stopped = false
 }
 
+// ProcessStatus processes status updates for the PMC process.
 func (pmc *PMCProcess) ProcessStatus(c net.Conn, status int64) {
 	if c != nil {
 		pmc.c = c
@@ -89,46 +94,54 @@ func (pmc *PMCProcess) getMonitorSubcribeCommand() string {
 		btof(pmc.monitorParentData),
 		btof(pmc.monitorCMLDS),
 	)
-
 }
 
 const (
 	pollTimeout = 3 * time.Second
 )
 
+// EmitClockClassLogs emits clock class change logs to the provided connection.
 func (pmc *PMCProcess) EmitClockClassLogs(c net.Conn) {
 	if c != nil {
 		pmc.c = c
 	}
-	utils.EmitClockClass(c, ptp4lProcessName, pmc.configFileName, pmc.GrandmasterClockClass)
+	pmc.eventHandler.AnnounceClockClass(
+		fbprotocol.ClockClass(pmc.parentDs.GrandmasterClockClass),
+		fbprotocol.ClockAccuracy(pmc.parentDs.GrandmasterClockAccuracy),
+		pmc.configFileName,
+		pmc.c,
+	)
 }
 
-func (pmc *PMCProcess) PollClockClass() error {
+// PollParentDS polls the parent data set from PMC.
+func (pmc *PMCProcess) PollParentDS() error {
 	parentDS, err := pmcPkg.RunPMCExpGetParentDS(pmc.configFileName)
 	if err != nil {
 		return err
 	}
-	pmc.GrandmasterClockClass = parentDS.GrandmasterClockClass
+	pmc.parentDs = &parentDS
 	return nil
 }
 
+// CmdRun starts the PMC monitoring process.
 func (pmc *PMCProcess) CmdRun(stdToSocket bool) {
-	err := pmc.PollClockClass()
+	err := pmc.PollParentDS()
 	if err != nil {
-		glog.Error("Failed to initalise clock class")
+		glog.Error("Failed to initialise clock class")
 	}
+
 	go func() {
 		for {
 			var c net.Conn
 			if stdToSocket {
-				cAttempt, err := dialSocket()
-				for err != nil {
-					cAttempt, err = dialSocket()
+				cAttempt, dialErr := dialSocket()
+				for dialErr != nil {
+					cAttempt, dialErr = dialSocket()
 				}
 				c = cAttempt
 			}
-			err := pmc.Monitor(c)
-			if err == nil {
+			monitorErr := pmc.Monitor(c)
+			if monitorErr == nil {
 				// No error completed gracefully
 				return
 			}
@@ -136,7 +149,7 @@ func (pmc *PMCProcess) CmdRun(stdToSocket bool) {
 	}()
 }
 
-func (pmc *PMCProcess) monitor(c net.Conn) error {
+func (pmc *PMCProcess) monitor(_ net.Conn) error {
 	exp, r, err := pmcPkg.GetPMCMontior(pmc.configFileName)
 	if err != nil {
 		return err
@@ -151,39 +164,52 @@ func (pmc *PMCProcess) monitor(c net.Conn) error {
 			glog.Warningf("PMC monitoring process exited")
 			return fmt.Errorf("PMC needs to restart")
 		case <-pmc.exitCh:
-			err := exp.SendSignal(os.Kill)
-			glog.Warningf("pmc failed to send signal to pmc process %s", err)
+			killErr := exp.SendSignal(os.Kill)
+			glog.Warningf("pmc failed to send signal to pmc process %s", killErr)
 			return nil // TODO close gracefully
 		default:
-			_, matches, err := exp.Expect(pmcPkg.GetMonitorRegex(pmc.monitorParentData), pollTimeout)
-			if err != nil {
-				if strings.Contains(err.Error(), "EOF") || strings.Contains(err.Error(), "exit") {
-					glog.Warningf("PMC process exited (%v)", err)
+			_, matches, expectErr := exp.Expect(pmcPkg.GetMonitorRegex(pmc.monitorParentData), pollTimeout)
+			if expectErr != nil {
+				if strings.Contains(expectErr.Error(), "EOF") || strings.Contains(expectErr.Error(), "exit") {
+					glog.Warningf("PMC process exited (%v)", expectErr)
 					return fmt.Errorf("PMC needs to restart")
 				}
-				glog.Errorf("Error waiting for notification: %v", err)
+				glog.Errorf("Error waiting for notification: %v", expectErr)
 				continue
 			}
 			if len(matches) == 0 {
 				continue
 			}
 			if strings.Contains(matches[0], "PARENT_DATA_SET") {
-				processedMessage, err := protocol.ProcessMessage[*protocol.ParentDataSet](matches)
-				if err != nil {
-					glog.Warningf("failed to process message for PARENT_DATA_SET: %s", err)
+				processedMessage, procErr := protocol.ProcessMessage[*protocol.ParentDataSet](matches)
+				if procErr != nil {
+					glog.Warningf("failed to process message for PARENT_DATA_SET: %s", procErr)
+					// maybe we should attempt a poll here?
+					continue
 				}
-				if pmc.GrandmasterClockClass != processedMessage.GrandmasterClockClass {
-					pmc.GrandmasterClockClass = processedMessage.GrandmasterClockClass
-					pmc.eventHandler.AnnounceClockClass(int(pmc.GrandmasterClockClass), pmc.configFileName, pmc.c)
+				if pmc.parentDs.GrandmasterClockClass != processedMessage.GrandmasterClockClass {
+					pmc.parentDs = processedMessage
+					pmc.eventHandler.AnnounceClockClass(
+						fbprotocol.ClockClass(pmc.parentDs.GrandmasterClockClass),
+						fbprotocol.ClockAccuracy(pmc.parentDs.GrandmasterClockAccuracy),
+						pmc.configFileName,
+						pmc.c,
+					)
 				}
 				if pmc.profileClockType == TBC {
-					pmc.eventHandler.DownstreamAnnounceIWF(pmc.configFileName, pmc.c)
+					results, pmcErr := pmcPkg.RunPMCExpGetTimeAndCurrentDataSets(pmc.configFileName)
+					if pmcErr != nil {
+						glog.Warningf("Failed to fetch TIME_PROPERTIES_DATA_SET and CURRENT_DATA_SET")
+					}
+					results.ParentDataSet = (*pmc.parentDs)
+					pmc.eventHandler.DownstreamAnnounceIWF(pmc.configFileName, pmc.c, results)
 				}
 			}
 		}
 	}
 }
 
+// Monitor continuously monitors the PMC process and handles restarts.
 func (pmc *PMCProcess) Monitor(c net.Conn) error {
 	for {
 		err := pmc.monitor(c)
@@ -196,9 +222,11 @@ func (pmc *PMCProcess) Monitor(c net.Conn) error {
 	}
 }
 
+// ExitCh returns the exit channel for the process.
 func (pmc *PMCProcess) ExitCh() chan struct{} {
 	return pmc.exitCh
 }
 
-func (pmc *PMCProcess) MonitorProcess(processCfg config.ProcessConfig) {
+// MonitorProcess is a placeholder for process monitoring configuration.
+func (pmc *PMCProcess) MonitorProcess(_ config.ProcessConfig) {
 }

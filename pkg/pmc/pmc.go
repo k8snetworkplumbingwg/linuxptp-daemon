@@ -295,17 +295,17 @@ func RunPMCGetParentDS(configFileName string) (p protocol.ParentDataSet, err err
 	return p, nil
 }
 
-// MultipleResults holds the results from multiple PMC commands
-type MultipleResults struct {
+// ParentTimeCurrentDS holds the results from multiple PMC commands
+type ParentTimeCurrentDS struct {
 	ParentDataSet    protocol.ParentDataSet
 	TimePropertiesDS protocol.TimePropertiesDS
 	CurrentDS        protocol.CurrentDS
 }
 
-// RunPMCExpGetMultiple runs PMC in interactive mode and sends three commands sequentially:
+// RunPMCExpGetParentTimeAndCurrentDataSets runs PMC in interactive mode and sends three commands sequentially:
 // GET PARENT_DATA_SET, GET TIME_PROPERTIES_DATA_SET, and GET CURRENT_DATA_SET
 // This is more efficient than spawning separate PMC processes for each command
-func RunPMCExpGetMultiple(configFileName string) (results MultipleResults, err error) {
+func RunPMCExpGetParentTimeAndCurrentDataSets(configFileName string) (results ParentTimeCurrentDS, err error) {
 	pmcCmd := pmcCmdConstPart + configFileName
 	glog.Infof("%s - running multiple commands", pmcCmd)
 
@@ -321,6 +321,36 @@ func RunPMCExpGetMultiple(configFileName string) (results MultipleResults, err e
 		return results, err
 	}
 	results.ParentDataSet = *parentDS
+
+	// Command 2: GET TIME_PROPERTIES_DATA_SET
+	timePropertiesDS, err := getTimePropertiesDS(e)
+	if err != nil {
+		return results, err
+	}
+	results.TimePropertiesDS = *timePropertiesDS
+
+	// Command 3: GET CURRENT_DATA_SET
+	currentDS, err := getCurrentDS(e)
+	if err != nil {
+		return results, err
+	}
+	results.CurrentDS = *currentDS
+
+	return results, nil
+}
+
+// RunPMCExpGetTimeAndCurrentDataSets runs PMC in interactive mode and sends three commands sequentially:
+// GET TIME_PROPERTIES_DATA_SET, and GET CURRENT_DATA_SET
+// This is more efficient than spawning separate PMC processes for each command
+func RunPMCExpGetTimeAndCurrentDataSets(configFileName string) (results ParentTimeCurrentDS, err error) {
+	pmcCmd := pmcCmdConstPart + configFileName
+	glog.Infof("%s - running multiple commands", pmcCmd)
+
+	e, r, err := expect.Spawn(pmcCmd, -1)
+	if err != nil {
+		return results, err
+	}
+	defer utils.CloseExpect(e, r)
 
 	// Command 2: GET TIME_PROPERTIES_DATA_SET
 	timePropertiesDS, err := getTimePropertiesDS(e)
@@ -401,6 +431,7 @@ func getSubcribeEvents(exp *expect.GExpect) (*protocol.SubscribedEvents, error) 
 	return protocol.ProcessMessage[*protocol.SubscribedEvents](matches)
 }
 
+// GetPMCMontior spawns and initializes a PMC monitoring process.
 func GetPMCMontior(configFileName string) (*expect.GExpect, <-chan error, error) {
 	timeout := time.After(montiorStartTimeout)
 	for {
@@ -414,8 +445,7 @@ func GetPMCMontior(configFileName string) (*expect.GExpect, <-chan error, error)
 		case <-r:
 			return exp, r, fmt.Errorf("pmc need to be restarted")
 		default:
-			_, err := getSubcribeEvents(exp)
-			if err != nil {
+			if _, subscribeErr := getSubcribeEvents(exp); subscribeErr != nil {
 				continue
 			}
 			return exp, r, nil
@@ -423,6 +453,7 @@ func GetPMCMontior(configFileName string) (*expect.GExpect, <-chan error, error)
 	}
 }
 
+// GetMonitorRegex returns a regex pattern for monitoring PMC events based on configuration.
 func GetMonitorRegex(monitorParentData bool) *regexp.Regexp {
 	parts := make([]string, 0)
 	// TODO: Find port state message and make regex

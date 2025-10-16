@@ -209,8 +209,11 @@ func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
 				if dp.Name() == PMCProcessName {
 					pmc := dp.(*PMCProcess)
 					// If set then use current else get value
-					if pmc.GrandmasterClockClass == 0 {
-						pmc.PollClockClass()
+					if pmc.parentDs == nil {
+						if err := pmc.PollParentDS(); err != nil {
+							glog.Errorf("Failed to fetch pmc PARENT_DATA_SET: %s", err)
+							return
+						}
 					}
 					pmc.EmitClockClassLogs(c)
 				}
@@ -792,7 +795,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		if pProcess == ptp4lProcessName {
 			pmcProcess := NewPMCProcess(runID, dn.processManager.ptpEventHandler)
 			pmcProcess.CmdInit()
-			// TOOD addScheduling
+			// TODO addScheduling
 			dprocess.depProcess = append(dprocess.depProcess, pmcProcess)
 		} else if pProcess == ts2phcProcessName { //& if the x plugin is enabled
 			if clockType == event.GM {

@@ -17,6 +17,7 @@ const (
 	ClockClassOutOfSpec     protocol.ClockClass = 140
 )
 
+// DataSet is an interface for PTP data sets that can be parsed from PMC output.
 type DataSet interface {
 	Keys() []string
 	Update(key string, value string)
@@ -298,7 +299,6 @@ func (p *ParentDataSet) String() string {
 	if p == nil {
 		glog.Error("returned empty parentDataSet")
 		return ""
-
 	}
 	result := fmt.Sprintf("parentPortIdentity                    %s\n", p.ParentPortIdentity)
 	result += fmt.Sprintf("parentStats                           %d\n", p.ParentStats)
@@ -395,7 +395,6 @@ func (c *CurrentDS) String() string {
 	if c == nil {
 		glog.Error("returned empty SubscribedEvents")
 		return ""
-
 	}
 	result := fmt.Sprintf(" stepsRemoved     %d\n", c.StepsRemoved)
 	result += fmt.Sprintf(" offsetFromMaster %.1f\n", c.offsetFromMaster)
@@ -458,7 +457,6 @@ func (tp *TimePropertiesDS) String() string {
 	if tp == nil {
 		glog.Error("returned empty TimePropertiesDS")
 		return ""
-
 	}
 	result := fmt.Sprintf(" currentUtcOffset        %d\n", tp.CurrentUtcOffset)
 	result += fmt.Sprintf(" currentUtcOffsetValid   %d\n", btoi(tp.CurrentUtcOffsetValid))
@@ -471,12 +469,13 @@ func (tp *TimePropertiesDS) String() string {
 	return result
 }
 
+// SubscribedEvents represents the subscription events configuration for PTP notifications.
 type SubscribedEvents struct {
-	Duration               int32
-	NOTIFY_PORT_STATE      bool
-	NOTIFY_TIME_SYNC       bool
-	NOTIFY_PARENT_DATA_SET bool
-	NOTIFY_CMLDS           bool
+	Duration            int32
+	NotifyPortState     bool
+	NotifyTimeSync      bool
+	NotifyParentDataSet bool
+	NotifyCmlds         bool
 }
 
 // ValueRegEx provides the regex method for the SubscribedEvents values matching
@@ -516,13 +515,13 @@ func (se *SubscribedEvents) Update(key string, value string) {
 	case "duration":
 		se.Duration = stoi32(value)
 	case "NOTIFY_PORT_STATE":
-		se.NOTIFY_PORT_STATE = ootob(value)
+		se.NotifyPortState = ootob(value)
 	case "NOTIFY_TIME_SYNC":
-		se.NOTIFY_TIME_SYNC = ootob(value)
+		se.NotifyTimeSync = ootob(value)
 	case "NOTIFY_PARENT_DATA_SET":
-		se.NOTIFY_PARENT_DATA_SET = ootob(value)
+		se.NotifyParentDataSet = ootob(value)
 	case "NOTIFY_CMLDS":
-		se.NOTIFY_CMLDS = ootob(value)
+		se.NotifyCmlds = ootob(value)
 	}
 }
 
@@ -530,16 +529,16 @@ func (se *SubscribedEvents) String() string {
 	if se == nil {
 		glog.Error("returned empty SubscribedEvents")
 		return ""
-
 	}
 	result := fmt.Sprintf(" duration               %d\n", se.Duration)
-	result += fmt.Sprintf(" NOTIFY_PORT_STATE      %s\n", btooo(se.NOTIFY_PORT_STATE))
-	result += fmt.Sprintf(" NOTIFY_TIME_SYNC       %s\n", btooo(se.NOTIFY_TIME_SYNC))
-	result += fmt.Sprintf(" NOTIFY_PARENT_DATA_SET %s\n", btooo(se.NOTIFY_PARENT_DATA_SET))
-	result += fmt.Sprintf(" NOTIFY_CMLDS           %s\n", btooo(se.NOTIFY_CMLDS))
+	result += fmt.Sprintf(" NOTIFY_PORT_STATE      %s\n", btooo(se.NotifyPortState))
+	result += fmt.Sprintf(" NOTIFY_TIME_SYNC       %s\n", btooo(se.NotifyTimeSync))
+	result += fmt.Sprintf(" NOTIFY_PARENT_DATA_SET %s\n", btooo(se.NotifyParentDataSet))
+	result += fmt.Sprintf(" NOTIFY_CMLDS           %s\n", btooo(se.NotifyCmlds))
 	return result
 }
 
+// ProcessMessage parses PMC output matches into a DataSet structure.
 func ProcessMessage[T DataSet](matches []string) (T, error) {
 	var result T
 	keys := result.Keys()
