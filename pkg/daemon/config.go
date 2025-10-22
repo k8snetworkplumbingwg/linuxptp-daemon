@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
@@ -355,39 +357,59 @@ func (conf *Ptp4lConf) RenderSyncE4lConf(ptpSettings map[string]string) (configO
 	return
 }
 
-// RenderPtp4lConf outputs ptp4l config as string
-func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces) {
-	configOut = fmt.Sprintf("#profile: %s\n", conf.profile_name)
-	var nmea_source event.EventSource
+func getSectionName(name string) string {
+	name = strings.ReplaceAll(name, "[", "")
+	name = strings.ReplaceAll(name, "]", "")
+	return name
+}
 
+func (conf *Ptp4lConf) getInterfaces() config.IFaces {
+	ifaces := make(config.IFaces, 0)
+	var nmeaSource event.EventSource
 	for _, section := range conf.sections {
-		configOut = fmt.Sprintf("%s\n%s", configOut, section.sectionName)
-
 		if section.sectionName == NmeaSectionName {
 			if source, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "ts2phc.master"); ok {
-				nmea_source = getSource(source)
+				nmeaSource = getSource(source)
 			}
 		}
 		if section.sectionName != GlobalSectionName && section.sectionName != NmeaSectionName && section.sectionName != UnicastSectionName {
-			i := section.sectionName
-			i = strings.ReplaceAll(i, "[", "")
-			i = strings.ReplaceAll(i, "]", "")
-			iface := config.Iface{Name: i}
+			iface := config.Iface{Name: getSectionName(section.sectionName)}
+			iface.PhcId = network.GetPhcId(iface.Name)
+
 			if source, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "ts2phc.master"); ok {
 				iface.Source = getSource(source)
 			} else {
 				// if not defined here, use source defined at nmea section
-				iface.Source = nmea_source
+				iface.Source = nmeaSource
 			}
 			if masterOnly, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "masterOnly"); ok {
 				// TODO add error handling
 				iface.IsMaster, _ = strconv.ParseBool(strings.TrimSpace(masterOnly))
 			}
-			ifaces = append(ifaces, config.Iface{
-				Name:   iface.Name,
-				Source: iface.Source,
-				PhcId:  iface.PhcId,
-			})
+
+			ifaces = append(ifaces, iface)
+		}
+	}
+	// Note: calculating aliases based only on the values in
+	// the config means that aliases might change due to changes in the
+	// interfaces supplied.
+	// However it means we will only fallback if actually required.
+	alias.CalculateAliases(ifaces.GetIfNamesGroupedByPhc())
+
+	return ifaces
+}
+
+// RenderPtp4lConf outputs ptp4l config as string
+func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces) {
+	ifaces = conf.getInterfaces()
+
+	configOut = fmt.Sprintf("#profile: %s\n", conf.profile_name)
+
+	for _, section := range conf.sections {
+		configOut = fmt.Sprintf("%s\n%s", configOut, section.sectionName)
+		if section.sectionName != GlobalSectionName && section.sectionName != NmeaSectionName && section.sectionName != UnicastSectionName {
+			ifName := getSectionName(section.sectionName)
+			configOut += fmt.Sprintf("\n#alias: %s", alias.GetAlias(ifName))
 		}
 		for _, option := range section.options {
 			k := option.key
@@ -395,5 +417,6 @@ func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces
 			configOut = fmt.Sprintf("%s\n%s %s", configOut, k, v)
 		}
 	}
+
 	return configOut, ifaces
 }
