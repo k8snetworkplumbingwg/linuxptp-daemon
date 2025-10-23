@@ -145,6 +145,14 @@ var testCases = []TestCase{
 		expectedPpsStatus:           SKIP,
 		expectedClockClassMetrics:   SKIP,
 		expectedInterfaceRole:       SKIP,
+		Ifaces: []config.Iface{
+			{
+				Name:     "ens2f0",
+				IsMaster: false,
+				Source:   "",
+				PhcId:    "phcid-1",
+			},
+		},
 	},
 	{
 		log:                         "ts2phc[1896327.319]: [ts2phc.0.config] dev/ptp4  offset    -1 s2 freq      -2",
@@ -187,6 +195,14 @@ var testCases = []TestCase{
 		expectedPpsStatus:           SKIP,
 		expectedClockClassMetrics:   SKIP,
 		expectedInterfaceRole:       SKIP,
+		Ifaces: []config.Iface{
+			{
+				Name:     "ens2f0",
+				IsMaster: false,
+				Source:   "",
+				PhcId:    "phcid-1",
+			},
+		},
 	},
 	{
 		log:                         "ptp4l[8542280.698]: [ptp4l.0.config] port 1: UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
@@ -289,6 +305,14 @@ var testCases = []TestCase{
 		expectedPpsStatus:           SKIP,
 		expectedClockClassMetrics:   SKIP,
 		expectedInterfaceRole:       SKIP,
+		Ifaces: []config.Iface{
+			{
+				Name:     "ens10f0",
+				IsMaster: false,
+				Source:   "",
+				PhcId:    "phcid-3",
+			},
+		},
 	},
 	// Additional comprehensive test cases
 	{
@@ -341,6 +365,14 @@ var testCases = []TestCase{
 		expectedPpsStatus:           SKIP,
 		expectedClockClassMetrics:   SKIP,
 		expectedInterfaceRole:       SKIP,
+		Ifaces: []config.Iface{
+			{
+				Name:     "ens15f1",
+				IsMaster: false,
+				Source:   "",
+				PhcId:    "phcid-4",
+			},
+		},
 	},
 	{
 		log:                         "ts2phc[1896332.824]: [ts2phc.5.config] dev/ptp12 offset        777 s1 freq   -88888",
@@ -500,6 +532,14 @@ var testCases = []TestCase{
 		expectedPpsStatus:           SKIP,
 		expectedClockClassMetrics:   SKIP,
 		expectedInterfaceRole:       SKIP,
+		Ifaces: []config.Iface{
+			{
+				Name:     "ens40f0",
+				IsMaster: false,
+				Source:   "",
+				PhcId:    "phcid-40",
+			},
+		},
 	},
 	{
 		log:                         "phc2sys[1823133.400]: [phc2sys.2.config] CLOCK_REALTIME phc offset        42 s1 freq      +1 delay      1",
@@ -818,7 +858,7 @@ func initPopulateAndRenderPtp4lConfTestCase() []populateAndRenderPtp4lConfTestCa
 		{
 			profileName:    "OC",
 			testConf:       "[global]\nslaveOnly 1",
-			expectedOutput: "#profile: OC\n\n[global]\nslaveOnly 1\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens2f0]",
+			expectedOutput: "#profile: OC\n\n[global]\nslaveOnly 1\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens2f0]\n#alias: ens2fx",
 			testName:       "Basic OC test",
 			iface:          "ens2f0",
 			messageTag:     "test message_tag",
@@ -828,7 +868,7 @@ func initPopulateAndRenderPtp4lConfTestCase() []populateAndRenderPtp4lConfTestCa
 		{
 			profileName:    "BC",
 			testConf:       "[global]\nslaveOnly 0\n[ens1f0]\nmasterOnly 0\n[ens1f1]\nmasterOnly 1",
-			expectedOutput: "#profile: BC\n\n[global]\nslaveOnly 0\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens1f0]\nmasterOnly 0\n[ens1f1]\nmasterOnly 1",
+			expectedOutput: "#profile: BC\n\n[global]\nslaveOnly 0\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens1f0]\n#alias: ens1fx\nmasterOnly 0\n[ens1f1]\n#alias: ens1fx\nmasterOnly 1",
 			testName:       "Basic BC test",
 			iface:          "",
 			messageTag:     "test message_tag",
@@ -838,7 +878,7 @@ func initPopulateAndRenderPtp4lConfTestCase() []populateAndRenderPtp4lConfTestCa
 		{
 			profileName:    "GM",
 			testConf:       "[global]\nslaveOnly 0\n[ens1f0]\nmasterOnly 1\n[ens1f1]\nmasterOnly 1",
-			expectedOutput: "#profile: GM\n\n[global]\nslaveOnly 0\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens1f0]\nmasterOnly 1\n[ens1f1]\nmasterOnly 1",
+			expectedOutput: "#profile: GM\n\n[global]\nslaveOnly 0\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[ens1f0]\n#alias: ens1fx\nmasterOnly 1\n[ens1f1]\n#alias: ens1fx\nmasterOnly 1",
 			testName:       "Basic GM test",
 			iface:          "",
 			messageTag:     "test message_tag",
@@ -848,7 +888,7 @@ func initPopulateAndRenderPtp4lConfTestCase() []populateAndRenderPtp4lConfTestCa
 		{
 			profileName:    "SyncE",
 			testConf:       "[global]\nlogging_level 7\nuse_syslog 0\nverbose 1\n[<synce1>]\ndnu_prio 0xFF\nnetwork_option 2\nextended_tlv 1\nrecover_time 60\nclock_id\nmodule_name ice\n[enp59s0f0np0]\n[{SMA1}]\nboard_label SMA1\ninput_QL 0x1",
-			expectedOutput: "#profile: SyncE\n\n[global]\nlogging_level 7\nuse_syslog 0\nverbose 1\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[<synce1>]\ndnu_prio 0xFF\nnetwork_option 2\nextended_tlv 1\nrecover_time 60\nmodule_name ice\n[enp59s0f0np0]\n[{SMA1}]\nboard_label SMA1\ninput_QL 0x1",
+			expectedOutput: "#profile: SyncE\n\n[global]\nlogging_level 7\nuse_syslog 0\nverbose 1\nmessage_tag test message_tag\nuds_address /var/run/ptp4l.0.socket\n[<synce1>]\n#alias: <synce1>\ndnu_prio 0xFF\nnetwork_option 2\nextended_tlv 1\nrecover_time 60\nmodule_name ice\n[enp59s0f0np0]\n#alias: enp59s0f0np0\n[{SMA1}]\n#alias: {SMA1}\nboard_label SMA1\ninput_QL 0x1",
 			testName:       "Basic SyncE test",
 			iface:          "",
 			messageTag:     "test message_tag",

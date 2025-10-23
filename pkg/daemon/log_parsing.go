@@ -8,10 +8,10 @@ import (
 
 	"github.com/golang/glog"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
 func convertParserRoleToMetricsRole(role parserconstants.PTPPortRole) ptpPortRole {
@@ -83,7 +83,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 	// Convert interface from possible clock id
 	iface := process.ifaces.GetPhcID2IFace(ptpMetrics.Iface)
 	if iface != clockRealTime {
-		iface = utils.GetAlias(iface)
+		iface = alias.GetAlias(iface)
 	}
 
 	// Update PTP metrics using the parsed data
