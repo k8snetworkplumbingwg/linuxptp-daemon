@@ -268,7 +268,7 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 		StepsRemoved:        0,
 	}
 	glog.Infof("EGP %++v", egp)
-	go pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, egp)
+	go pmc.RunPMCExpSetExternalGMPropertiesNP(cfgName, egp)
 	e.AnnounceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
@@ -310,7 +310,7 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 
 	default:
 	}
-	go pmc.RunPMCExpSetGMSettings(e.LeadingClockData.controlledPortsConfig, gs)
+	go pmc.RunPMCExpSetGMSettings(cfgName, gs)
 }
 
 // this function runs in a goroutine
