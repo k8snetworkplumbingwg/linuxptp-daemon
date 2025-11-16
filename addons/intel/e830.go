@@ -68,7 +68,7 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 					for _, phc := range phcs {
 						pinPath := fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
 						glog.Infof("echo %s > %s", value, pinPath)
-						err = os.WriteFile(pinPath, []byte(value), 0666)
+						err = os.WriteFile(pinPath, []byte(value), 0o666)
 						if err != nil {
 							glog.Error("e830 failed to write " + value + " to " + pinPath + ": " + err.Error())
 						}
@@ -132,7 +132,8 @@ func E830(name string) (*plugin.Plugin, *interface{}) {
 	glog.Infof("registering e830 plugin")
 	hwplugins := []string{}
 	pluginData := E830PluginData{hwplugins: &hwplugins}
-	_plugin := plugin.Plugin{Name: pluginNameE830,
+	_plugin := plugin.Plugin{
+		Name:               pluginNameE830,
 		OnPTPConfigChange:  OnPTPConfigChangeE830,
 		AfterRunPTPCommand: AfterRunPTPCommandE830,
 		PopulateHwConfig:   PopulateHwConfigE830,

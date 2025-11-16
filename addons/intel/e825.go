@@ -96,7 +96,7 @@ func OnPTPConfigChangeE825(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 						for _, phc := range phcs {
 							pinPath := fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
 							glog.Infof("echo %s > %s", value, pinPath)
-							err = os.WriteFile(pinPath, []byte(value), 0666)
+							err = os.WriteFile(pinPath, []byte(value), 0o666)
 							if err != nil {
 								glog.Error("e825 failed to write " + value + " to " + pinPath + ": " + err.Error())
 							}
@@ -135,10 +135,6 @@ func OnPTPConfigChangeE825(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 				}
 			}
 			if e825Opts.PhaseInputs != nil {
-				if unitTest {
-					// Mock clock chain DPLL pins in unit test
-					clockChain.DpllPins = DpllPins
-				}
 				clockChain, err = InitClockChain(e825Opts, nodeProfile)
 				if err != nil {
 					return err
@@ -177,11 +173,11 @@ func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 					ublxArgs := ublxOpt.Args
 					glog.Infof("Running /usr/bin/ubxtool with args %s", strings.Join(ublxArgs, ", "))
 					stdout, _ = exec.Command("/usr/local/bin/ubxtool", ublxArgs...).CombinedOutput()
-					//stdout, err = exec.Command("/usr/local/bin/ubxtool", "-p", "STATUS").CombinedOutput()
+					// stdout, err = exec.Command("/usr/local/bin/ubxtool", "-p", "STATUS").CombinedOutput()
 					if data != nil && ublxOpt.ReportOutput {
 						_data := *data
 						glog.Infof("Saving status to hwconfig: %s", string(stdout))
-						var pluginData = _data.(*E825PluginData)
+						pluginData := _data.(*E825PluginData)
 						_pluginData := *pluginData
 						statusString := fmt.Sprintf("ublx data: %s", string(stdout))
 						*_pluginData.hwplugins = append(*_pluginData.hwplugins, statusString)
@@ -222,7 +218,7 @@ func PopulateHwConfigE825(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error 
 	//*hwconfigs = append(*hwconfigs, hwConfig)
 	if data != nil {
 		_data := *data
-		var pluginData = _data.(*E825PluginData)
+		pluginData := _data.(*E825PluginData)
 		_pluginData := *pluginData
 		if _pluginData.hwplugins != nil {
 			for _, _hwconfig := range *_pluginData.hwplugins {
@@ -245,7 +241,8 @@ func E825(name string) (*plugin.Plugin, *interface{}) {
 	glog.Infof("registering e825 plugin")
 	hwplugins := []string{}
 	pluginData := E825PluginData{hwplugins: &hwplugins}
-	_plugin := plugin.Plugin{Name: "e825",
+	_plugin := plugin.Plugin{
+		Name:               "e825",
 		OnPTPConfigChange:  OnPTPConfigChangeE825,
 		AfterRunPTPCommand: AfterRunPTPCommandE825,
 		PopulateHwConfig:   PopulateHwConfigE825,

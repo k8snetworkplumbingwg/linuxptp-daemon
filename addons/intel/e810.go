@@ -57,8 +57,10 @@ done
 echo "Disabled all SMA and U.FL Connections"
 `
 
-var unitTest bool
-var clockChain = &ClockChain{}
+var (
+	unitTest   bool
+	clockChain = &ClockChain{}
+)
 
 // For mocking DPLL pin info
 var DpllPins = []*dpll_netlink.PinInfo{}
@@ -110,8 +112,10 @@ func getDefaultUblxCmds() []E810UblxCmds {
 		ReportOutput: false,
 		Args:         []string{"-p", "SAVE"},
 	}
-	return []E810UblxCmds{cfgMsgNavClock, cfgMsgNavStatus, cfgMsgDisableSA, cfgMsgDisableSV,
-		cfgMsgDisableVTG, cfgMsgDisableGST, cfgMsgDisableZDA, cfgMsgDisableGBS, cfgSave}
+	return []E810UblxCmds{
+		cfgMsgNavClock, cfgMsgNavStatus, cfgMsgDisableSA, cfgMsgDisableSV,
+		cfgMsgDisableVTG, cfgMsgDisableGST, cfgMsgDisableZDA, cfgMsgDisableGBS, cfgSave,
+	}
 }
 
 func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
@@ -159,7 +163,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 						for _, phc := range phcs {
 							pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
 							glog.Infof("echo %s > %s", value, pinPath)
-							err = os.WriteFile(pinPath, []byte(value), 0666)
+							err = os.WriteFile(pinPath, []byte(value), 0o666)
 							if err != nil {
 								glog.Error("e810 failed to write " + value + " to " + pinPath + ": " + err.Error())
 							}
@@ -192,10 +196,6 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				}
 			}
 			if e810Opts.PhaseInputs != nil {
-				if unitTest {
-					// Mock clock chain DPLL pins in unit test
-					clockChain.DpllPins = DpllPins
-				}
 				clockChain, err = InitClockChain(e810Opts, nodeProfile)
 				if err != nil {
 					return err
@@ -233,11 +233,11 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 					ublxArgs := ublxOpt.Args
 					glog.Infof("Running /usr/bin/ubxtool with args %s", strings.Join(ublxArgs, ", "))
 					stdout, _ = exec.Command("/usr/local/bin/ubxtool", ublxArgs...).CombinedOutput()
-					//stdout, err = exec.Command("/usr/local/bin/ubxtool", "-p", "STATUS").CombinedOutput()
+					// stdout, err = exec.Command("/usr/local/bin/ubxtool", "-p", "STATUS").CombinedOutput()
 					if data != nil && ublxOpt.ReportOutput {
 						_data := *data
 						glog.Infof("Saving status to hwconfig: %s", string(stdout))
-						var pluginData = _data.(*E810PluginData)
+						pluginData := _data.(*E810PluginData)
 						_pluginData := *pluginData
 						statusString := fmt.Sprintf("ublx data: %s", string(stdout))
 						*_pluginData.hwplugins = append(*_pluginData.hwplugins, statusString)
@@ -277,7 +277,7 @@ func PopulateHwConfigE810(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error 
 	//*hwconfigs = append(*hwconfigs, hwConfig)
 	if data != nil {
 		_data := *data
-		var pluginData = _data.(*E810PluginData)
+		pluginData := _data.(*E810PluginData)
 		_pluginData := *pluginData
 		if _pluginData.hwplugins != nil {
 			for _, _hwconfig := range *_pluginData.hwplugins {
@@ -299,7 +299,8 @@ func E810(name string) (*plugin.Plugin, *interface{}) {
 	glog.Infof("registering e810 plugin")
 	hwplugins := []string{}
 	pluginData := E810PluginData{hwplugins: &hwplugins}
-	_plugin := plugin.Plugin{Name: "e810",
+	_plugin := plugin.Plugin{
+		Name:               "e810",
 		OnPTPConfigChange:  OnPTPConfigChangeE810,
 		AfterRunPTPCommand: AfterRunPTPCommandE810,
 		PopulateHwConfig:   PopulateHwConfigE810,
