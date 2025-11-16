@@ -41,8 +41,8 @@ const (
 	MaxInSpecOffset ValueType = "max-in-spec"
 	// FaultyPhaseOffset is a value assigned to the phase offset when free-running
 	FaultyPhaseOffset int64 = 99999999999
-	// StaleEventAfter is the number of seconds after which an event is considered stale
-	StaleEventAfter int64 = 2
+	// StaleEventAfter is the number of milliseconds after which an event is considered stale
+	StaleEventAfter int64 = 2000
 )
 
 // LeadingClockParams ... leading clock parameters includes state
@@ -76,7 +76,9 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 	// information elements change
 	updateDownstreamData := false
 	leadingTS2phcActive := false
-
+	if event.ProcessName == PTP4lProcessName {
+		glog.Info("PTP4l event: %++v", event)
+	}
 	leadingInterface := e.getLeadingInterfaceBC()
 	if leadingInterface == LEADING_INTERFACE_UNKNOWN {
 		glog.Infof("Leading interface is not yet identified, clock state reporting delayed.")
@@ -416,7 +418,7 @@ func (e *EventHandler) isSourceLostBC(cfgName string) bool {
 
 func (e *EventHandler) getLargestOffset(cfgName string) int64 {
 	worstOffset := FaultyPhaseOffset
-	staleTime := (time.Now().Unix() - StaleEventAfter) * 1000
+	staleTime := time.Now().UnixMilli() - StaleEventAfter
 	if data, ok := e.data[cfgName]; ok {
 		for _, d := range data {
 			for _, dd := range d.Details {

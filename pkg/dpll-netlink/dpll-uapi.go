@@ -313,6 +313,53 @@ func GetPinDirection(d uint32) string {
 	return ""
 }
 
+// ParsePinType parses a human-readable pin type into its numeric code.
+// Supported: mux, ext, synce-eth-port, int-oscillator, gnss.
+func ParsePinType(tp string) uint32 {
+	switch strings.ToLower(tp) {
+	case "mux":
+		return 1
+	case "ext":
+		return 2
+	case "synce-eth-port":
+		return 3
+	case "int-oscillator":
+		return 4
+	case "gnss":
+		return 5
+	default:
+		return 0
+	}
+}
+
+// ParsePinDirection parses a human-readable pin direction into its numeric code.
+// Supported: input, output.
+func ParsePinDirection(d string) uint32 {
+	switch strings.ToLower(d) {
+	case "input":
+		return PinDirectionInput
+	case "output":
+		return PinDirectionOutput
+	default:
+		return 0
+	}
+}
+
+// ParsePinState parses a human-readable pin state into its numeric code.
+// Supported: connected, disconnected, selectable.
+func ParsePinState(s string) uint32 {
+	switch strings.ToLower(s) {
+	case "connected":
+		return PinStateConnected
+	case "disconnected":
+		return PinStateDisconnected
+	case "selectable":
+		return PinStateSelectable
+	default:
+		return 0
+	}
+}
+
 // GetPinCapabilities returns DPLL pin capabilities as a csv
 func GetPinCapabilities(c uint32) string {
 	cMap := map[int]string{
