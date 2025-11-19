@@ -1,7 +1,6 @@
 package intel
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -84,7 +83,7 @@ func OnPTPConfigChangeE825(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 					if zlErr == nil {
 						(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(zlClockID, 10)
 					} else {
-						(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(getClockIDE825(device), 10)
+						(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(getPCIClockID(device), 10)
 					}
 					for pin, value := range pins {
 						deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
@@ -128,7 +127,7 @@ func OnPTPConfigChangeE825(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 					if zlErr == nil {
 						clockIDUsed = zlClockID
 					} else {
-						clockIDUsed = getClockIDE825(iface)
+						clockIDUsed = getPCIClockID(iface)
 					}
 					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(clockIDUsed, 10), pinProperty}, ".")
 					(*nodeProfile).PtpSettings[key] = value
@@ -249,37 +248,6 @@ func E825(name string) (*plugin.Plugin, *interface{}) {
 	}
 	var iface interface{} = &pluginData
 	return &_plugin, &iface
-}
-
-func getClockIDE825(device string) uint64 {
-	const (
-		PCI_EXT_CAP_ID_DSN       = 3   //nolint
-		PCI_CFG_SPACE_SIZE       = 256 //nolint
-		PCI_EXT_CAP_NEXT_OFFSET  = 2   //nolint
-		PCI_EXT_CAP_OFFSET_SHIFT = 4   //nolint
-		PCI_EXT_CAP_DATA_OFFSET  = 4   //nolint
-	)
-	b, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/device/config", device))
-	if err != nil {
-		glog.Error(err)
-		return 0
-	}
-	// Extended capability space starts right on PCI_CFG_SPACE
-	var offset uint16 = PCI_CFG_SPACE_SIZE
-	var id uint16
-	for {
-		id = binary.LittleEndian.Uint16(b[offset:])
-		if id != PCI_EXT_CAP_ID_DSN {
-			if id == 0 {
-				glog.Errorf("can't find DSN for device %s", device)
-				return 0
-			}
-			offset = binary.LittleEndian.Uint16(b[offset+PCI_EXT_CAP_NEXT_OFFSET:]) >> PCI_EXT_CAP_OFFSET_SHIFT
-			continue
-		}
-		break
-	}
-	return binary.LittleEndian.Uint64(b[offset+PCI_EXT_CAP_DATA_OFFSET:])
 }
 
 // getClockIDByModule returns ClockID for a given DPLL module name, preferring PPS type if present
