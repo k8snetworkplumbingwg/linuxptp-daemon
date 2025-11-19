@@ -53,7 +53,8 @@ func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 
 func Test_ProcessProfileTbcE810(t *testing.T) {
 	// Setup filesystem mock for TBC profile (3 devices with pins)
-	mockFS := &MockFileSystem{}
+	mockFS, restore := setupMockFS()
+	defer restore()
 	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
 
 	// profile-tbc.yaml has pins for ens4f0, ens5f0, ens8f0 (3 devices)
@@ -71,11 +72,6 @@ func Test_ProcessProfileTbcE810(t *testing.T) {
 		mockFS.ExpectWriteFile("", []byte(""), os.FileMode(0o666), nil) // Extra WriteFile calls
 	}
 
-	// Replace global filesystem with mock
-	originalFS := filesystem
-	filesystem = mockFS
-	defer func() { filesystem = originalFS }()
-
 	// Set unitTest for MockPins() call
 	unitTest = true
 	defer func() { unitTest = false }()
@@ -92,11 +88,13 @@ func Test_ProcessProfileTbcE810(t *testing.T) {
 	assert.Equal(t, "5799633565432596414", clockChain.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
 	assert.Equal(t, 9, len(clockChain.LeadingNIC.Pins), "wrong number of configurable pins")
 	assert.Equal(t, "ens4f1", clockChain.LeadingNIC.UpstreamPort, "wrong upstream port")
+	// Note: Intentionally NOT calling mockFS.VerifyAlCalls(t) because the mockFS is set up permissibly, not for enforcing
 }
 
 func Test_ProcessProfileTtscE810(t *testing.T) {
 	// Setup filesystem mock for T-TSC profile (1 device with pins)
-	mockFS := &MockFileSystem{}
+	mockFS, restore := setupMockFS()
+	defer restore()
 	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
 
 	// profile-t-tsc.yaml has pins for ens4f0 only
@@ -110,11 +108,6 @@ func Test_ProcessProfileTtscE810(t *testing.T) {
 		mockFS.ExpectReadDir("", phcEntries, nil)                       // Extra ReadDir calls
 		mockFS.ExpectWriteFile("", []byte(""), os.FileMode(0o666), nil) // Extra WriteFile calls
 	}
-
-	// Replace global filesystem with mock
-	originalFS := filesystem
-	filesystem = mockFS
-	defer func() { filesystem = originalFS }()
 
 	// Set unitTest for MockPins() call
 	unitTest = true
@@ -235,13 +228,9 @@ func TestEnableE810Outputs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup mock filesystem
-			mockFS := &MockFileSystem{}
+			mockFS, restore := setupMockFS()
+			defer restore()
 			tt.setupMock(mockFS)
-
-			// Replace global filesystem with mock
-			originalFS := filesystem
-			filesystem = mockFS
-			defer func() { filesystem = originalFS }()
 
 			// Execute function
 			err := tt.clockChain.EnableE810Outputs()

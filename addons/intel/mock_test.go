@@ -10,13 +10,23 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+// setupMockFS prepares filesystem mocking and return a function to restore it
+func setupMockFS() (*MockFileSystem, func()) {
+	mfs := &MockFileSystem{}
+	originalFS := filesystem
+	filesystem = mfs
+	return mfs, func() { filesystem = originalFS }
+}
+
 // MockFileSystem is a simple mock implementation of FileSystemInterface
 type MockFileSystem struct {
 	// Expected calls and responses
 	readDirCalls     []ReadDirCall
 	writeFileCalls   []WriteFileCall
+	readFileCalls    []ReadFileCall
 	currentReadDir   int
 	currentWriteFile int
+	currentReadFile  int
 }
 
 type ReadDirCall struct {
@@ -29,6 +39,12 @@ type WriteFileCall struct {
 	expectedPath string
 	expectedData []byte
 	expectedPerm os.FileMode
+	returnError  error
+}
+
+type ReadFileCall struct {
+	expectedPath string
+	returnData   []byte
 	returnError  error
 }
 
@@ -45,6 +61,14 @@ func (m *MockFileSystem) ExpectWriteFile(path string, data []byte, perm os.FileM
 		expectedPath: path,
 		expectedData: data,
 		expectedPerm: perm,
+		returnError:  err,
+	})
+}
+
+func (m *MockFileSystem) ExpectReadFile(path string, data []byte, err error) {
+	m.readFileCalls = append(m.readFileCalls, ReadFileCall{
+		expectedPath: path,
+		returnData:   data,
 		returnError:  err,
 	})
 }
@@ -68,15 +92,28 @@ func (m *MockFileSystem) WriteFile(filename string, _ []byte, _ os.FileMode) err
 	}
 	call := m.writeFileCalls[m.currentWriteFile]
 	m.currentWriteFile++
-	if call.expectedPath != filename {
+	if call.expectedPath != "" && call.expectedPath != filename {
 		return errors.New("WriteFile called with unexpected path")
 	}
 	return call.returnError
 }
 
+func (m *MockFileSystem) ReadFile(filename string) ([]byte, error) {
+	if m.currentReadFile >= len(m.readFileCalls) {
+		return nil, errors.New("Unexpected ReadFile call")
+	}
+	call := m.readFileCalls[m.currentReadFile]
+	m.currentReadFile++
+	if call.expectedPath != "" && call.expectedPath != filename {
+		return nil, errors.New("ReadFile called with unexpected filename")
+	}
+	return call.returnData, call.returnError
+}
+
 func (m *MockFileSystem) VerifyAllCalls(t *testing.T) {
 	assert.Equal(t, len(m.readDirCalls), m.currentReadDir, "Not all expected ReadDir calls were made")
 	assert.Equal(t, len(m.writeFileCalls), m.currentWriteFile, "Not all expected WriteFile calls were made")
+	assert.Equal(t, len(m.readFileCalls), m.currentReadFile, "Not all expected ReadFile calls were made")
 }
 
 // MockDirEntry implements os.DirEntry for testing
