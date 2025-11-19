@@ -58,7 +58,7 @@ echo "Disabled all SMA and U.FL Connections"
 
 var (
 	unitTest   bool
-	clockChain = &ClockChain{}
+	clockChain ClockChainInterface = &ClockChain{}
 )
 
 // For mocking DPLL pin info
@@ -199,8 +199,8 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				if err != nil {
 					return err
 				}
-				(*nodeProfile).PtpSettings["leadingInterface"] = clockChain.LeadingNIC.Name
-				(*nodeProfile).PtpSettings["upstreamPort"] = clockChain.LeadingNIC.UpstreamPort
+				(*nodeProfile).PtpSettings["leadingInterface"] = clockChain.GetLeadingNIC().Name
+				(*nodeProfile).PtpSettings["upstreamPort"] = clockChain.GetLeadingNIC().UpstreamPort
 			} else {
 				glog.Error("no clock chain set")
 			}

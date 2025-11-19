@@ -2,6 +2,7 @@ package intel
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -84,11 +85,12 @@ func Test_ProcessProfileTbcE810(t *testing.T) {
 	p, d := E810("e810")
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
-	assert.Equal(t, ClockTypeTBC, clockChain.Type, "identified a wrong clock type")
-	assert.Equal(t, "5799633565432596414", clockChain.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
-	assert.Equal(t, 9, len(clockChain.LeadingNIC.Pins), "wrong number of configurable pins")
-	assert.Equal(t, "ens4f1", clockChain.LeadingNIC.UpstreamPort, "wrong upstream port")
-	// Note: Intentionally NOT calling mockFS.VerifyAlCalls(t) because the mockFS is set up permissibly, not for enforcing
+	ccData := clockChain.(*ClockChain)
+	assert.Equal(t, ClockTypeTBC, ccData.Type, "identified a wrong clock type")
+	assert.Equal(t, "5799633565432596414", ccData.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
+	assert.Equal(t, 9, len(ccData.LeadingNIC.Pins), "wrong number of configurable pins")
+	assert.Equal(t, "ens4f1", ccData.LeadingNIC.UpstreamPort, "wrong upstream port")
+	// Note: Intentionally NOT calling mockFS.VerifyAllCalls(t) because the mockFS is set up permissibly, not for enforcing
 }
 
 func Test_ProcessProfileTtscE810(t *testing.T) {
@@ -121,10 +123,12 @@ func Test_ProcessProfileTtscE810(t *testing.T) {
 	p, d := E810("e810")
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
-	assert.Equal(t, ClockTypeTBC, clockChain.Type, "identified a wrong clock type")
-	assert.Equal(t, "5799633565432596414", clockChain.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
-	assert.Equal(t, 9, len(clockChain.LeadingNIC.Pins), "wrong number of configurable pins")
-	assert.Equal(t, "ens4f1", clockChain.LeadingNIC.UpstreamPort, "wrong upstream port")
+	ccData := clockChain.(*ClockChain)
+	assert.Equal(t, ClockTypeTBC, ccData.Type, "identified a wrong clock type")
+	assert.Equal(t, "5799633565432596414", ccData.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
+	assert.Equal(t, 9, len(ccData.LeadingNIC.Pins), "wrong number of configurable pins")
+	assert.Equal(t, "ens4f1", ccData.LeadingNIC.UpstreamPort, "wrong upstream port")
+	// Note: Intentionally NOT calling mockFS.VerifyAllCalls(t) because the mockFS is set up permissibly, not for enforcing
 }
 
 func Test_ProcessProfileTGMOld(t *testing.T) {
@@ -247,6 +251,47 @@ func TestEnableE810Outputs(t *testing.T) {
 			mockFS.VerifyAllCalls(t)
 		})
 	}
+}
+
+func Test_AfterRunPTPCommandE810(t *testing.T) {
+	unitTest = true
+	profile, err := loadProfile("./testdata/profile-tgm.yaml")
+	assert.NoError(t, err)
+	p, d := E810("e810")
+
+	err = p.AfterRunPTPCommand(d, profile, "bad command")
+	assert.NoError(t, err)
+
+	mClockChain := &mockClockChain{}
+	clockChain = mClockChain
+	err = p.AfterRunPTPCommand(d, profile, "reset-to-default")
+	assert.NoError(t, err)
+	mClockChain.assertCallCounts(t, 0, 0, 1)
+
+	mClockChain.returnErr = fmt.Errorf("Fake error")
+	err = p.AfterRunPTPCommand(d, profile, "reset-to-default")
+	assert.Error(t, err)
+	mClockChain.assertCallCounts(t, 0, 0, 2)
+
+	mClockChain = &mockClockChain{}
+	clockChain = mClockChain
+	err = p.AfterRunPTPCommand(d, profile, "tbc-ho-entry")
+	assert.NoError(t, err)
+	mClockChain.assertCallCounts(t, 0, 1, 0)
+	mClockChain.returnErr = fmt.Errorf("Fake error")
+	err = p.AfterRunPTPCommand(d, profile, "tbc-ho-entry")
+	assert.Error(t, err)
+	mClockChain.assertCallCounts(t, 0, 2, 0)
+
+	mClockChain = &mockClockChain{}
+	clockChain = mClockChain
+	err = p.AfterRunPTPCommand(d, profile, "tbc-ho-exit")
+	assert.NoError(t, err)
+	mClockChain.assertCallCounts(t, 1, 0, 0)
+	mClockChain.returnErr = fmt.Errorf("Fake error")
+	err = p.AfterRunPTPCommand(d, profile, "tbc-ho-exit")
+	assert.Error(t, err)
+	mClockChain.assertCallCounts(t, 2, 0, 0)
 }
 
 func Test_PopulateHwConfdigE810(t *testing.T) {

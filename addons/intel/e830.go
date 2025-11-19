@@ -107,8 +107,8 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 				if ierr != nil {
 					return ierr
 				}
-				(*nodeProfile).PtpSettings["leadingInterface"] = chain.LeadingNIC.Name
-				(*nodeProfile).PtpSettings["upstreamPort"] = chain.LeadingNIC.UpstreamPort
+				(*nodeProfile).PtpSettings["leadingInterface"] = chain.GetLeadingNIC().Name
+				(*nodeProfile).PtpSettings["upstreamPort"] = chain.GetLeadingNIC().UpstreamPort
 			} else {
 				glog.Error("no clock chain set")
 			}

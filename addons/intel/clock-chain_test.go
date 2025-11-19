@@ -115,13 +115,14 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify we have the expected clock chain structure
-	assert.Equal(t, ClockTypeTBC, clockChain.Type)
-	assert.Equal(t, "ens4f0", clockChain.LeadingNIC.Name)
-	assert.Equal(t, 2, len(clockChain.OtherNICs), "should have 2 other NICs (ens5f0, ens8f0)")
+	ccData := clockChain.(*ClockChain)
+	assert.Equal(t, ClockTypeTBC, ccData.Type)
+	assert.Equal(t, "ens4f0", ccData.LeadingNIC.Name)
+	assert.Equal(t, 2, len(ccData.OtherNICs), "should have 2 other NICs (ens5f0, ens8f0)")
 
 	// Verify each NIC has pins populated
-	assert.Greater(t, len(clockChain.LeadingNIC.Pins), 0, "leading NIC should have pins")
-	for i, nic := range clockChain.OtherNICs {
+	assert.Greater(t, len(ccData.LeadingNIC.Pins), 0, "leading NIC should have pins")
+	for i, nic := range ccData.OtherNICs {
 		assert.Greater(t, len(nic.Pins), 0, "other NIC %d should have pins", i)
 	}
 
@@ -140,7 +141,7 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 
 	for _, cmd := range *commands {
 		// Find which pin this command refers to by searching all pins
-		for _, pin := range clockChain.DpllPins {
+		for _, pin := range ccData.DpllPins {
 			if pin.ID == cmd.ID {
 				clockIDsSeen[pin.ClockID] = true
 				pinLabelsSeen[pin.BoardLabel] = true

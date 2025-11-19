@@ -138,8 +138,8 @@ func OnPTPConfigChangeE825(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 				if err != nil {
 					return err
 				}
-				(*nodeProfile).PtpSettings["leadingInterface"] = clockChain.LeadingNIC.Name
-				(*nodeProfile).PtpSettings["upstreamPort"] = clockChain.LeadingNIC.UpstreamPort
+				(*nodeProfile).PtpSettings["leadingInterface"] = clockChain.GetLeadingNIC().Name
+				(*nodeProfile).PtpSettings["upstreamPort"] = clockChain.GetLeadingNIC().UpstreamPort
 			} else {
 				glog.Error("no clock chain set")
 			}
