@@ -18,7 +18,7 @@ import (
 
 type E810Opts struct {
 	EnableDefaultConfig bool                         `json:"enableDefaultConfig"`
-	UblxCmds            []E810UblxCmds               `json:"ublxCmds"`
+	UblxCmds            UblxCmdList                  `json:"ublxCmds"`
 	DevicePins          map[string]map[string]string `json:"pins"`
 	DpllSettings        map[string]uint64            `json:"settings"`
 	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
@@ -64,54 +64,54 @@ var (
 // For mocking DPLL pin info
 var DpllPins = []*dpll_netlink.PinInfo{}
 
-func getDefaultUblxCmds() []E810UblxCmds {
+func getDefaultUblxCmds() UblxCmdList {
 	// Ublx command to output NAV-CLOCK every second
-	cfgMsgNavClock := E810UblxCmds{
+	cfgMsgNavClock := UblxCmd{
 		ReportOutput: false,
 		Args:         []string{"-p", "CFG-MSG,1,34,1"},
 	}
 	// Ublx command to output NAV-STATUS every second
-	cfgMsgNavStatus := E810UblxCmds{
+	cfgMsgNavStatus := UblxCmd{
 		ReportOutput: false,
 		Args:         []string{"-p", "CFG-MSG,1,3,1"},
 	}
 
 	// Ublx command to disable SA messages
-	cfgMsgDisableSA := E810UblxCmds{
+	cfgMsgDisableSA := UblxCmd{
 		ReportOutput: false,
 		Args:         []string{"-p", "CFG-MSG,0xf0,0x02,0"},
 	}
 	// Ublx command to disable SV messages
-	cfgMsgDisableSV := E810UblxCmds{
+	cfgMsgDisableSV := UblxCmd{
 		ReportOutput: false,
 		Args:         []string{"-p", "CFG-MSG,0xf0,0x03,0"},
 	}
 	// Ublx command to disable VTG messages
-	cfgMsgDisableVTG := E810UblxCmds{
+	cfgMsgDisableVTG := UblxCmd{
 		ReportOutput: false,
 		Args:         []string{"-z", "CFG-MSGOUT-NMEA_ID_VTG_I2C,0"},
 	}
 	// Ublx command to disable GST messages
-	cfgMsgDisableGST := E810UblxCmds{
+	cfgMsgDisableGST := UblxCmd{
 		ReportOutput: false,
 		Args:         []string{"-z", "CFG-MSGOUT-NMEA_ID_GST_I2C,0"},
 	}
 	// Ublx command to disable ZDA messages
-	cfgMsgDisableZDA := E810UblxCmds{
+	cfgMsgDisableZDA := UblxCmd{
 		ReportOutput: false,
 		Args:         []string{"-z", "CFG-MSGOUT-NMEA_ID_ZDA_I2C,0"},
 	}
 	// Ublx command to disable GBS messages
-	cfgMsgDisableGBS := E810UblxCmds{
+	cfgMsgDisableGBS := UblxCmd{
 		ReportOutput: false,
 		Args:         []string{"-z", "CFG-MSGOUT-NMEA_ID_GBS_I2C,0"},
 	}
 	// Ublx command to save configuration to storage
-	cfgSave := E810UblxCmds{
+	cfgSave := UblxCmd{
 		ReportOutput: false,
 		Args:         []string{"-p", "SAVE"},
 	}
-	return []E810UblxCmds{
+	return UblxCmdList{
 		cfgMsgNavClock, cfgMsgNavStatus, cfgMsgDisableSA, cfgMsgDisableSV,
 		cfgMsgDisableVTG, cfgMsgDisableGST, cfgMsgDisableZDA, cfgMsgDisableGBS, cfgSave,
 	}
@@ -210,11 +210,11 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 }
 
 func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, command string) error {
+	pluginData := (*data).(*E810PluginData)
 	glog.Info("calling AfterRunPTPCommandE810 for e810 plugin")
 	var e810Opts E810Opts
 	var err error
 	var optsByteArray []byte
-	var stdout []byte
 
 	e810Opts.EnableDefaultConfig = false
 
@@ -228,22 +228,10 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			switch command {
 			case "gpspipe":
 				glog.Infof("AfterRunPTPCommandE810 doing ublx config for command: %s", command)
-				for _, ublxOpt := range append(e810Opts.UblxCmds, getDefaultUblxCmds()...) {
-					ublxArgs := ublxOpt.Args
-					glog.Infof("Running /usr/bin/ubxtool with args %s", strings.Join(ublxArgs, ", "))
-					stdout, _ = exec.Command("/usr/local/bin/ubxtool", ublxArgs...).CombinedOutput()
-					// stdout, err = exec.Command("/usr/local/bin/ubxtool", "-p", "STATUS").CombinedOutput()
-					if data != nil && ublxOpt.ReportOutput {
-						_data := *data
-						glog.Infof("Saving status to hwconfig: %s", string(stdout))
-						pluginData := _data.(*E810PluginData)
-						_pluginData := *pluginData
-						statusString := fmt.Sprintf("ublx data: %s", string(stdout))
-						*_pluginData.hwplugins = append(*_pluginData.hwplugins, statusString)
-					} else {
-						glog.Infof("Not saving status to hwconfig: %s", string(stdout))
-					}
-				}
+				// Execute user-supplied UblxCmds first:
+				*pluginData.hwplugins = append(*pluginData.hwplugins, e810Opts.UblxCmds.runAll()...)
+				// Finish with the default commands:
+				*pluginData.hwplugins = append(*pluginData.hwplugins, getDefaultUblxCmds().runAll()...)
 			case "tbc-ho-exit":
 				_, err = clockChain.EnterNormalTBC()
 				if err != nil {
