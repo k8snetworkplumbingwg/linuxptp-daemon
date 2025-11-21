@@ -14,25 +14,9 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
-var pluginNameE825 = "e825"
-
-// E825Opts is the options structure for e825 plugin
-type E825Opts struct {
-	EnableDefaultConfig bool                         `json:"enableDefaultConfig"`
-	UblxCmds            UblxCmdList                  `json:"ublxCmds"`
-	DevicePins          DevicePinConfig              `json:"pins"`
-	DpllSettings        map[string]uint64            `json:"settings"`
-	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
-	PhaseInputs         []PhaseInputs                `json:"interconnections"`
-}
-
-// GetPhaseInputs implements PhaseInputsProvider
-func (o E825Opts) GetPhaseInputs() []PhaseInputs { return o.PhaseInputs }
-
-// E825PluginData is the data structure for e825 plugin
-type E825PluginData struct {
-	hwplugins *[]string
-}
+const (
+	pluginNameE825 = "e825"
+)
 
 // EnableE825PTPConfig is the script to enable default e825 PTP configuration
 var EnableE825PTPConfig = `
@@ -45,7 +29,7 @@ echo "No E825 specific configuration is needed"
 // OnPTPConfigChangeE825 performs actions on PTP config change for e825 plugin
 func OnPTPConfigChangeE825(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error {
 	glog.Info("calling onPTPConfigChange for e825 plugin")
-	var e825Opts E825Opts
+	var e825Opts UserData
 	var err error
 	var optsByteArray []byte
 	for name, opts := range (*nodeProfile).Plugins {
@@ -133,92 +117,14 @@ func OnPTPConfigChangeE825(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 	return nil
 }
 
-// AfterRunPTPCommandE825 performs actions after certain PTP commands for e825 plugin
-func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, command string) error {
-	pluginData := (*data).(*E825PluginData)
-	glog.Info("calling AfterRunPTPCommandE825 for e825 plugin")
-	var e825Opts E825Opts
-	var err error
-	var optsByteArray []byte
-
-	e825Opts.EnableDefaultConfig = false
-
-	for name, opts := range (*nodeProfile).Plugins {
-		if name == pluginNameE825 {
-			optsByteArray, _ = json.Marshal(opts)
-			err = json.Unmarshal(optsByteArray, &e825Opts)
-			if err != nil {
-				glog.Error("e825 failed to unmarshal opts: " + err.Error())
-			}
-			switch command {
-			case "gpspipe":
-				glog.Infof("AfterRunPTPCommandE810 doing ublx config for command: %s", command)
-				// Execute user-supplied UblxCmds first:
-				*pluginData.hwplugins = append(*pluginData.hwplugins, e825Opts.UblxCmds.runAll()...)
-				// Finish with the default commands:
-				*pluginData.hwplugins = append(*pluginData.hwplugins, defaultUblxCmds().runAll()...)
-			case "tbc-ho-exit":
-				_, err = clockChain.EnterNormalTBC()
-				if err != nil {
-					return fmt.Errorf("e825: failed to enter T-BC normal mode")
-				}
-				glog.Info("e825: enter T-BC normal mode")
-			case "tbc-ho-entry":
-				_, err = clockChain.EnterHoldoverTBC()
-				if err != nil {
-					return fmt.Errorf("e825: failed to enter T-BC holdover")
-				}
-				glog.Info("e825: enter T-BC holdover")
-			case "reset-to-default":
-				_, err = clockChain.SetPinDefaults()
-				if err != nil {
-					return fmt.Errorf("e825: failed to reset pins to default")
-				}
-				glog.Info("e825: reset pins to default")
-			default:
-				glog.Infof("AfterRunPTPCommandE825 doing nothing for command: %s", command)
-			}
-		}
-	}
-	return nil
-}
-
-// PopulateHwConfigE825 populates hwconfig for e825 plugin
-func PopulateHwConfigE825(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error {
-	//hwConfig := ptpv1.HwConfig{}
-	//hwConfig.DeviceID = "e825"
-	//*hwconfigs = append(*hwconfigs, hwConfig)
-	if data != nil {
-		_data := *data
-		pluginData := _data.(*E825PluginData)
-		_pluginData := *pluginData
-		if _pluginData.hwplugins != nil {
-			for _, _hwconfig := range *_pluginData.hwplugins {
-				hwConfig := ptpv1.HwConfig{}
-				hwConfig.DeviceID = "e825"
-				hwConfig.Status = _hwconfig
-				*hwconfigs = append(*hwconfigs, hwConfig)
-			}
-		}
-	}
-	return nil
-}
-
 // E825 initializes the e825 plugin
 func E825(name string) (*plugin.Plugin, *interface{}) {
-	if name != "e825" {
-		glog.Errorf("Plugin must be initialized as 'e825'")
+	if name != pluginNameE825 {
+		glog.Errorf("Plugin must be initialized as '%s'", pluginNameE825)
 		return nil, nil
 	}
-	glog.Infof("registering e825 plugin")
-	hwplugins := []string{}
-	pluginData := E825PluginData{hwplugins: &hwplugins}
-	_plugin := plugin.Plugin{
-		Name:               "e825",
-		OnPTPConfigChange:  OnPTPConfigChangeE825,
-		AfterRunPTPCommand: AfterRunPTPCommandE825,
-		PopulateHwConfig:   PopulateHwConfigE825,
-	}
-	var iface interface{} = &pluginData
-	return &_plugin, &iface
+	_plugin, _data := NewIntelPlugin(pluginNameE825)
+	_plugin.OnPTPConfigChange = OnPTPConfigChangeE825
+	var iface interface{} = _data
+	return _plugin, &iface
 }

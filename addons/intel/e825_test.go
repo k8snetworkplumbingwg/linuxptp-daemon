@@ -24,7 +24,7 @@ func Test_AfterRunPTPCommandE825(t *testing.T) {
 	profile, err := loadProfile("./testdata/e825-tgm.yaml")
 	assert.NoError(t, err)
 	p, d := E825("e825")
-	data := (*d).(*E825PluginData)
+	data := (*d).(*PluginData)
 
 	err = p.AfterRunPTPCommand(d, profile, "bad command")
 	assert.NoError(t, err)
@@ -85,12 +85,12 @@ func Test_AfterRunPTPCommandE825(t *testing.T) {
 	}
 	assert.Equal(t, requiredUblxCmds, found)
 	// And expect 3 of them to have produced output (as specified in the profile)
-	assert.Equal(t, 3, len(*data.hwplugins))
+	assert.Equal(t, 3, len(data.hwplugins))
 }
 
 func Test_PopulateHwConfdigE825(t *testing.T) {
 	p, d := E825("e825")
-	data := (*d).(*E825PluginData)
+	data := (*d).(*PluginData)
 	err := p.PopulateHwConfig(d, nil)
 	assert.NoError(t, err)
 
@@ -99,7 +99,7 @@ func Test_PopulateHwConfdigE825(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(output))
 
-	data.hwplugins = &[]string{"A", "B", "C"}
+	data.hwplugins = []string{"A", "B", "C"}
 	err = p.PopulateHwConfig(d, &output)
 	assert.NoError(t, err)
 	assert.Equal(t, []ptpv1.HwConfig{

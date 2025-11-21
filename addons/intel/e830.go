@@ -13,29 +13,14 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
-var pluginNameE830 = "e830"
-
-// E830Opts is the options for e830 plugin
-type E830Opts struct {
-	EnableDefaultConfig bool                         `json:"enableDefaultConfig"`
-	DevicePins          map[string]map[string]string `json:"pins"`
-	DpllSettings        map[string]uint64            `json:"settings"`
-	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
-	PhaseInputs         []PhaseInputs                `json:"interconnections"`
-}
-
-// GetPhaseInputs implements PhaseInputsProvider
-func (o E830Opts) GetPhaseInputs() []PhaseInputs { return o.PhaseInputs }
-
-// E830PluginData is the plugin data for e830 plugin
-type E830PluginData struct {
-	hwplugins *[]string
-}
+const (
+	pluginNameE830 = "e830"
+)
 
 // OnPTPConfigChangeE830 is called on PTP config change for e830 plugin
 func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error {
 	glog.Info("calling onPTPConfigChange for e830 plugin")
-	var opts E830Opts
+	var opts UserData
 	var err error
 	var optsByteArray []byte
 	for name, raw := range (*nodeProfile).Plugins {
@@ -112,27 +97,16 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 	return nil
 }
 
-// AfterRunPTPCommandE830 is called after running ptp command for e830 plugin
-func AfterRunPTPCommandE830(_ *interface{}, _ *ptpv1.PtpProfile, _ string) error { return nil }
-
-// PopulateHwConfigE830 populates hwconfig for e830 plugin
-func PopulateHwConfigE830(_ *interface{}, _ *[]ptpv1.HwConfig) error { return nil }
-
 // E830 initializes the e830 plugin
 func E830(name string) (*plugin.Plugin, *interface{}) {
 	if name != pluginNameE830 {
-		glog.Errorf("Plugin must be initialized as 'e830'")
+		glog.Errorf("Plugin must be initialized as '%s'", pluginNameE830)
 		return nil, nil
 	}
-	glog.Infof("registering e830 plugin")
-	hwplugins := []string{}
-	pluginData := E830PluginData{hwplugins: &hwplugins}
-	_plugin := plugin.Plugin{
-		Name:               pluginNameE830,
-		OnPTPConfigChange:  OnPTPConfigChangeE830,
-		AfterRunPTPCommand: AfterRunPTPCommandE830,
-		PopulateHwConfig:   PopulateHwConfigE830,
-	}
-	var iface interface{} = &pluginData
-	return &_plugin, &iface
+	_plugin, _data := NewIntelPlugin(pluginNameE830)
+	_plugin.AfterRunPTPCommand = nil
+	_plugin.PopulateHwConfig = nil
+	_plugin.OnPTPConfigChange = OnPTPConfigChangeE830
+	var iface interface{} = _data
+	return _plugin, &iface
 }

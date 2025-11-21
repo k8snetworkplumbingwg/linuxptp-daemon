@@ -3,7 +3,6 @@ package intel
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"reflect"
 	"strconv"
@@ -16,26 +15,9 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
-type E810Opts struct {
-	EnableDefaultConfig bool                         `json:"enableDefaultConfig"`
-	UblxCmds            UblxCmdList                  `json:"ublxCmds"`
-	DevicePins          DevicePinConfig              `json:"pins"`
-	DpllSettings        map[string]uint64            `json:"settings"`
-	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
-	PhaseInputs         []PhaseInputs                `json:"interconnections"`
-}
-
-// GetPhaseInputs implements PhaseInputsProvider
-func (o E810Opts) GetPhaseInputs() []PhaseInputs { return o.PhaseInputs }
-
-type E810UblxCmds struct {
-	ReportOutput bool     `json:"reportOutput"`
-	Args         []string `json:"args"`
-}
-
-type E810PluginData struct {
-	hwplugins *[]string
-}
+const (
+	pluginNameE810 = "e810"
+)
 
 // Sourced from https://github.com/RHsyseng/oot-ice/blob/main/ptp-config.sh
 var EnableE810PTPConfig = `
@@ -66,7 +48,7 @@ var DpllPins = []*dpll_netlink.PinInfo{}
 
 func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
 	glog.Info("calling onPTPConfigChange for e810 plugin")
-	var e810Opts E810Opts
+	var e810Opts UserData
 	var err error
 	var optsByteArray []byte
 	var stdout []byte
@@ -140,99 +122,14 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 	return nil
 }
 
-func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, command string) error {
-	pluginData := (*data).(*E810PluginData)
-	glog.Info("calling AfterRunPTPCommandE810 for e810 plugin")
-	var e810Opts E810Opts
-	var err error
-	var optsByteArray []byte
-
-	e810Opts.EnableDefaultConfig = false
-
-	for name, opts := range (*nodeProfile).Plugins {
-		if name == "e810" {
-			optsByteArray, _ = json.Marshal(opts)
-			err = json.Unmarshal(optsByteArray, &e810Opts)
-			if err != nil {
-				glog.Error("e810 failed to unmarshal opts: " + err.Error())
-			}
-			switch command {
-			case "gpspipe":
-				glog.Infof("AfterRunPTPCommandE810 doing ublx config for command: %s", command)
-				// Execute user-supplied UblxCmds first:
-				*pluginData.hwplugins = append(*pluginData.hwplugins, e810Opts.UblxCmds.runAll()...)
-				// Finish with the default commands:
-				*pluginData.hwplugins = append(*pluginData.hwplugins, defaultUblxCmds().runAll()...)
-			case "tbc-ho-exit":
-				_, err = clockChain.EnterNormalTBC()
-				if err != nil {
-					return fmt.Errorf("e810: failed to enter T-BC normal mode")
-				}
-				glog.Info("e810: enter T-BC normal mode")
-			case "tbc-ho-entry":
-				_, err = clockChain.EnterHoldoverTBC()
-				if err != nil {
-					return fmt.Errorf("e810: failed to enter T-BC holdover")
-				}
-				glog.Info("e810: enter T-BC holdover")
-			case "reset-to-default":
-				_, err = clockChain.SetPinDefaults()
-				if err != nil {
-					return fmt.Errorf("e810: failed to reset pins to default")
-				}
-				glog.Info("e810: reset pins to default")
-			default:
-				glog.Infof("AfterRunPTPCommandE810 doing nothing for command: %s", command)
-			}
-		}
-	}
-	return nil
-}
-
-func PopulateHwConfigE810(data *interface{}, hwconfigs *[]ptpv1.HwConfig) error {
-	//hwConfig := ptpv1.HwConfig{}
-	//hwConfig.DeviceID = "e810"
-	//*hwconfigs = append(*hwconfigs, hwConfig)
-	if data != nil {
-		_data := *data
-		pluginData := _data.(*E810PluginData)
-		_pluginData := *pluginData
-		if _pluginData.hwplugins != nil {
-			for _, _hwconfig := range *_pluginData.hwplugins {
-				hwConfig := ptpv1.HwConfig{}
-				hwConfig.DeviceID = "e810"
-				hwConfig.Status = _hwconfig
-				*hwconfigs = append(*hwconfigs, hwConfig)
-			}
-		}
-	}
-	return nil
-}
-
+// E810 initializes the e810 plugin
 func E810(name string) (*plugin.Plugin, *interface{}) {
-	if name != "e810" {
-		glog.Errorf("Plugin must be initialized as 'e810'")
+	if name != pluginNameE810 {
+		glog.Errorf("Plugin must be initialized as '%s'", pluginNameE810)
 		return nil, nil
 	}
-	glog.Infof("registering e810 plugin")
-	hwplugins := []string{}
-	pluginData := E810PluginData{hwplugins: &hwplugins}
-	_plugin := plugin.Plugin{
-		Name:               "e810",
-		OnPTPConfigChange:  OnPTPConfigChangeE810,
-		AfterRunPTPCommand: AfterRunPTPCommandE810,
-		PopulateHwConfig:   PopulateHwConfigE810,
-	}
-	var iface interface{} = &pluginData
-	return &_plugin, &iface
-}
-
-func loadPins(path string) (*[]dpll_netlink.PinInfo, error) {
-	pins := &[]dpll_netlink.PinInfo{}
-	ptext, err := os.ReadFile(path)
-	if err != nil {
-		return pins, err
-	}
-	err = json.Unmarshal([]byte(ptext), pins)
-	return pins, err
+	_plugin, _data := NewIntelPlugin(pluginNameE810)
+	_plugin.OnPTPConfigChange = OnPTPConfigChangeE810
+	var iface interface{} = _data
+	return _plugin, &iface
 }
