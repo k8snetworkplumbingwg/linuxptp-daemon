@@ -2,7 +2,6 @@ package intel
 
 import (
 	"github.com/golang/glog"
-	dpll_netlink "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 )
 
@@ -29,22 +28,14 @@ echo "Disabled all SMA and U.FL Connections"
 `
 )
 
-var (
-	unitTest   bool
-	clockChain ClockChainInterface = &ClockChain{}
-)
-
-// For mocking DPLL pin info
-var DpllPins = []*dpll_netlink.PinInfo{}
-
 // E810 initializes the e810 plugin
 func E810(name string) (*plugin.Plugin, *interface{}) {
 	if name != pluginNameE810 {
 		glog.Errorf("Plugin must be initialized as '%s'", pluginNameE810)
 		return nil, nil
 	}
-	_plugin, _data := NewIntelPlugin(pluginNameE810)
-	_data.defaultInitScript = enableE810PTPConfig
-	var iface interface{} = _data
+	_plugin, data := NewIntelPlugin(pluginNameE810)
+	data.defaultInitScript = enableE810PTPConfig
+	var iface interface{} = data
 	return _plugin, &iface
 }

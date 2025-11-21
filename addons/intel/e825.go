@@ -15,8 +15,8 @@ func E825(name string) (*plugin.Plugin, *interface{}) {
 		glog.Errorf("Plugin must be initialized as '%s'", pluginNameE825)
 		return nil, nil
 	}
-	_plugin, _data := NewIntelPlugin(pluginNameE825)
-	_data.preferredClock = "zl3073x"
-	var iface interface{} = _data
+	_plugin, data := NewIntelPlugin(pluginNameE825)
+	data.preferredClock = "zl3073x"
+	var iface interface{} = data
 	return _plugin, &iface
 }

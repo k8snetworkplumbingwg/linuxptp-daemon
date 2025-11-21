@@ -7,6 +7,13 @@ import (
 	dpll_netlink "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 )
 
+var (
+	unitTest bool
+
+	// DpllPins allows for mocking DPLL pin info
+	DpllPins = []*dpll_netlink.PinInfo{}
+)
+
 // MockPins sets up pin mocking for unit testing
 func MockPins() {
 	pins, err := loadPins("./testdata/dpll-pins.json")

@@ -57,86 +57,95 @@ func (d *PluginData) getClockID(device string) uint64 {
 	return getPCIClockID(device)
 }
 
+// TODO: Should this global be moved into PluginData?
+var clockChain ClockChainInterface = &ClockChain{}
+
+// userDataFromProfile extracts and casts the appropriate plugin data from the PtpProfile.Plugins structure.
+// Returns error for unmarshalling issues, or nil for missing data.
+func userDataFromProfile(target string, profile *ptpv1.PtpProfile) (UserData, error) {
+	var userData UserData
+	if rawJSON, ok := profile.Plugins[target]; ok {
+		optsByteArray, _ := json.Marshal(rawJSON)
+		err := json.Unmarshal(optsByteArray, &userData)
+		if err != nil {
+			return userData, fmt.Errorf("%s failed to unmarshal opts: %w", target, err)
+		}
+	}
+	return userData, nil
+}
+
 // OnPTPConfigChangeIntel is called after the PTP config has changed
 func OnPTPConfigChangeIntel(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
 	pluginData := (*data).(*PluginData)
 	target := pluginData.name
 	glog.Info("%s: calling onPTPConfigChange", target)
-	var opts UserData
-	var err error
-	var optsByteArray []byte
-	var stdout []byte
 
-	opts.EnableDefaultConfig = false
+	userData, err := userDataFromProfile(target, nodeProfile)
+	if err != nil {
+		glog.Error(err)
+		return nil
+	}
 
-	for name, raw := range (*nodeProfile).Plugins {
-		if name == target {
-			optsByteArray, _ = json.Marshal(raw)
-			err = json.Unmarshal(optsByteArray, &opts)
-			if err != nil {
-				glog.Error("%s failed to unmarshal opts: "+err.Error(), target)
-			}
-			// for unit testing only, PtpSettings may include "unitTest" key. The value is
-			// the path where resulting configuration files will be written, instead of /var/run
-			_, unitTest = (*nodeProfile).PtpSettings["unitTest"]
-			if unitTest {
-				MockPins()
-			}
+	// for unit testing only, PtpSettings may include "unitTest" key. The value is
+	// the path where resulting configuration files will be written, instead of /var/run
+	_, unitTest = (*nodeProfile).PtpSettings["unitTest"]
+	if unitTest {
+		MockPins()
+	}
 
-			if opts.EnableDefaultConfig && pluginData.defaultInitScript != "" {
-				stdout, _ = exec.Command("/usr/bin/bash", "-c", pluginData.defaultInitScript).Output()
-				glog.Infof(string(stdout))
-			}
-			if (*nodeProfile).PtpSettings == nil {
-				(*nodeProfile).PtpSettings = make(map[string]string)
-			}
-			for device := range opts.DevicePins {
-				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
-				(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(pluginData.getClockID(device), 10)
-			}
-			if !unitTest {
-				applyDevicePins(opts.DevicePins)
-			}
+	if userData.EnableDefaultConfig && pluginData.defaultInitScript != "" {
+		stdout, _ := exec.Command("/usr/bin/bash", "-c", pluginData.defaultInitScript).Output()
+		glog.Infof(string(stdout))
+	}
+	if (*nodeProfile).PtpSettings == nil {
+		(*nodeProfile).PtpSettings = make(map[string]string)
+	}
+	for device := range userData.DevicePins {
+		dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
+		(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(pluginData.getClockID(device), 10)
+	}
+	if !unitTest {
+		applyDevicePins(userData.DevicePins)
+	}
 
-			for k, v := range opts.DpllSettings {
-				if _, ok := (*nodeProfile).PtpSettings[k]; !ok {
-					(*nodeProfile).PtpSettings[k] = strconv.FormatUint(v, 10)
-				}
-			}
-			for iface, properties := range opts.PhaseOffsetPins {
-				ifaceFound := false
-				for dev := range opts.DevicePins {
-					if strings.Compare(iface, dev) == 0 {
-						ifaceFound = true
-						break
-					}
-				}
-				if !ifaceFound {
-					glog.Errorf("%s: phase offset pin filter initialization failed: interface %s not found among  %v",
-						target, iface, reflect.ValueOf(opts.DevicePins).MapKeys())
-					break
-				}
-				for pinProperty, value := range properties {
-					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(getPCIClockID(iface), 10), pinProperty}, ".")
-					(*nodeProfile).PtpSettings[key] = value
-				}
-			}
-			if opts.PhaseInputs != nil {
-				chain, ierr := InitClockChain(opts, nodeProfile)
-				if ierr != nil {
-					return ierr
-				}
-				// TODO:: The original e830 plugin implementation set these PtpSettings from its own clockChdain copy, but explicitly did NOT the global clockChain; This may be incorrec
-				(*nodeProfile).PtpSettings["leadingInterface"] = chain.GetLeadingNIC().Name
-				(*nodeProfile).PtpSettings["upstreamPort"] = chain.GetLeadingNIC().UpstreamPort
-				if !pluginData.skipGlobalClockChain {
-					clockChain = chain
-				}
-			} else {
-				glog.Error("no clock chain set")
-			}
+	for k, v := range userData.DpllSettings {
+		if _, ok := (*nodeProfile).PtpSettings[k]; !ok {
+			(*nodeProfile).PtpSettings[k] = strconv.FormatUint(v, 10)
 		}
 	}
+	for iface, properties := range userData.PhaseOffsetPins {
+		ifaceFound := false
+		for dev := range userData.DevicePins {
+			if strings.Compare(iface, dev) == 0 {
+				ifaceFound = true
+				break
+			}
+		}
+		if !ifaceFound {
+			glog.Errorf("%s: phase offset pin filter initialization failed: interface %s not found among  %v",
+				target, iface, reflect.ValueOf(userData.DevicePins).MapKeys())
+			break
+		}
+		for pinProperty, value := range properties {
+			key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(getPCIClockID(iface), 10), pinProperty}, ".")
+			(*nodeProfile).PtpSettings[key] = value
+		}
+	}
+	if userData.PhaseInputs != nil {
+		chain, ierr := InitClockChain(userData, nodeProfile)
+		if ierr != nil {
+			return ierr
+		}
+		// TODO:: The original e830 plugin implementation set these PtpSettings from its own clockChdain copy, but explicitly did NOT the global clockChain; This may be incorrec
+		(*nodeProfile).PtpSettings["leadingInterface"] = chain.GetLeadingNIC().Name
+		(*nodeProfile).PtpSettings["upstreamPort"] = chain.GetLeadingNIC().UpstreamPort
+		if !pluginData.skipGlobalClockChain {
+			clockChain = chain
+		}
+	} else {
+		glog.Error("no clock chain set")
+	}
+
 	return nil
 }
 
@@ -145,49 +154,42 @@ func AfterRunPTPCommandIntel(data *interface{}, nodeProfile *ptpv1.PtpProfile, c
 	pluginData := (*data).(*PluginData)
 	target := pluginData.name
 	glog.Info("%s: Calling AfterRunPTPCommandIntel for command %s", target, command)
-	var pluginOpts UserData
-	var err error
-	var optsByteArray []byte
 
-	pluginOpts.EnableDefaultConfig = false
-
-	for name, opts := range (*nodeProfile).Plugins {
-		if name == target {
-			optsByteArray, _ = json.Marshal(opts)
-			err = json.Unmarshal(optsByteArray, &pluginOpts)
-			if err != nil {
-				glog.Errorf("%s failed to unmarshal opts: "+err.Error(), target)
-			}
-			switch command {
-			case "gpspipe":
-				glog.Infof("%s: Applying ublx config", target)
-				// Execute user-supplied UblxCmds first:
-				pluginData.hwplugins = append(pluginData.hwplugins, pluginOpts.UblxCmds.runAll()...)
-				// Finish with the default commands:
-				pluginData.hwplugins = append(pluginData.hwplugins, defaultUblxCmds().runAll()...)
-			case "tbc-ho-exit":
-				_, err = clockChain.EnterNormalTBC()
-				if err != nil {
-					return fmt.Errorf("%s: failed to enter T-BC normal mode: %w", target, err)
-				}
-				glog.Info("%s: enter T-BC normal mode", target)
-			case "tbc-ho-entry":
-				_, err = clockChain.EnterHoldoverTBC()
-				if err != nil {
-					return fmt.Errorf("%s: failed to enter T-BC holdover: %w", target, err)
-				}
-				glog.Info("%s: enter T-BC holdover", target)
-			case "reset-to-default":
-				_, err = clockChain.SetPinDefaults()
-				if err != nil {
-					return fmt.Errorf("%s: failed to reset pins to default: %w", target, err)
-				}
-				glog.Info("%s: reset pins to default", target)
-			default:
-				glog.Infof("%s: Doing nothing for command %s", target, command)
-			}
-		}
+	userData, err := userDataFromProfile(target, nodeProfile)
+	if err != nil {
+		glog.Error(err)
+		return nil
 	}
+
+	switch command {
+	case "gpspipe":
+		glog.Infof("%s: Applying ublx config", target)
+		// Execute user-supplied UblxCmds first:
+		pluginData.hwplugins = append(pluginData.hwplugins, userData.UblxCmds.runAll()...)
+		// Finish with the default commands:
+		pluginData.hwplugins = append(pluginData.hwplugins, defaultUblxCmds().runAll()...)
+	case "tbc-ho-exit":
+		_, err = clockChain.EnterNormalTBC()
+		if err != nil {
+			return fmt.Errorf("%s: failed to enter T-BC normal mode: %w", target, err)
+		}
+		glog.Info("%s: enter T-BC normal mode", target)
+	case "tbc-ho-entry":
+		_, err = clockChain.EnterHoldoverTBC()
+		if err != nil {
+			return fmt.Errorf("%s: failed to enter T-BC holdover: %w", target, err)
+		}
+		glog.Info("%s: enter T-BC holdover", target)
+	case "reset-to-default":
+		_, err = clockChain.SetPinDefaults()
+		if err != nil {
+			return fmt.Errorf("%s: failed to reset pins to default: %w", target, err)
+		}
+		glog.Info("%s: reset pins to default", target)
+	default:
+		glog.Infof("%s: Doing nothing for command %s", target, command)
+	}
+
 	return nil
 }
 

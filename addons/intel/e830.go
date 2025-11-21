@@ -15,11 +15,11 @@ func E830(name string) (*plugin.Plugin, *interface{}) {
 		glog.Errorf("Plugin must be initialized as '%s'", pluginNameE830)
 		return nil, nil
 	}
-	_plugin, _data := NewIntelPlugin(pluginNameE830)
-	_data.preferredClock = "ice"
-	_data.skipGlobalClockChain = true // The global clockChain is owned by e825 not e830
-	_plugin.AfterRunPTPCommand = nil  // No-op for e830
-	_plugin.PopulateHwConfig = nil    // No-op for e830
-	var iface interface{} = _data
+	_plugin, data := NewIntelPlugin(pluginNameE830)
+	data.preferredClock = "ice"
+	data.skipGlobalClockChain = true // The global clockChain is owned by e825 not e830
+	_plugin.AfterRunPTPCommand = nil // No-op for e830
+	_plugin.PopulateHwConfig = nil   // No-op for e830
+	var iface interface{} = data
 	return _plugin, &iface
 }
