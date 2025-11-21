@@ -64,6 +64,25 @@ func Test_ProcessProfileTGMNew(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func Test_ProcessProfileWithPhaseOffsets(t *testing.T) {
+	unitTest = true
+	profile, err := loadProfile("./testdata/profile-tgm-phaseoffset.yaml")
+	assert.NoError(t, err)
+	p, d := E810("e810")
+
+	mfs, fsrestore := setupMockFS()
+	defer fsrestore()
+	mockClockIDsFromProfile(mfs, profile)
+
+	err = p.OnPTPConfigChange(d, profile)
+	assert.NoError(t, err)
+	iface := "ens4f0"
+	clkid := profile.PtpSettings["clockId[ens4f0]"]
+	pin := "SMA1"
+	expectedKey := fmt.Sprintf("%s.phaseOffsetFilter.%s.%s", iface, clkid, pin)
+	assert.Contains(t, profile.PtpSettings, expectedKey)
+}
+
 // Test that the profile with no phase inputs is processed correctly
 func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 	unitTest = true
