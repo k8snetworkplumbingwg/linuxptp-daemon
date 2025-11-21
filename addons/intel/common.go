@@ -28,11 +28,12 @@ type (
 
 	// PluginData contains the device-specific plugin and status data
 	PluginData struct {
-		name              string
-		hwplugins         []string
-		defaultInitScript string
-		preferredClock    string
-		cachedClockID     uint64
+		name                 string
+		hwplugins            []string
+		defaultInitScript    string
+		preferredClock       string
+		skipGlobalClockChain bool
+		cachedClockID        uint64
 	}
 )
 
@@ -121,12 +122,16 @@ func OnPTPConfigChangeIntel(data *interface{}, nodeProfile *ptpv1.PtpProfile) er
 				}
 			}
 			if opts.PhaseInputs != nil {
-				clockChain, err = InitClockChain(opts, nodeProfile)
-				if err != nil {
-					return err
+				chain, ierr := InitClockChain(opts, nodeProfile)
+				if ierr != nil {
+					return ierr
 				}
-				(*nodeProfile).PtpSettings["leadingInterface"] = clockChain.GetLeadingNIC().Name
-				(*nodeProfile).PtpSettings["upstreamPort"] = clockChain.GetLeadingNIC().UpstreamPort
+				// TODO:: The original e830 plugin implementation set these PtpSettings from its own clockChdain copy, but explicitly did NOT the global clockChain; This may be incorrec
+				(*nodeProfile).PtpSettings["leadingInterface"] = chain.GetLeadingNIC().Name
+				(*nodeProfile).PtpSettings["upstreamPort"] = chain.GetLeadingNIC().UpstreamPort
+				if !pluginData.skipGlobalClockChain {
+					clockChain = chain
+				}
 			} else {
 				glog.Error("no clock chain set")
 			}
