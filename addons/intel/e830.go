@@ -3,7 +3,6 @@ package intel
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -46,6 +45,12 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 			if err != nil {
 				glog.Error("e830 failed to unmarshal opts: " + err.Error())
 			}
+			// for unit testing only, PtpSettings may include "unitTest" key. The value is
+			// the path where resulting configuration files will be written, instead of /var/run
+			_, unitTest = (*nodeProfile).PtpSettings["unitTest"]
+			if unitTest {
+				MockPins()
+			}
 			if (*nodeProfile).PtpSettings == nil {
 				(*nodeProfile).PtpSettings = make(map[string]string)
 			}
@@ -53,28 +58,18 @@ func OnPTPConfigChangeE830(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 			if iceErr != nil {
 				glog.Errorf("e830: failed to resolve ICE DPLL clock ID via netlink: %v", iceErr)
 			}
-			for device, pins := range opts.DevicePins {
+			for device := range opts.DevicePins {
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
-				if iceErr == nil {
-					(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(iceClockID, 10)
-				}
-				for pin, value := range pins {
-					deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
-					phcs, pErr := os.ReadDir(deviceDir)
-					if pErr != nil {
-						glog.Error("e830 failed to read " + deviceDir + ": " + pErr.Error())
-						continue
-					}
-					for _, phc := range phcs {
-						pinPath := fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
-						glog.Infof("echo %s > %s", value, pinPath)
-						err = os.WriteFile(pinPath, []byte(value), 0o666)
-						if err != nil {
-							glog.Error("e830 failed to write " + value + " to " + pinPath + ": " + err.Error())
-						}
+				if !unitTest {
+					if iceErr == nil {
+						(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(iceClockID, 10)
 					}
 				}
 			}
+			if !unitTest {
+				applyDevicePins(opts.DevicePins)
+			}
+
 			for k, v := range opts.DpllSettings {
 				if _, ok := (*nodeProfile).PtpSettings[k]; !ok {
 					(*nodeProfile).PtpSettings[k] = strconv.FormatUint(v, 10)

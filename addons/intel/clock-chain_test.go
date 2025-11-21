@@ -9,7 +9,8 @@ import (
 
 func Test_ProcessProfileTbcClockChain(t *testing.T) {
 	// Setup filesystem mock for TBC profile (3 devices with pins)
-	mockFS := &MockFileSystem{}
+	mockFS, restoreFS := setupMockFS()
+	defer restoreFS()
 	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
 
 	// profile-tbc.yaml has pins for ens4f0, ens5f0, ens8f0 (3 devices)
@@ -27,11 +28,6 @@ func Test_ProcessProfileTbcClockChain(t *testing.T) {
 		mockFS.ExpectWriteFile("", []byte(""), os.FileMode(0o666), nil) // Extra WriteFile calls
 	}
 
-	// Replace global filesystem with mock
-	originalFS := filesystem
-	filesystem = mockFS
-	defer func() { filesystem = originalFS }()
-
 	// Set unitTest for MockPins() call
 	unitTest = true
 	defer func() { unitTest = false }()
@@ -42,6 +38,9 @@ func Test_ProcessProfileTbcClockChain(t *testing.T) {
 
 	// Can run PTP config change handler without errors
 	p, d := E810("e810")
+
+	mockClockIDsFromProfile(mockFS, profile)
+
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
 
@@ -58,7 +57,8 @@ func Test_ProcessProfileTbcClockChain(t *testing.T) {
 
 func Test_ProcessProfileTtscClockChain(t *testing.T) {
 	// Setup filesystem mock for T-TSC profile (1 device with pins)
-	mockFS := &MockFileSystem{}
+	mockFS, restoreFS := setupMockFS()
+	defer restoreFS()
 	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
 
 	// profile-t-tsc.yaml has pins for ens4f0 only
@@ -73,11 +73,6 @@ func Test_ProcessProfileTtscClockChain(t *testing.T) {
 		mockFS.ExpectWriteFile("", []byte(""), os.FileMode(0o666), nil) // Extra WriteFile calls
 	}
 
-	// Replace global filesystem with mock
-	originalFS := filesystem
-	filesystem = mockFS
-	defer func() { filesystem = originalFS }()
-
 	// Set unitTest for MockPins() call
 	unitTest = true
 	defer func() { unitTest = false }()
@@ -88,6 +83,9 @@ func Test_ProcessProfileTtscClockChain(t *testing.T) {
 
 	// Can run PTP config change handler without errors
 	p, d := E810("e810")
+
+	mockClockIDsFromProfile(mockFS, profile)
+
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
 
@@ -111,6 +109,11 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 
 	// Initialize the clock chain with multiple NICs
 	p, d := E810("e810")
+
+	mfs, fsrestore := setupMockFS()
+	defer fsrestore()
+	mockClockIDsFromProfile(mfs, profile)
+
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
 

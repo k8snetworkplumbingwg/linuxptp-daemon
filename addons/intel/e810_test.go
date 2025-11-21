@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -34,11 +36,30 @@ func Test_initInternalDelays_BadPart(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func mockClockIDsFromProfile(mfs *MockFileSystem, profile *ptpv1.PtpProfile) {
+	for key, val := range profile.PtpSettings {
+		var iface string
+		if strings.HasPrefix(key, "clockId[") && strings.HasSuffix(key, "]") {
+			iface = strings.TrimSuffix(strings.TrimPrefix(key, "clockId["), "]")
+			id, err := strconv.ParseUint(val, 10, 64)
+			if err != nil {
+				continue
+			}
+			mfs.AllowReadFile(fmt.Sprintf("/sys/class/net/%s/device/config", iface), generatePCIDataForClockID(id), nil)
+		}
+	}
+}
+
 func Test_ProcessProfileTGMNew(t *testing.T) {
 	unitTest = true
 	profile, err := loadProfile("./testdata/profile-tgm.yaml")
 	assert.NoError(t, err)
 	p, d := E810("e810")
+
+	mfs, fsrestore := setupMockFS()
+	defer fsrestore()
+	mockClockIDsFromProfile(mfs, profile)
+
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
 }
@@ -49,6 +70,11 @@ func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 	profile, err := loadProfile("./testdata/profile-tbc-no-input-delays.yaml")
 	assert.NoError(t, err)
 	p, d := E810("e810")
+
+	mfs, fsrestore := setupMockFS()
+	defer fsrestore()
+	mockClockIDsFromProfile(mfs, profile)
+
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
 }
@@ -84,6 +110,9 @@ func Test_ProcessProfileTbcE810(t *testing.T) {
 
 	// Can run PTP config change handler without errors
 	p, d := E810("e810")
+
+	mockClockIDsFromProfile(mockFS, profile)
+
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
 	ccData := clockChain.(*ClockChain)
@@ -122,6 +151,9 @@ func Test_ProcessProfileTtscE810(t *testing.T) {
 
 	// Can run PTP config change handler without errors
 	p, d := E810("e810")
+
+	mockClockIDsFromProfile(mockFS, profile)
+
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
 	ccData := clockChain.(*ClockChain)
@@ -137,6 +169,11 @@ func Test_ProcessProfileTGMOld(t *testing.T) {
 	profile, err := loadProfile("./testdata/profile-tgm-old.yaml")
 	assert.NoError(t, err)
 	p, d := E810("e810")
+
+	mfs, fsrestore := setupMockFS()
+	defer fsrestore()
+	mockClockIDsFromProfile(mfs, profile)
+
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
 }
@@ -300,7 +337,7 @@ func Test_AfterRunPTPCommandE810(t *testing.T) {
 	mockExec.setDefaults("output", nil)
 	err = p.AfterRunPTPCommand(d, profile, "gpspipe")
 	assert.NoError(t, err)
-	// Ensure all 9 required calls are the last 9:
+	// Ensure all 9 required calls are present:
 	requiredUblxCmds := []string{
 		"CFG-MSG,1,34,1",
 		"CFG-MSG,1,3,1",

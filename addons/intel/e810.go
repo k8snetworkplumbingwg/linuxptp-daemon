@@ -19,7 +19,7 @@ import (
 type E810Opts struct {
 	EnableDefaultConfig bool                         `json:"enableDefaultConfig"`
 	UblxCmds            UblxCmdList                  `json:"ublxCmds"`
-	DevicePins          map[string]map[string]string `json:"pins"`
+	DevicePins          DevicePinConfig              `json:"pins"`
 	DpllSettings        map[string]uint64            `json:"settings"`
 	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
 	PhaseInputs         []PhaseInputs                `json:"interconnections"`
@@ -70,7 +70,6 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 	var err error
 	var optsByteArray []byte
 	var stdout []byte
-	var pinPath string
 
 	e810Opts.EnableDefaultConfig = false
 
@@ -95,27 +94,12 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			if (*nodeProfile).PtpSettings == nil {
 				(*nodeProfile).PtpSettings = make(map[string]string)
 			}
-			for device, pins := range e810Opts.DevicePins {
-				dpllClockIdStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
-				if !unitTest {
-					(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(getPCIClockID(device), 10)
-					for pin, value := range pins {
-						deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
-						phcs, err := os.ReadDir(deviceDir)
-						if err != nil {
-							glog.Error("e810 failed to read " + deviceDir + ": " + err.Error())
-							continue
-						}
-						for _, phc := range phcs {
-							pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
-							glog.Infof("echo %s > %s", value, pinPath)
-							err = os.WriteFile(pinPath, []byte(value), 0o666)
-							if err != nil {
-								glog.Error("e810 failed to write " + value + " to " + pinPath + ": " + err.Error())
-							}
-						}
-					}
-				}
+			for device := range e810Opts.DevicePins {
+				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
+				(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(getPCIClockID(device), 10)
+			}
+			if !unitTest {
+				applyDevicePins(e810Opts.DevicePins)
 			}
 
 			for k, v := range e810Opts.DpllSettings {

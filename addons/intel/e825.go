@@ -3,7 +3,6 @@ package intel
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"reflect"
 	"strconv"
@@ -21,7 +20,7 @@ var pluginNameE825 = "e825"
 type E825Opts struct {
 	EnableDefaultConfig bool                         `json:"enableDefaultConfig"`
 	UblxCmds            UblxCmdList                  `json:"ublxCmds"`
-	DevicePins          map[string]map[string]string `json:"pins"`
+	DevicePins          DevicePinConfig              `json:"pins"`
 	DpllSettings        map[string]uint64            `json:"settings"`
 	PhaseOffsetPins     map[string]map[string]string `json:"phaseOffsetPins"`
 	PhaseInputs         []PhaseInputs                `json:"interconnections"`
@@ -76,7 +75,7 @@ func OnPTPConfigChangeE825(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 			if zlErr != nil {
 				glog.Errorf("e825: failed to resolve ZL3073x DPLL clock ID via netlink: %v", zlErr)
 			}
-			for device, pins := range e825Opts.DevicePins {
+			for device := range e825Opts.DevicePins {
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
 				if !unitTest {
 					if zlErr == nil {
@@ -84,23 +83,10 @@ func OnPTPConfigChangeE825(_ *interface{}, nodeProfile *ptpv1.PtpProfile) error 
 					} else {
 						(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(getPCIClockID(device), 10)
 					}
-					for pin, value := range pins {
-						deviceDir := fmt.Sprintf("/sys/class/net/%s/device/ptp/", device)
-						phcs, pErr := os.ReadDir(deviceDir)
-						if pErr != nil {
-							glog.Error("e825 failed to read " + deviceDir + ": " + pErr.Error())
-							continue
-						}
-						for _, phc := range phcs {
-							pinPath := fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/pins/%s", device, phc.Name(), pin)
-							glog.Infof("echo %s > %s", value, pinPath)
-							err = os.WriteFile(pinPath, []byte(value), 0o666)
-							if err != nil {
-								glog.Error("e825 failed to write " + value + " to " + pinPath + ": " + err.Error())
-							}
-						}
-					}
 				}
+			}
+			if !unitTest {
+				applyDevicePins(e825Opts.DevicePins)
 			}
 
 			for k, v := range e825Opts.DpllSettings {
