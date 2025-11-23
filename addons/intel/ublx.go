@@ -50,6 +50,18 @@ var (
 		Args:         []string{"-p", "SAVE"},
 	}
 
+	// Ublx command to disable GNSS
+	cfgGnssDisable = UblxCmd{
+		ReportOutput: false,
+		Args:         []string{"-z", "CFG-NAVSPG-INFIL_NCNOTHRS,50,1"},
+	}
+
+	// Ublx command to enable GNSS
+	cfgGnssEnable = UblxCmd{
+		ReportOutput: false,
+		Args:         []string{"-z", "CFG-NAVSPG-INFIL_NCNOTHRS,0,1"},
+	}
+
 	// All possibel NMEA bus types (according to ubxtool)
 	nmeaBusTypes = []string{
 		"I2C", "UART1", "UART2", "USB", "SPI",

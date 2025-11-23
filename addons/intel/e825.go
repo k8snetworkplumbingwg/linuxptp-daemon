@@ -19,9 +19,15 @@ import (
 
 var pluginNameE825 = "e825"
 
+// GNSSOpts defines the structure for GNSS options in the e825 plugin.
+type GNSSOpts struct {
+	Disabled bool `json:"disabled,omitempty"`
+}
+
 // E825Opts is the options structure for e825 plugin
 type E825Opts struct {
 	EnableDefaultConfig bool                         `json:"enableDefaultConfig"`
+	GNSS                *GNSSOpts                    `json:"gnss,omitempty"`
 	UblxCmds            UblxCmdList                  `json:"ublxCmds"`
 	DevicePins          map[string]map[string]string `json:"pins"`
 	DpllSettings        map[string]uint64            `json:"settings"`
@@ -173,10 +179,20 @@ func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			switch command {
 			case "gpspipe":
 				glog.Infof("AfterRunPTPCommandE810 doing ublx config for command: %s", command)
+				var cmdsToRun UblxCmdList
 				// Execute user-supplied UblxCmds first:
-				*pluginData.hwplugins = append(*pluginData.hwplugins, e825Opts.UblxCmds.runAll()...)
+				cmdsToRun = append(cmdsToRun, e825Opts.UblxCmds...)
+
+				// Add GNSS enable/disable command based on configuration
+				if e825Opts.GNSS != nil && e825Opts.GNSS.Disabled {
+					cmdsToRun = append(cmdsToRun, cfgGnssDisable)
+				} else {
+					cmdsToRun = append(cmdsToRun, cfgGnssEnable)
+				}
+
 				// Finish with the default commands:
-				*pluginData.hwplugins = append(*pluginData.hwplugins, defaultUblxCmds().runAll()...)
+				cmdsToRun = append(cmdsToRun, defaultUblxCmds()...)
+				*pluginData.hwplugins = append(*pluginData.hwplugins, cmdsToRun.runAll()...)
 			case "tbc-ho-exit":
 				_, err = clockChain.EnterNormalTBC()
 				if err != nil {
