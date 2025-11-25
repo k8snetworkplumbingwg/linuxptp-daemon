@@ -451,6 +451,6 @@ func TestHardwareConfigReconcilerFields(t *testing.T) {
 	assert.NotNil(t, reconciler.ConfigUpdate)
 
 	// Verify the handler implements the interface
-	var _ HardwareConfigUpdateHandler = reconciler.HardwareConfigHandler
-	var _ HardwareConfigRestartTrigger = reconciler.ConfigUpdate
+	var _ = reconciler.HardwareConfigHandler
+	var _ = reconciler.ConfigUpdate
 }

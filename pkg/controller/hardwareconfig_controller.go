@@ -1,3 +1,4 @@
+// Package controller provides Kubernetes controller functionality for PTP configuration.
 package controller
 
 import (

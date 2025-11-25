@@ -540,7 +540,7 @@ func defaultResolveSysFSPtpDevice(interfacePath string) ([]string, error) {
 			if info, statErr := os.Stat(fullPath); statErr == nil && !info.IsDir() {
 				// Try to open the file for writing to check if it's writable
 				if file, openErr := os.OpenFile(fullPath, os.O_WRONLY, 0); openErr == nil {
-					file.Close()
+					_ = file.Close()
 					resolvedPaths = append(resolvedPaths, fullPath)
 				}
 			}

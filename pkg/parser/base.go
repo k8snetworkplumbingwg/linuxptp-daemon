@@ -1,3 +1,4 @@
+// Package parser provides parsing functionality for PTP-related data.
 package parser
 
 import (

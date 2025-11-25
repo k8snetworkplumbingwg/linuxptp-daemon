@@ -295,7 +295,11 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 		StepsRemoved:        0,
 	}
 	glog.Infof("EGP %++v", egp)
-	go pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, egp)
+	go func() {
+		if err := pmc.RunPMCExpSetExternalGMPropertiesNP(e.LeadingClockData.controlledPortsConfig, egp); err != nil {
+			glog.Errorf("Failed to set external GM properties: %v", err)
+		}
+	}()
 	e.AnnounceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
@@ -337,7 +341,11 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 
 	default:
 	}
-	go pmc.RunPMCExpSetGMSettings(e.LeadingClockData.controlledPortsConfig, gs)
+	go func() {
+		if err := pmc.RunPMCExpSetGMSettings(e.LeadingClockData.controlledPortsConfig, gs); err != nil {
+			glog.Errorf("Failed to set GM settings: %v", err)
+		}
+	}()
 }
 
 // this function runs in a goroutine should only be called when locked

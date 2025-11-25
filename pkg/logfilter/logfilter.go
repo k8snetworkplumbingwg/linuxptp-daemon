@@ -1,3 +1,4 @@
+// Package logfilter provides log filtering functionality for the linuxptp daemon.
 package logfilter
 
 import (
@@ -86,10 +87,11 @@ func reprLogFilter(filter *LogFilter) string {
 
 func getLogFiltersEnhanced(processName string, messageTag string, batchLength string, threshold string) []*LogFilter {
 	var logFilters []*LogFilter
-	offsetString := ""
-	if processName == ptp4lProcessName {
+	var offsetString string
+	switch processName {
+	case ptp4lProcessName:
 		offsetString = "master offset"
-	} else if processName == phc2sysProcessName {
+	case phc2sysProcessName:
 		offsetString = "phc offset"
 	}
 
@@ -128,9 +130,10 @@ func GetLogFilters(processName string, messageTag string, ptpSettings map[string
 			logReduceThreshold = logReduceSettings[2]
 		}
 
-		if logReduceMode == "true" || logReduceMode == "basic" {
+		switch logReduceMode {
+		case "true", "basic":
 			logFilters = append(logFilters, logFilterFromRegex("^.*master offset.*$", nil, "", "", nil, defaultOffsetFlushThreshold)) // Just filter anything with master offset
-		} else if logReduceMode == "enhanced" {
+		case "enhanced":
 			logFilters = getLogFiltersEnhanced(processName, messageTag, logReduceTime, logReduceThreshold)
 		}
 	}

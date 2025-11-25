@@ -195,7 +195,7 @@ func loadHardwareConfigFromFile(filename string) (*ptpv2alpha1.HardwareConfig, e
 	}
 
 	// Register the HardwareConfig types with the scheme
-	ptpv2alpha1.AddToScheme(scheme.Scheme)
+	_ = ptpv2alpha1.AddToScheme(scheme.Scheme)
 
 	// Create a decoder
 	decode := serializer.NewCodecFactory(scheme.Scheme).UniversalDeserializer().Decode
@@ -420,9 +420,10 @@ func TestDetectStateChange(t *testing.T) {
 			lockedCount := 0
 			lostCount := 0
 			for _, change := range detectedChanges {
-				if change.condition == "locked" {
+				switch change.condition {
+				case "locked":
 					lockedCount++
-				} else if change.condition == "lost" {
+				case "lost":
 					lostCount++
 				}
 			}
@@ -442,6 +443,8 @@ func TestNewPTPStateDetector(t *testing.T) {
 }
 
 // TestApplyConditionDesiredStatesWithRealData tests applyConditionDesiredStatesByType using actual hardware config YAML data
+//
+//nolint:gocyclo // test complexity is acceptable
 func TestApplyConditionDesiredStatesWithRealData(t *testing.T) {
 	// Set up mock command executor for GetClockIDFromInterface
 	mockCmd := NewMockCommandExecutor()
@@ -469,7 +472,7 @@ func TestApplyConditionDesiredStatesWithRealData(t *testing.T) {
 	clockChain := hwConfig.Spec.Profile.ClockChain
 	profileName := *hwConfig.Spec.Profile.Name
 
-	t.Logf("Testing with real hardware config: %s", hwConfig.ObjectMeta.Name)
+	t.Logf("Testing with real hardware config: %s", hwConfig.Name)
 	t.Logf("Profile: %s", profileName)
 	t.Logf("Clock chain has %d conditions", len(clockChain.Behavior.Conditions))
 

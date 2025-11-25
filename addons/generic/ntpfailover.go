@@ -104,6 +104,7 @@ func registerProcessNtpFailover(data *interface{}, pname string, cmdSetEnabled f
 	}
 }
 
+//nolint:gocyclo // complexity is acceptable for this function
 func processLogNtpFailover(data *interface{}, pname string, log string) string {
 	ret := log
 	if data != nil {

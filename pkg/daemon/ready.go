@@ -97,7 +97,9 @@ func (h metricHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 				break
 			}
 		}
-		defer socketConnection.Close()
+		defer func() {
+			_ = socketConnection.Close()
+		}()
 
 		eventHandler := h.tracker.processManager.ptpEventHandler
 		eventHandler.EmitClockSyncLogs(socketConnection)

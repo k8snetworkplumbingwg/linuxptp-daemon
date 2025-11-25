@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -33,7 +32,6 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
-	pmcPkg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 
 	"github.com/golang/glog"
 	"k8s.io/client-go/kubernetes"
@@ -247,8 +245,6 @@ type ptpProcess struct {
 	depProcess            []process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
 	nodeProfile           ptpv1.PtpProfile
 	logParser             parser.MetricsExtractor
-	pmcCheck              bool
-	clockClassRunning     atomic.Bool
 	lastTransitionResult  event.PTPState
 	clockType             event.ClockType
 	ptpClockThreshold     *ptpv1.PtpClockThreshold
@@ -1077,47 +1073,6 @@ func logProcessStatus(processName string, cfgName string, status int64, c net.Co
 	}
 }
 
-func (p *ptpProcess) updateClockClass(c net.Conn) {
-	if p.nodeProfile.PtpSettings["clockType"] == TBC || p.nodeProfile.PtpSettings["controllingProfile"] != "" {
-		return
-	}
-	// Per-process single-flight guard
-	if !p.clockClassRunning.CompareAndSwap(false, true) {
-		glog.Infof("clock class update already running for %s, skipping this run", p.configName)
-		return
-	}
-	defer p.clockClassRunning.Store(false)
-	defer func() {
-		if r := recover(); r != nil {
-			glog.Errorf("updateClockClass Recovered in f %#v", r)
-		}
-	}()
-
-	if r, e := pmcPkg.RunPMCExpGetParentDS(p.configName); e == nil {
-		if r.GrandmasterClockClass != p.GrandmasterClockClass {
-			glog.Infof("clock change event identified: %d -> %d", p.GrandmasterClockClass, r.GrandmasterClockClass)
-			p.GrandmasterClockClass = r.GrandmasterClockClass
-		}
-		//ptp4l[5196819.100]: [ptp4l.0.config] CLOCK_CLASS_CHANGE:248
-		// change to pint every minute or when the clock class changes
-		if c == nil {
-			UpdateClockClassMetrics(p.name, float64(p.GrandmasterClockClass)) // no socket then update metrics
-		} else {
-			p.emitClockClassLogs(c)
-		}
-	} else {
-		glog.Errorf("error parsing PMC util for clock class change event %s", e.Error())
-	}
-}
-
-func (p *ptpProcess) emitClockClassLogs(c net.Conn) {
-	clockClassOut := fmt.Sprintf("%s[%d]:[%s] CLOCK_CLASS_CHANGE %d\n", p.name, time.Now().Unix(), p.configName, p.GrandmasterClockClass)
-	_, err := c.Write([]byte(clockClassOut))
-	if err != nil {
-		glog.Errorf("failed to write class change event %s", err.Error())
-	}
-}
-
 // prepareTBCResources prepares cached resources for T-BC processing
 // This method caches expensive operations that would otherwise be repeated 16x/second
 func (p *ptpProcess) prepareTBCResources() {
@@ -1199,6 +1154,8 @@ func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.Plugin
 }
 
 // cmdRun runs given ptpProcess and restarts on errors
+//
+//nolint:gocyclo // complexity is acceptable for this function
 func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 	cmd := p.cmd
 	stopped := p.getAndSetStopped(false)
@@ -1427,10 +1384,10 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 	switch p.name {
 	case "chronyd":
 		if enabled {
-			exec.Command("chronyc", "online").Output()
+			_, _ = exec.Command("chronyc", "online").Output()
 			processStatus(p.c, p.name, p.messageTag, PtpProcessUp)
 		} else {
-			exec.Command("chronyc", "offline").Output()
+			_, _ = exec.Command("chronyc", "offline").Output()
 			processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
 		}
 	case "phc2sys":

@@ -134,7 +134,7 @@ func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
 	)
 	assert.NotNil(t, dn)
 	// Signal that no hardware configs are expected for this test
-	dn.hardwareConfigManager.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
+	_ = dn.hardwareConfigManager.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
 	err := dn.applyNodePtpProfile(0, profile)
 	assert.NoError(t, err)
 }
@@ -220,7 +220,7 @@ func Test_applyProfile_TBC(t *testing.T) {
 	)
 	assert.NotNil(t, dn)
 	// Signal that no hardware configs are expected for this test
-	dn.hardwareConfigManager.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
+	_ = dn.hardwareConfigManager.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
 
 	for i := range len(testDataFiles) {
 		mkPath(t)
@@ -846,7 +846,9 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 	// Read the log file line by line
 	logFile, err := os.Open("../hardwareconfig/testdata/log2.txt")
 	assert.NoError(t, err, "Should be able to open log file")
-	defer logFile.Close()
+	defer func() {
+		_ = logFile.Close()
+	}()
 
 	scanner := bufio.NewScanner(logFile)
 

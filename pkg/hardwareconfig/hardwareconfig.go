@@ -1,3 +1,4 @@
+// Package hardwareconfig provides hardware configuration management for the linuxptp daemon.
 package hardwareconfig
 
 import (
@@ -22,6 +23,11 @@ const (
 	ConditionTypeInit    = "init"
 	ConditionTypeLocked  = "locked"
 	ConditionTypeLost    = "lost"
+)
+
+const (
+	defaultProfileName  = "unnamed"
+	ptpTimeReceiverType = "ptpTimeReceiver"
 )
 
 func collectConnectorUsage(subsystem ptpv2alpha1.Subsystem) (map[string]struct{}, map[string]struct{}) {
@@ -349,7 +355,7 @@ func (hcm *HardwareConfigManager) ApplyHardwareConfigsForProfile(nodeProfile *pt
 		len(relevantConfigs), *nodeProfile.Name)
 
 	for _, enrichedConfig := range relevantConfigs {
-		profileName := "unnamed"
+		profileName := defaultProfileName
 		if enrichedConfig.Spec.Profile.Name != nil {
 			profileName = *enrichedConfig.Spec.Profile.Name
 		}
@@ -1132,7 +1138,7 @@ func (hcm *HardwareConfigManager) getInterfaceNameFromSources(sourceName string,
 	// If sourceName is empty, use the first available PTP source
 	if sourceName == "" {
 		for _, source := range clockChain.Behavior.Sources {
-			if source.SourceType == "ptpTimeReceiver" && len(source.PTPTimeReceivers) > 0 {
+			if source.SourceType == ptpTimeReceiverType && len(source.PTPTimeReceivers) > 0 {
 				upstreamPort = source.PTPTimeReceivers[0]
 				break
 			}
@@ -1213,7 +1219,7 @@ func (hcm *HardwareConfigManager) ApplyConditionForProfile(nodeProfile *ptpv1.Pt
 		conditionType, len(relevantConfigs), *nodeProfile.Name)
 
 	for _, enrichedConfig := range relevantConfigs {
-		profileName := "unnamed"
+		profileName := defaultProfileName
 		if enrichedConfig.Spec.Profile.Name != nil {
 			profileName = *enrichedConfig.Spec.Profile.Name
 		}
@@ -1356,7 +1362,7 @@ func (hcm *HardwareConfigManager) applyVendorDefaultsForRemovedConfigs(removedCo
 			continue
 		}
 
-		profileName := "unnamed"
+		profileName := defaultProfileName
 		if removedConfig.Spec.Profile.Name != nil {
 			profileName = *removedConfig.Spec.Profile.Name
 		}
@@ -1381,7 +1387,7 @@ func (hcm *HardwareConfigManager) applyVendorDefaultsForRemovedConfigs(removedCo
 			// Apply DPLL pin commands (vendor defaults)
 			if len(pins) > 0 {
 				glog.Infof("Applying %d vendor default DPLL pin commands for removed subsystem %s", len(pins), subsystem.Name)
-				if err := hcm.applyDpllPinCommands(profileName, "vendor-defaults-removed", pins); err != nil {
+				if err = hcm.applyDpllPinCommands(profileName, "vendor-defaults-removed", pins); err != nil {
 					glog.Errorf("Failed to apply vendor default DPLL commands for subsystem %s: %v", subsystem.Name, err)
 					// Continue with other subsystems
 				}
@@ -1390,7 +1396,7 @@ func (hcm *HardwareConfigManager) applyVendorDefaultsForRemovedConfigs(removedCo
 			// Apply sysfs commands (vendor defaults)
 			if len(sysfs) > 0 {
 				glog.Infof("Applying %d vendor default sysfs commands for removed subsystem %s", len(sysfs), subsystem.Name)
-				if err := hcm.applyCachedSysFSCommands("vendor-defaults-removed", profileName, sysfs); err != nil {
+				if err = hcm.applyCachedSysFSCommands("vendor-defaults-removed", profileName, sysfs); err != nil {
 					glog.Errorf("Failed to apply vendor default sysfs commands for subsystem %s: %v", subsystem.Name, err)
 					// Continue with other subsystems
 				}
