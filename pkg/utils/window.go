@@ -1,3 +1,6 @@
+// Package utils provides utility functions for the linuxptp daemon.
+//
+//nolint:revive // utils is a common and acceptable package name
 package utils
 
 import (

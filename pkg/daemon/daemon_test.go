@@ -33,10 +33,10 @@ func TestMain(m *testing.M) {
 }
 
 func setup() {
-	flag.Set("alsologtostderr", fmt.Sprintf("%t", true))
+	_ = flag.Set("alsologtostderr", fmt.Sprintf("%t", true))
 	var logLevel string
 	flag.StringVar(&logLevel, "logLevel", "4", "test")
-	flag.Lookup("v").Value.Set(logLevel)
+	_ = flag.Lookup("v").Value.Set(logLevel)
 	daemon.InitializeOffsetMaps()
 	pm = daemon.NewProcessManager()
 	daemon.RegisterMetrics(MYNODE)
@@ -863,7 +863,7 @@ func TestDaemon_PopulateAndRenderPtp4lConf(t *testing.T) {
 	testCases := initPopulateAndRenderPtp4lConfTestCase()
 	for _, tc := range testCases {
 		conf := &daemon.Ptp4lConf{}
-		conf.PopulatePtp4lConf(&tc.testConf)
+		_ = conf.PopulatePtp4lConf(&tc.testConf)
 		if tc.iface != "" {
 			conf.AddInterfaceSection(tc.iface)
 		}

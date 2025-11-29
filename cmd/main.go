@@ -14,13 +14,22 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/klog/v2"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/controller"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/daemon"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/features"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
+	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	ptpclient "github.com/k8snetworkplumbingwg/ptp-operator/pkg/client/clientset/versioned"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -33,9 +42,22 @@ const labelRetries = 5
 const labelRetryInterval = time.Second
 
 type cliParams struct {
-	updateInterval  int
-	profileDir      string
-	pmcPollInterval int
+	updateInterval            int
+	profileDir                string
+	pmcPollInterval           int
+	useController             bool
+	enablePtpConfigController bool
+}
+
+var (
+	scheme = runtime.NewScheme()
+)
+
+func init() {
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(ptpv1.AddToScheme(scheme))
+	// Register HardwareConfig types from ptp-operator v2alpha1
+	utilruntime.Must(ptpv2alpha1.AddToScheme(scheme))
 }
 
 // Parse Command line flags
@@ -46,18 +68,24 @@ func flagInit(cp *cliParams) {
 		"profile to start linuxptp processes")
 	flag.IntVar(&cp.pmcPollInterval, "pmc-poll-interval", config.DefaultPmcPollInterval,
 		"Interval for periodical PMC poll")
+	flag.BoolVar(&cp.useController, "use-controller", true,
+		"Use Kubernetes controller manager (required for HardwareConfig support)")
+	flag.BoolVar(&cp.enablePtpConfigController, "enable-ptpconfig-controller", false,
+		"Enable PtpConfig controller to watch PtpConfig CRs (default: false, uses file-based config)")
 }
 
 func main() {
 
 	fmt.Printf("Git commit: %s\n", GitCommit)
 	cp := &cliParams{}
-	flag.Parse()
 	flagInit(cp)
+	flag.Parse()
 
 	glog.Infof("resync period set to: %d [s]", cp.updateInterval)
 	glog.Infof("linuxptp profile path set to: %s", cp.profileDir)
 	glog.Infof("pmc poll interval set to: %d [s]", cp.pmcPollInterval)
+	glog.Infof("use controller: %v", cp.useController)
+	glog.Infof("enable PtpConfig controller: %v", cp.enablePtpConfigController)
 
 	cfg, err := config.GetKubeConfig()
 	if err != nil {
@@ -145,7 +173,7 @@ func main() {
 	features.SetFlags(version, ocpVersion)
 	features.Flags.Print()
 
-	go daemon.New(
+	daemonInstance := daemon.New(
 		nodeName,
 		daemon.PtpNamespace,
 		stdoutToSocket,
@@ -158,7 +186,8 @@ func main() {
 		closeProcessManager,
 		cp.pmcPollInterval,
 		tracker,
-	).Run()
+	)
+	go daemonInstance.Run()
 
 	tickerPull := time.NewTicker(time.Second * time.Duration(cp.updateInterval))
 	defer tickerPull.Stop()
@@ -173,44 +202,214 @@ func main() {
 
 	daemon.StartReadyServer("0.0.0.0:8081", tracker, stdoutToSocket)
 
+	// Setup controller manager if enabled
+	var mgr ctrl.Manager
+	var mgrCtx context.Context
+	var mgrCancel context.CancelFunc
+	if cp.useController {
+		glog.Info("Setting up controller manager")
+
+		// Setup controller-runtime logger to use klog/glog
+		ctrl.SetLogger(klog.NewKlogr())
+
+		// Create manager
+		var err1 error
+		mgr, err1 = ctrl.NewManager(cfg, ctrl.Options{
+			Scheme:                 scheme,
+			HealthProbeBindAddress: ":8082",
+			LeaderElection:         false, // Disable leader election for daemon
+			// PtpConfig is cluster-scoped, so don't restrict cache by namespace
+		})
+		if err1 != nil {
+			glog.Errorf("unable to start controller manager: %v", err1)
+			return
+		}
+
+		// Add health checks
+		if err1 = mgr.AddHealthzCheck("healthz", healthz.Ping); err1 != nil {
+			glog.Errorf("unable to set up health check: %v", err1)
+			return
+		}
+		if err1 = mgr.AddReadyzCheck("readyz", healthz.Ping); err1 != nil {
+			glog.Errorf("unable to set up ready check: %v", err1)
+			return
+		}
+
+		// Setup PtpConfig controller (optional)
+		if cp.enablePtpConfigController {
+			glog.Info("Setting up PtpConfig controller (watching PtpConfig CRs)")
+			ptpConfigReconciler := &controller.PtpConfigReconciler{
+				Client:       mgr.GetClient(),
+				Scheme:       mgr.GetScheme(),
+				NodeName:     nodeName,
+				ConfigUpdate: ptpConfUpdate,
+			}
+
+			if err1 = ptpConfigReconciler.SetupWithManager(mgr); err1 != nil {
+				glog.Errorf("unable to create controller for PtpConfig: %v", err1)
+				return
+			}
+			glog.Info("PtpConfig controller registered successfully")
+		} else {
+			glog.Info("PtpConfig controller disabled - will use file-based configuration")
+		}
+
+		// Setup HardwareConfig controller (always enabled when controller manager is active)
+		glog.Info("Setting up HardwareConfig controller")
+		hwConfigReconciler := &controller.HardwareConfigReconciler{
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			NodeName: nodeName,
+			// HardwareConfigHandler is the daemon instance. This allows the
+			// HardwareConfig controller to call daemon.UpdateHardwareConfig(...)
+			// when reconciled configs change. The daemon then forwards the
+			// update to its HardwareConfigManager for resolution/caching.
+			HardwareConfigHandler: daemonInstance,
+			ConfigUpdate:          ptpConfUpdate, // Enable hardware config to trigger PTP restarts
+		}
+
+		if err1 = hwConfigReconciler.SetupWithManager(mgr); err1 != nil {
+			glog.Errorf("unable to create controller for HardwareConfig: %v", err1)
+			return
+		}
+		glog.Info("HardwareConfig controller registered successfully")
+
+		// Start the manager in a goroutine
+		mgrCtx, mgrCancel = context.WithCancel(context.Background())
+		go func() {
+			glog.Info("Starting controller manager")
+			if err1 = mgr.Start(mgrCtx); err1 != nil {
+				glog.Errorf("problem running controller manager: %v", err1)
+			}
+		}()
+
+		// We'll cancel the manager context when we get a shutdown signal
+		defer mgrCancel()
+
+		glog.Info("Controller manager started successfully")
+	}
+
 	// Wait for one ticker interval before loading the profile
 	// This allows linuxptp-daemon connection to the cloud-event-proxy container to
 	// be up and running before PTP state logs are printed.
 	time.Sleep(time.Second * time.Duration(cp.updateInterval/2))
-	for {
-		select {
-		case <-tickerPull.C:
-			glog.Infof("ticker pull")
-			// Run a loop to update the device status
-			if refreshNodePtpDevice {
-				go daemon.RunDeviceStatusUpdate(ptpClient, nodeName, &hwconfigs)
-				refreshNodePtpDevice = false
-			}
 
-			nodeProfile := filepath.Join(cp.profileDir, nodeName)
-			if _, err := os.Stat(nodeProfile); err != nil {
-				if os.IsNotExist(err) {
-					glog.Infof("ptp profile doesn't exist for node: %v", nodeName)
-					continue
-				} else {
-					glog.Errorf("error stating node profile %v: %v", nodeName, err)
-					continue
+	if cp.useController {
+		// When using controller mode with PtpConfig controller enabled
+		if cp.enablePtpConfigController {
+			glog.Info("Running in full controller mode - PtpConfig and HardwareConfig resources will be watched automatically")
+
+			// Trigger initial reconciliation by listing all PtpConfigs
+			go func() {
+				time.Sleep(2 * time.Second) // Give controller time to start
+				glog.Info("Triggering initial PtpConfig reconciliation")
+
+				// Force initial reconciliation by calling the controller directly
+				ptpConfigReconciler := &controller.PtpConfigReconciler{
+					Client:       mgr.GetClient(),
+					Scheme:       mgr.GetScheme(),
+					NodeName:     nodeName,
+					ConfigUpdate: ptpConfUpdate,
+				}
+
+				// Trigger reconciliation for any existing PtpConfigs
+				_, err1 := ptpConfigReconciler.Reconcile(context.Background(), ctrl.Request{})
+				if err1 != nil {
+					glog.Errorf("Initial reconciliation failed: %v", err1)
+				}
+			}()
+
+			for {
+				select {
+				case <-tickerPull.C:
+					glog.Infof("ticker pull (full controller mode)")
+					// Run a loop to update the device status
+					if refreshNodePtpDevice {
+						go daemon.RunDeviceStatusUpdate(ptpClient, nodeName, &hwconfigs)
+						refreshNodePtpDevice = false
+					}
+				case sig := <-sigCh:
+					glog.Info("signal received, shutting down", sig)
+					closeProcessManager <- true
+					if mgrCancel != nil {
+						mgrCancel() // Stop the controller manager
+					}
+					return
 				}
 			}
-			nodeProfilesJson, err := os.ReadFile(nodeProfile)
-			if err != nil {
-				glog.Errorf("error reading node profile: %v", nodeProfile)
-				continue
-			}
+		} else {
+			// Hybrid mode: HardwareConfig controller + file-based PtpConfig
+			glog.Info("Running in hybrid mode - HardwareConfig controller active, PtpConfig from files")
 
-			err = ptpConfUpdate.UpdateConfig(nodeProfilesJson)
-			if err != nil {
-				glog.Errorf("error updating the node configuration using the profiles loaded: %v", err)
+			for {
+				select {
+				case <-tickerPull.C:
+					glog.Infof("ticker pull (hybrid mode)")
+					// Run a loop to update the device status
+					if refreshNodePtpDevice {
+						go daemon.RunDeviceStatusUpdate(ptpClient, nodeName, &hwconfigs)
+						refreshNodePtpDevice = false
+					}
+
+					// Read PtpConfig from file (legacy mode)
+					nodeProfile := filepath.Join(cp.profileDir, nodeName)
+					if _, err1 := os.Stat(nodeProfile); err1 != nil {
+						glog.Errorf("error stating node profile %v: %v", nodeName, err1)
+						continue
+					}
+					nodeProfilesJSON, err1 := os.ReadFile(nodeProfile)
+					if err1 != nil {
+						glog.Errorf("error reading node profile: %v", nodeProfile)
+						continue
+					}
+
+					err = ptpConfUpdate.UpdateConfig(nodeProfilesJSON)
+					if err != nil {
+						glog.Errorf("error updating the node configuration using the profiles loaded: %v", err)
+					}
+				case sig := <-sigCh:
+					glog.Info("signal received, shutting down", sig)
+					closeProcessManager <- true
+					if mgrCancel != nil {
+						mgrCancel() // Stop the controller manager
+					}
+					return
+				}
 			}
-		case sig := <-sigCh:
-			glog.Info("signal received, shutting down", sig)
-			closeProcessManager <- true
-			return
+		}
+	} else {
+		// Legacy file-based mode (no controllers)
+		glog.Info("Running in legacy file-based mode (no controllers)")
+		for {
+			select {
+			case <-tickerPull.C:
+				glog.Infof("ticker pull (legacy mode)")
+				// Run a loop to update the device status
+				if refreshNodePtpDevice {
+					go daemon.RunDeviceStatusUpdate(ptpClient, nodeName, &hwconfigs)
+					refreshNodePtpDevice = false
+				}
+
+				nodeProfile := filepath.Join(cp.profileDir, nodeName)
+				if _, err1 := os.Stat(nodeProfile); err1 != nil {
+					glog.Errorf("error stating node profile %v: %v", nodeName, err1)
+					continue
+				}
+				nodeProfilesJSON, err1 := os.ReadFile(nodeProfile)
+				if err1 != nil {
+					glog.Errorf("error reading node profile: %v", nodeProfile)
+					continue
+				}
+
+				err = ptpConfUpdate.UpdateConfig(nodeProfilesJSON)
+				if err != nil {
+					glog.Errorf("error updating the node configuration using the profiles loaded: %v", err)
+				}
+			case sig := <-sigCh:
+				glog.Info("signal received, shutting down", sig)
+				closeProcessManager <- true
+				return
+			}
 		}
 	}
 }

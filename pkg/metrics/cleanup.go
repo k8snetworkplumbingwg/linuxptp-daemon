@@ -1,3 +1,4 @@
+// Package metrics provides metrics collection and cleanup functionality.
 package metrics
 
 import (

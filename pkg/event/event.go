@@ -322,6 +322,7 @@ DPLL PTP State |  GNSS PTP STATE  |	TS2PHC PTP STATE| GM STATE | Clock Class
 | NA           |  LOCKED          |	LOCKED          | LOCKED   | 6
 
 */
+//nolint:gocyclo // complexity is acceptable for this function
 func (e *EventHandler) updateGMState(cfgName string) clockSyncState {
 	dpllState := PTP_NOTSET
 	gnssState := PTP_FREERUN

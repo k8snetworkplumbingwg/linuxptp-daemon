@@ -1,3 +1,4 @@
+// Package features provides feature flag management for the linuxptp daemon.
 package features
 
 import (

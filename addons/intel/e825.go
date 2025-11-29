@@ -164,7 +164,7 @@ func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 	e825Opts.EnableDefaultConfig = false
 
 	for name, opts := range (*nodeProfile).Plugins {
-		if name == "e825" {
+		if name == pluginNameE825 {
 			optsByteArray, _ = json.Marshal(opts)
 			err = json.Unmarshal(optsByteArray, &e825Opts)
 			if err != nil {

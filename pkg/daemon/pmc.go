@@ -190,7 +190,7 @@ func (pmc *PMCProcess) monitor(conn net.Conn) error {
 
 	subscribeCmd := pmc.getMonitorSubcribeCommand()
 	glog.Infof("Sending '%s' to pmc", subscribeCmd)
-	exp.Send(subscribeCmd + "\n")
+	_ = exp.Send(subscribeCmd + "\n")
 	for {
 		_, matches, expectErr := exp.Expect(pmcPkg.GetMonitorRegex(pmc.monitorParentData), pollTimeout)
 		select {
