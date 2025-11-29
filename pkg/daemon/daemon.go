@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
@@ -54,6 +55,7 @@ const (
 	MessageTagSuffixSeperator       = ":"
 	TBC                             = "T-BC"
 	TGM                             = "T-GM"
+	PtpSecFolder                    = "/etc/ptp-secret-mount/"
 )
 
 var (
@@ -306,6 +308,7 @@ type Daemon struct {
 
 	// Allow vendors to include plugins
 	pluginManager plugin.PluginManager
+	saFileWatcher *fsnotify.Watcher
 }
 
 // New LinuxPTP is called by daemon to generate new linuxptp instance
@@ -335,6 +338,23 @@ func New(
 		ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics),
 	}
 	tracker.processManager = pm
+
+	// Initialize fsnotify watcher for sa_file change detection
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		glog.Errorf("Failed to create fsnotify watcher for sa_file monitoring: %v", err)
+		glog.Warning("sa_file change detection will be disabled")
+		watcher = nil
+	} else {
+		glog.Info("fsnotify watcher initialized for sa_file change detection")
+		// Watch the known security mount folder from startup
+		if watchErr := watcher.Add(PtpSecFolder); watchErr != nil {
+			glog.Warningf("Failed to watch %s (may not exist yet): %v", PtpSecFolder, watchErr)
+		} else {
+			glog.Infof("Watching %s for sa_file changes", PtpSecFolder)
+		}
+	}
+
 	return &Daemon{
 		nodeName:             nodeName,
 		namespace:            namespace,
@@ -348,19 +368,76 @@ func New(
 		processManager:       pm,
 		readyTracker:         tracker,
 		stopCh:               stopCh,
+		saFileWatcher:        watcher,
 	}
 }
 
 // Run in a for loop to listen for any LinuxPTPConfUpdate changes
+// This function handles two types of configuration changes:
+// 1. PtpConfig changes (via ConfigMap) - triggers UpdateCh
+// 2. Authentication file changes (via Secret) - triggers fsnotify events (instant detection)
+// Both trigger applyNodePTPProfiles() which restarts PTP processes WITHOUT restarting the pod
 func (dn *Daemon) Run() {
 	go dn.processManager.ptpEventHandler.ProcessEvents()
+
+	// Setup fsnotify channels (may be nil if watcher initialization failed)
+	var watcherEvents chan fsnotify.Event
+	var watcherErrors chan error
+	if dn.saFileWatcher != nil {
+		watcherEvents = dn.saFileWatcher.Events
+		watcherErrors = dn.saFileWatcher.Errors
+		defer dn.saFileWatcher.Close()
+		glog.Info("Using fsnotify for instant sa_file change detection")
+	} else {
+		glog.Warning("fsnotify unavailable, sa_file change detection disabled")
+	}
+
 	for {
 		select {
 		case <-dn.ptpUpdate.UpdateCh:
+			// PtpConfig change detected via ConfigMap
+
+			glog.Info("PtpConfig change detected, restarting PTP processes")
 			err := dn.applyNodePTPProfiles()
 			if err != nil {
 				glog.Errorf("linuxPTP apply node profile failed: %v", err)
 			}
+
+		case event, ok := <-watcherEvents:
+			// File system event on sa_file directory
+			if !ok {
+				glog.Error("fsnotify watcher channel closed, disabling sa_file monitoring")
+				watcherEvents = nil
+				continue
+			}
+
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) == 0 {
+				continue
+			}
+			if strings.HasPrefix(filepath.Base(event.Name), ".") {
+				continue // Ignore hidden files like ..data
+			}
+
+			glog.Infof("Security file changed: %s (op: %s), restarting PTP processes", event.Name, event.Op.String())
+			err := dn.applyNodePTPProfiles()
+			if err != nil {
+				glog.Errorf("linuxPTP apply node profile failed after security file change: %v", err)
+			}
+
+		case err, ok := <-watcherErrors:
+			// fsnotify watcher error
+			if !ok {
+				watcherErrors = nil
+				// recreate the watcher
+				dn.saFileWatcher, err = fsnotify.NewWatcher()
+				if err != nil {
+					glog.Errorf("Failed to recreate fsnotify watcher for sa_file monitoring: %v", err)
+					continue
+				}
+				glog.Info("fsnotify watcher reinitialized for sa_file change detection")
+			}
+			glog.Errorf("fsnotify watcher error: %v", err)
+
 		case <-dn.stopCh:
 			dn.stopAllProcesses()
 			glog.Infof("linuxPTP stop signal received, existing..")
@@ -546,6 +623,66 @@ func printNodeProfile(nodeProfile *ptpv1.PtpProfile) {
 	glog.Infof("------------------------------------")
 }
 
+// extractAuthSettingsForPhc2sys extracts sa_file, spp, and active_key_id from ptp4lConf
+// and returns a phc2sys-compatible [global] section with those settings
+func extractAuthSettingsForPhc2sys(ptp4lConf *string) string {
+	if ptp4lConf == nil || *ptp4lConf == "" {
+		return ""
+	}
+
+	var saFile, spp, activeKeyID string
+	inGlobal := false
+
+	for _, line := range strings.Split(*ptp4lConf, "\n") {
+		line = strings.TrimSpace(line)
+
+		if line == "[global]" {
+			inGlobal = true
+			continue
+		}
+		if strings.HasPrefix(line, "[") && line != "[global]" {
+			inGlobal = false
+			continue
+		}
+
+		if inGlobal {
+			if strings.HasPrefix(line, "sa_file") {
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					saFile = parts[1]
+				}
+			} else if strings.HasPrefix(line, "spp ") {
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					spp = parts[1]
+				}
+			} else if strings.HasPrefix(line, "active_key_id") {
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					activeKeyID = parts[1]
+				}
+			}
+		}
+	}
+
+	// Only generate config if we have auth settings
+	if saFile == "" {
+		return ""
+	}
+
+	var result strings.Builder
+	result.WriteString("[global]\n")
+	result.WriteString(fmt.Sprintf("sa_file %s\n", saFile))
+	if spp != "" {
+		result.WriteString(fmt.Sprintf("spp %s\n", spp))
+	}
+	if activeKeyID != "" {
+		result.WriteString(fmt.Sprintf("active_key_id %s\n", activeKeyID))
+	}
+
+	return result.String()
+}
+
 /*
 update: March 7th 2024
 To support PTP HA phc2sys profile is appended to the end
@@ -633,6 +770,19 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			}
 			configFile = fmt.Sprintf("phc2sys.%d.config", runID)
 			configPath = fmt.Sprintf("%s/%s", configPrefix, configFile)
+			if clockType == event.GM && nodeProfile.Ptp4lConf != nil {
+				phc2sysAuthConfig := extractAuthSettingsForPhc2sys(nodeProfile.Ptp4lConf)
+				if phc2sysAuthConfig != "" {
+					if configInput == nil || *configInput == "" {
+						configInput = &phc2sysAuthConfig
+					} else {
+						// Prepend auth settings to existing config
+						merged := phc2sysAuthConfig + "\n" + *configInput
+						configInput = &merged
+					}
+					glog.Infof("Injected auth settings into phc2sys config for grandmaster profile %s", *nodeProfile.Name)
+				}
+			}
 		case ts2phcProcessName:
 			configInput = nodeProfile.Ts2PhcConf
 			configOpts = nodeProfile.Ts2PhcOpts
