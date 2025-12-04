@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
@@ -56,6 +57,7 @@ const (
 	MessageTagSuffixSeperator       = ":"
 	TBC                             = "T-BC"
 	TGM                             = "T-GM"
+	PtpSecretMountDir               = "/etc/ptp-secret-mount/"
 )
 
 var (
@@ -313,6 +315,7 @@ type Daemon struct {
 
 	// Allow vendors to include plugins
 	pluginManager plugin.PluginManager
+	saFileWatcher *fsnotify.Watcher
 }
 
 // UpdateHardwareConfig implements controller.HardwareConfigUpdateHandler.
@@ -364,6 +367,22 @@ func New(
 	}
 	tracker.processManager = pm
 
+	// Initialize fsnotify watcher for sa_file change detection
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		glog.Errorf("Failed to create fsnotify watcher for sa_file monitoring: %v", err)
+		glog.Warning("sa_file change detection will be disabled")
+		watcher = nil
+	} else {
+		glog.Info("fsnotify watcher initialized for sa_file change detection")
+		// Watch the known security mount folder from startup
+		if watchErr := watcher.Add(PtpSecretMountDir); watchErr != nil {
+			glog.Warningf("Failed to watch %s (may not exist yet): %v", PtpSecretMountDir, watchErr)
+		} else {
+			glog.Infof("Watching %s for sa_file changes", PtpSecretMountDir)
+		}
+	}
+
 	return &Daemon{
 		nodeName:              nodeName,
 		namespace:             namespace,
@@ -378,13 +397,31 @@ func New(
 		processManager:        pm,
 		readyTracker:          tracker,
 		stopCh:                stopCh,
+		saFileWatcher:         watcher,
 	}
 }
 
 // Run in a for loop to listen for any LinuxPTPConfUpdate changes
+// This function handles two types of configuration changes:
+// 1. PtpConfig changes (via ConfigMap) - triggers UpdateCh
+// 2. Authentication file changes (via Secret) - triggers fsnotify events (instant detection)
+// Both trigger applyNodePTPProfiles() which restarts PTP processes WITHOUT restarting the pod
 func (dn *Daemon) Run() {
 	glog.Info("Daemon Run() started, waiting for configuration updates...")
 	go dn.processManager.ptpEventHandler.ProcessEvents()
+
+	// Setup fsnotify channels (may be nil if watcher initialization failed)
+	var watcherEvents chan fsnotify.Event
+	var watcherErrors chan error
+	if dn.saFileWatcher != nil {
+		watcherEvents = dn.saFileWatcher.Events
+		watcherErrors = dn.saFileWatcher.Errors
+		defer dn.saFileWatcher.Close()
+		glog.Info("Using fsnotify for instant sa_file change detection")
+	} else {
+		glog.Warning("fsnotify unavailable, sa_file change detection disabled")
+	}
+
 	for {
 		select {
 		case <-dn.ptpUpdate.UpdateCh:
@@ -393,6 +430,51 @@ func (dn *Daemon) Run() {
 			if err != nil {
 				glog.Errorf("linuxPTP apply node profile failed: %v", err)
 			}
+		case event, ok := <-watcherEvents:
+			// File system event on sa_file directory detected, restart PTP processes
+			if !ok {
+				glog.Error("fsnotify watcher channel closed, disabling sa_file monitoring")
+				watcherEvents = nil
+				continue
+			}
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) == 0 {
+				continue
+			}
+			if strings.HasPrefix(filepath.Base(event.Name), ".") {
+				continue // Ignore hidden files like .data
+			}
+			glog.Infof("Security file changed: %s (op: %s), restarting PTP processes", event.Name, event.Op.String())
+			err := dn.applyNodePTPProfiles()
+			if err != nil {
+				glog.Errorf("linuxPTP apply node profile failed after security file change: %v", err)
+			}
+		case err, ok := <-watcherErrors:
+			if !ok {
+				// Channel closed - recreate the watcher to recover from failure
+				// This prevents needing to restart the entire pod when fsnotify crashes
+				glog.Warning("fsnotify watcher error channel closed, recreating watcher")
+
+				dn.saFileWatcher, err = fsnotify.NewWatcher()
+				if err != nil {
+					glog.Errorf("Failed to recreate fsnotify watcher for sa_file monitoring: %v", err)
+					continue
+				}
+
+				// Re-add the watch path for the new watcher
+				if watchErr := dn.saFileWatcher.Add(PtpSecretMountDir); watchErr != nil {
+					glog.Warningf("Failed to re-add watch on %s: %v", PtpSecretMountDir, watchErr)
+				} else {
+					glog.Infof("Re-added watch on %s after watcher recreation", PtpSecretMountDir)
+				}
+
+				// Reinitialize channels for the new watcher
+				watcherEvents = dn.saFileWatcher.Events
+				watcherErrors = dn.saFileWatcher.Errors
+
+				glog.Info("fsnotify watcher successfully recreated for sa_file change detection")
+				continue
+			}
+			glog.Errorf("fsnotify watcher error: %v", err)
 		case <-dn.stopCh:
 			dn.stopAllProcesses()
 			glog.Infof("linuxPTP stop signal received, existing..")
