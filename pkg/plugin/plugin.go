@@ -44,7 +44,7 @@ func (pm *PluginManager) OnPTPConfigChange(nodeProfile *ptpv1.PtpProfile) {
 	for pluginName, pluginObject := range pm.Plugins {
 		pluginFunc := pluginObject.OnPTPConfigChange
 		if pluginFunc != nil {
-			pluginFunc(pm.Data[pluginName], nodeProfile)
+			_ = pluginFunc(pm.Data[pluginName], nodeProfile)
 		}
 	}
 }
@@ -54,7 +54,7 @@ func (pm *PluginManager) AfterRunPTPCommand(nodeProfile *ptpv1.PtpProfile, comma
 	for pluginName, pluginObject := range pm.Plugins {
 		pluginFunc := pluginObject.AfterRunPTPCommand
 		if pluginFunc != nil {
-			pluginFunc(pm.Data[pluginName], nodeProfile, command)
+			_ = pluginFunc(pm.Data[pluginName], nodeProfile, command)
 		}
 	}
 }
@@ -64,7 +64,7 @@ func (pm *PluginManager) PopulateHwConfig(hwconfigs *[]ptpv1.HwConfig) {
 	for pluginName, pluginObject := range pm.Plugins {
 		pluginFunc := pluginObject.PopulateHwConfig
 		if pluginFunc != nil {
-			pluginFunc(pm.Data[pluginName], hwconfigs)
+			_ = pluginFunc(pm.Data[pluginName], hwconfigs)
 		}
 	}
 }

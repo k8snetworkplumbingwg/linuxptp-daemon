@@ -5,7 +5,7 @@ RUN make clean && make
 
 FROM quay.io/centos/centos:stream9
 
-RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_install=False -y install linuxptp ethtool hwdata synce4l && yum clean all
+RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_install=False -y install pciutils linuxptp ethtool hwdata synce4l && yum clean all
 
 
 RUN yum install -y procps-ng
