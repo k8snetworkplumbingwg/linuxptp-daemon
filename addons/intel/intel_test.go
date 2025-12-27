@@ -170,11 +170,29 @@ func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 	unitTest = true
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
+
+	// Setup filesystem mock for TBC profile - EnableE810Outputs needs this
+	mockFS := &MockFileSystem{}
+	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
+
+	// EnableE810Outputs reads the ptp directory and writes to SMA2 and period
+	mockFS.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
+	mockFS.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA2", []byte("2 2"), os.FileMode(0666), nil)
+	mockFS.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/period", []byte("2 0 0 1 0"), os.FileMode(0666), nil)
+
+	// Replace global filesystem with mock
+	originalFS := filesystem
+	filesystem = mockFS
+	defer func() { filesystem = originalFS }()
+
 	profile, err := loadProfile("./testdata/profile-tbc-no-input-delays.yaml")
 	assert.NoError(t, err)
 	err = OnPTPConfigChangeE810(nil, profile)
 	assert.NoError(t, err)
 	assert.NotNil(t, mockPinSet.commands, "Ensure clockChain.SetPinDefaults was called")
+
+	// Verify all expected filesystem calls were made
+	mockFS.VerifyAllCalls(t)
 }
 
 func Test_ProcessProfileTbc(t *testing.T) {
@@ -183,6 +201,11 @@ func Test_ProcessProfileTbc(t *testing.T) {
 	// Setup filesystem mock for TBC profile (3 devices with pins)
 	mockFS := &MockFileSystem{}
 	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
+
+	// EnableE810Outputs is called for the leading NIC (ens4f0) - needs specific paths
+	mockFS.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
+	mockFS.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA2", []byte("2 2"), os.FileMode(0666), nil)
+	mockFS.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/period", []byte("2 0 0 1 0"), os.FileMode(0666), nil)
 
 	// profile-tbc.yaml has pins for ens4f0, ens5f0, ens8f0 (3 devices)
 	for i := 0; i < 3; i++ {
@@ -193,7 +216,7 @@ func Test_ProcessProfileTbc(t *testing.T) {
 		}
 	}
 
-	// Add extra operations for EnableE810Outputs and other calls
+	// Add extra operations for other calls
 	for i := 0; i < 10; i++ {
 		mockFS.ExpectReadDir("", phcEntries, nil)                      // Extra ReadDir calls
 		mockFS.ExpectWriteFile("", []byte(""), os.FileMode(0666), nil) // Extra WriteFile calls
@@ -248,13 +271,18 @@ func Test_ProcessProfileTtsc(t *testing.T) {
 	mockFS := &MockFileSystem{}
 	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
 
+	// EnableE810Outputs is called for the leading NIC (ens4f0) - needs specific paths
+	mockFS.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
+	mockFS.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA2", []byte("2 2"), os.FileMode(0666), nil)
+	mockFS.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/period", []byte("2 0 0 1 0"), os.FileMode(0666), nil)
+
 	// profile-t-tsc.yaml has pins for ens4f0 only
 	mockFS.ExpectReadDir("", phcEntries, nil) // One ReadDir
 	for i := 0; i < 4; i++ {                  // 4 pin writes
 		mockFS.ExpectWriteFile("", []byte(""), os.FileMode(0666), nil)
 	}
 
-	// Add extra operations for EnableE810Outputs and other calls
+	// Add extra operations for other calls
 	for i := 0; i < 10; i++ {
 		mockFS.ExpectReadDir("", phcEntries, nil)                      // Extra ReadDir calls
 		mockFS.ExpectWriteFile("", []byte(""), os.FileMode(0666), nil) // Extra WriteFile calls
@@ -310,6 +338,18 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 	mockPinSet, restorePinSet := setupBatchPinSetMock()
 	defer restorePinSet()
 	unitTest = true
+
+	// Setup filesystem mock for EnableE810Outputs
+	mockFS := &MockFileSystem{}
+	phcEntries := []os.DirEntry{MockDirEntry{name: "ptp0", isDir: true}}
+	mockFS.ExpectReadDir("/sys/class/net/ens4f0/device/ptp/", phcEntries, nil)
+	mockFS.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/pins/SMA2", []byte("2 2"), os.FileMode(0666), nil)
+	mockFS.ExpectWriteFile("/sys/class/net/ens4f0/device/ptp/ptp0/period", []byte("2 0 0 1 0"), os.FileMode(0666), nil)
+
+	// Replace global filesystem with mock
+	originalFS := filesystem
+	filesystem = mockFS
+	defer func() { filesystem = originalFS }()
 
 	// Load a profile with multiple NICs (leading + other NICs)
 	profile, err := loadProfile("./testdata/profile-tbc.yaml")
