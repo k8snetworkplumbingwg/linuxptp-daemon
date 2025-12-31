@@ -590,6 +590,7 @@ func TestApplyConditionDesiredStatesWithRealData(t *testing.T) {
 
 			if targetCondition == nil {
 				t.Fatalf("Condition '%s' not found in hardware config", tc.conditionName)
+				return // unreachable but satisfies staticcheck
 			}
 
 			// Validate the expected number of desired states
