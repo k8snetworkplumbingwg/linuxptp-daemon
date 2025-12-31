@@ -106,13 +106,12 @@ type SourceConfig struct {
 	// The subsystem's network interface will be used to derive the clock ID.
 	Subsystem string `json:"subsystem" yaml:"subsystem"`
 
-	// SourceType identifies the source type. Valid values: "ptpTimeReceiver", "gnss"
+	// SourceType identifies the source type. Valid values: "ptpTimeReceiver", "gnss", "dpllPhaseLocked"
 	// If sourceType is ptpTimeReceiver, ptpTimeReceivers must be specified.
-	// In all cases, boardLabel must be specified.
 	SourceType string `json:"sourceType" yaml:"sourceType"`
 
 	// BoardLabel and subsystem together unambiguously identify the subsystem and the DPLL pin receiving the source
-	BoardLabel string `json:"boardLabel" yaml:"boardLabel"`
+	BoardLabel string `json:"boardLabel,omitempty" yaml:"boardLabel,omitempty"`
 
 	// PTPTimeReceivers are ports configured to act as PTP time receivers
 	// (required if the sourceType is set to 'ptpTimeReceiver')
@@ -219,10 +218,11 @@ type Subsystem struct {
 	HardwareSpecificDefinitions string `json:"hardwareSpecificDefinitions,omitempty" yaml:"hardwareSpecificDefinitions,omitempty"`
 
 	// DPLL contains the DPLL configuration for this subsystem
-	DPLL DPLL `json:"dpll" yaml:"dpll"`
+	// When clockType is specified, this can be omitted and will be derived from ptpProfile and vendor defaults.
+	DPLL DPLL `json:"dpll,omitempty" yaml:"dpll,omitempty"`
 
 	// Ethernet defines one or more Ethernet subsystems associated with this synchronization subsystem
-	Ethernet []Ethernet `json:"ethernet" yaml:"ethernet"`
+	Ethernet []Ethernet `json:"ethernet,omitempty" yaml:"ethernet,omitempty"`
 }
 
 // HoldoverParameters defines the combination of the DPLL complex hardware parameters and the holdover specification threshold.
@@ -267,7 +267,8 @@ type DPLL struct {
 type Ethernet struct {
 	// Ports is a list of Ethernet port names associated with this Ethernet subsystem.
 	// The default port, or the port used to address the network adapter configuration through sysfs, is listed first.
-	Ports []string `json:"ports" yaml:"ports"`
+	// When clockType is specified, this can be omitted and will be derived from ptpconfig leading interfaces.
+	Ports []string `json:"ports,omitempty" yaml:"ports,omitempty"`
 }
 
 // PinConfig represents pin configuration for DPLL phase or frequency signals in a dictionary format
@@ -278,8 +279,11 @@ type PinConfig struct {
 	// Used by the hardware plugin software to configure connector logic, if present.
 	Connector string `json:"connector,omitempty" yaml:"connector,omitempty"`
 
-	// PhaseAdjustment is optional phase adjustment in picoseconds
-	PhaseAdjustment *PhaseAdjustment `json:"phaseAdjustment,omitempty" yaml:"phaseAdjustment,omitempty"`
+	// PhaseAdjustment is optional phase adjustment in picoseconds.
+	// This represents the integrator-defined adjustment value (e.g., cable delay compensation).
+	// Internal delays from delays.yaml (positive delay values) are negated and added to this value.
+	// The total adjustment is sent directly to DPLL without further negation.
+	PhaseAdjustment *int64 `json:"phaseAdjustment,omitempty" yaml:"phaseAdjustment,omitempty"`
 
 	// Frequency is the frequency value in Hz (for frequency pins) or phase reference frequency
 	// (for phase pins, defaults to 1 PPS). Mutually exclusive with esyncConfigName.
@@ -295,24 +299,6 @@ type PinConfig struct {
 	// ReferenceSync applies to frequency pins that can be paired to a phase pin by board label
 	// The value should match a phase pin label (from phaseInputs) within the same subsystem
 	ReferenceSync string `json:"referenceSync,omitempty" yaml:"referenceSync,omitempty"`
-}
-
-// PhaseAdjustment represents phase adjustment that must be applied to the input or the output pin
-// to compensate for phase delays from routing, logic and cables.
-// Usually internal delay is applied to output pins, and the sum of internal and external delays is applied to input pins.
-// Sometimes the above adjustment is not possible (e.g. if the input side is not programmable). In this case external delays
-// will be summed with the internal delays and applied to the output side.
-type PhaseAdjustment struct {
-	// Internal is the internal phase adjustment in picoseconds (required).
-	// Usually compensates for the board hardware delays and should not be changed by the user.
-	Internal int `json:"internal" yaml:"internal"`
-
-	// External is the external phase adjustment in picoseconds.
-	// Compensates for delays introduced by external cables.
-	External *int `json:"external,omitempty" yaml:"external,omitempty"`
-
-	// Description is an optional description for this phase adjustment
-	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 }
 
 // Custom validation functions
@@ -615,6 +601,11 @@ type HardwareConfigList struct {
 type HardwareProfile struct {
 	// Name is the unique identifier for this hardware profile
 	Name *string `json:"name" yaml:"name"`
+	// ClockType specifies the clock mode: "T-BC", "T-GM", or "APTS"
+	// When specified, behavior templates are loaded from vendor defaults based on
+	// each subsystem's hardwareSpecificDefinitions and resolved with user-provided overrides.
+	// If not specified, the behavior section must be explicitly provided in ClockChain.
+	ClockType *string `json:"clockType,omitempty" yaml:"clockType,omitempty"`
 
 	// ClockChain contains the complete clock chain configuration for this profile
 	ClockChain *ClockChain `json:"clockChain" yaml:"clockChain"`
