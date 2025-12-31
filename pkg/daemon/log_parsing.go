@@ -70,10 +70,11 @@ func processWithParser(process *ptpProcess, output string) {
 		glog.Infof("metrics: %+v", metrics)
 		glog.Infof("ptpEvent: %+v", ptpEvent)
 	}
-	process.hasCollectedMetrics = true
 
 	// Process metrics if available
 	if metrics != nil {
+		process.hasCollectedMetrics = true
+		process.offset = metrics.Offset
 		processParsedMetrics(process, metrics)
 	}
 

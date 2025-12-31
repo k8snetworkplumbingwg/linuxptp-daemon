@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/bigkevmcd/go-configparser"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
@@ -496,6 +496,10 @@ func stringPointer(s string) *string {
 
 // TestTBCTransitionCheck_HardwareConfigPath tests the hardware config path of tBCTransitionCheck
 func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
+	// Create a real PluginManager
+	pmStruct := registerPlugins([]string{})
+	pm := &pmStruct
+
 	// Test case: Verify hardware config setup
 	t.Run("hardware config setup validation", func(t *testing.T) {
 		// Create a ptpProcess with hardware config enabled
@@ -529,6 +533,126 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 		// This tests the condition: vTbcHasHardwareConfig && p.tbcStateDetector != nil
 		assert.True(t, vTbcHasHardwareConfig && process.tbcStateDetector != nil,
 			"Hardware config path should be taken when both conditions are met")
+	})
+
+	// Test case: Locked transition with offset filtering
+	t.Run("locked transition with offset filtering", func(t *testing.T) {
+		// Set global variable for hardware config
+		oldValue := vTbcHasHardwareConfig
+		vTbcHasHardwareConfig = true
+		defer func() { vTbcHasHardwareConfig = oldValue }()
+
+		// Create a mock Daemon with hardwareConfigManager
+		mockDaemon := &Daemon{
+			hardwareConfigManager: hardwareconfig.NewHardwareConfigManager(),
+		}
+
+		process := &ptpProcess{
+			tBCAttributes: tBCProcessAttributes{
+				trIfaceName:       "ens4f0",
+				trPortsConfigFile: "test-config",    // Must match configName for offset filter logic to run
+				lastAppliedState:  event.PTP_NOTSET, // Must not be PTP_LOCKED for event to be sent
+				offsetThreshold:   10.0,             // Set threshold > offset (5.0) to allow event to be sent
+			},
+			nodeProfile: ptpv1.PtpProfile{
+				Name: stringPointer("test-profile"),
+				PtpSettings: map[string]string{
+					"leadingInterface": "ens4f0",
+					"clockId[ens4f0]":  "123456789",
+				},
+			},
+			eventCh:          make(chan event.EventChannel, 1),
+			configName:       "test-config",
+			clockType:        event.BC,
+			offset:           5.0, // Set offset < threshold (10.0) to allow event to be sent
+			tbcStateDetector: createMockPTPStateDetectorForHardwareConfig(),
+			dn:               mockDaemon,
+		}
+
+		// First call: Trigger ConditionTypeLocked (no event sent yet)
+		// The parser detects locked state when event contains "to SLAVE"
+		process.tBCTransitionCheck("ptp4l[123.456]: [test-config.0.config] port 1 (ens4f0): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+
+		// Verify state changed to LOCKED
+		assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+
+		// Verify filter was created
+		assert.NotNil(t, process.tBCAttributes.offsetFilter, "Offset filter should be created")
+
+		// Verify no event was sent yet (event is only sent when filter is full)
+		select {
+		case <-process.eventCh:
+			t.Error("Event should not be sent immediately on locked transition")
+		default:
+			// Good, no event yet
+		}
+
+		// Fill the offset filter by calling tBCTransitionCheck with messages
+		// The filter needs to be full (64 samples) before the event is sent
+		// First call already inserted 1 sample, so we need 63 more to fill it
+		// Use metric log lines (not event lines) to fill the filter
+		for i := 0; i < 63; i++ {
+			process.tBCTransitionCheck("ptp4l[123.456]: [test-config.0.config] master offset 5 s2 freq 0 path delay 100", pm)
+		}
+
+		// Verify event was sent after filter is full
+		select {
+		case <-process.eventCh:
+			// Event was sent, good
+		default:
+			t.Error("Expected PTP event to be sent after filter is full")
+		}
+
+		// Verify lastAppliedState was updated
+		assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastAppliedState)
+	})
+
+	// Test case: Lost transition (immediate)
+	t.Run("lost transition", func(t *testing.T) {
+		// Set global variable for hardware config
+		oldValue := vTbcHasHardwareConfig
+		vTbcHasHardwareConfig = true
+		defer func() { vTbcHasHardwareConfig = oldValue }()
+
+		// Create a mock Daemon with hardwareConfigManager
+		mockDaemon := &Daemon{
+			hardwareConfigManager: hardwareconfig.NewHardwareConfigManager(),
+		}
+
+		process := &ptpProcess{
+			tBCAttributes: tBCProcessAttributes{
+				trIfaceName: "ens4f0",
+			},
+			nodeProfile: ptpv1.PtpProfile{
+				Name: stringPointer("test-profile"),
+				PtpSettings: map[string]string{
+					"leadingInterface": "ens4f0",
+					"clockId[ens4f0]":  "123456789",
+				},
+			},
+			eventCh:          make(chan event.EventChannel, 1),
+			configName:       "test-config",
+			clockType:        event.BC,
+			tbcStateDetector: createMockPTPStateDetectorForHardwareConfig(),
+			dn:               mockDaemon,
+		}
+
+		// Call with lost transition log - parser detects lost when event contains "SLAVE to"
+		process.tBCTransitionCheck("ptp4l[123.456]: [test-config.0.config] port 1 (ens4f0): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", pm)
+
+		// Verify state changed to FREERUN
+		assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState)
+
+		// Verify filter was reset
+		assert.Nil(t, process.tBCAttributes.offsetFilter, "Offset filter should be reset on lost transition")
+
+		// Verify event was sent immediately
+		select {
+		case <-process.eventCh:
+			// Event was sent, good
+		default:
+			t.Error("Expected PTP event to be sent immediately on lost transition")
+		}
 	})
 
 	// Test case: Hardware config path vs legacy path decision logic
@@ -679,28 +803,21 @@ func TestTBCTransitionCheck_PathSelection(t *testing.T) {
 }
 
 // createMockPTPStateDetectorForHardwareConfig creates a mock PTPStateDetector for hardware config testing
+// Uses NewPTPStateDetector to properly initialize the detector, then adds test-specific monitored ports
 func createMockPTPStateDetectorForHardwareConfig() *hardwareconfig.PTPStateDetector {
-	psd := &hardwareconfig.PTPStateDetector{}
+	// Create a detector using the normal constructor - this properly initializes ptp4lExtractor
+	hcm := hardwareconfig.NewHardwareConfigManager()
+	psd := hardwareconfig.NewPTPStateDetector(hcm)
 
-	// Use reflection to set private fields needed for basic functionality
+	// Add test-specific monitored ports using unsafe reflection to access the unexported map
+	// Since maps are reference types, we can modify it in place once we have access
 	psdValue := reflect.ValueOf(psd).Elem()
-
-	// Set stateChangeRegex field for ProcessTBCTransition to work without crashing
-	stateChangeField := psdValue.FieldByName("stateChangeRegex")
-	if stateChangeField.IsValid() && stateChangeField.CanSet() {
-		stateChangeField.Set(reflect.ValueOf(regexp.MustCompile(`^ptp4l\[\d+\.?\d*\]:\s+\[.*?\]\s+port\s+\d+(?:\s+\(([\d\w]+)\))?:\s+(.+)$`)))
-	}
-
-	// Set lockedRegex field
-	lockedField := psdValue.FieldByName("lockedRegex")
-	if lockedField.IsValid() && lockedField.CanSet() {
-		lockedField.Set(reflect.ValueOf(regexp.MustCompile(`(?i)to slave`)))
-	}
-
-	// Set lostRegex field
-	lostField := psdValue.FieldByName("lostRegex")
-	if lostField.IsValid() && lostField.CanSet() {
-		lostField.Set(reflect.ValueOf(regexp.MustCompile(`(?i)(slave to|fault_detected|announce_receipt_timeout|sync_receipt_timeout|slave.*(?:fault|timeout|disconnected))`)))
+	monitoredPortsField := psdValue.FieldByName("monitoredPorts")
+	if monitoredPortsField.IsValid() {
+		// Use unsafe to get a pointer to the map, then dereference to modify it
+		monitoredPortsPtr := reflect.NewAt(monitoredPortsField.Type(), unsafe.Pointer(monitoredPortsField.UnsafeAddr())).Elem()
+		monitoredPorts := monitoredPortsPtr.Interface().(map[string]bool)
+		monitoredPorts["ens4f0"] = true // Add ens4f0 to monitored ports for testing
 	}
 
 	return psd
@@ -723,8 +840,10 @@ func TestProcessTBCTransitionHardwareConfig_HardwareConfigIntegration(t *testing
 	// Set up mock command executor for GetClockIDFromInterface
 	mockCmd := hardwareconfig.NewMockCommandExecutor()
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:51:00.0"}, "51:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:51:00.0"}, "serial_number 50-7c-6f-ff-ff-1f-b1-b8")
 	hardwareconfig.SetCommandExecutor(mockCmd)
 	defer hardwareconfig.ResetCommandExecutor()
@@ -810,8 +929,10 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 	// Set up mock command executor for GetClockIDFromInterface
 	mockCmd := hardwareconfig.NewMockCommandExecutor()
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
 	mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:51:00.0"}, "51:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
 	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:51:00.0"}, "serial_number 50-7c-6f-ff-ff-1f-b1-b8")
 	hardwareconfig.SetCommandExecutor(mockCmd)
 	defer hardwareconfig.ResetCommandExecutor()
@@ -834,9 +955,10 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 	detector := hcm.GetPTPStateDetector()
 	assert.NotNil(t, detector, "Should get a valid PTP state detector")
 
-	// Create a real plugin manager
-	pmStruct := registerPlugins([]string{})
-	pm := &pmStruct
+	// Create a mock Daemon with hardwareConfigManager
+	mockDaemon := &Daemon{
+		hardwareConfigManager: hcm,
+	}
 
 	// Create a ptpProcess with the real hardware config setup
 	process := &ptpProcess{
@@ -847,11 +969,11 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 				"clockId[ens4f1]":  "123456789",
 			},
 		},
-		eventCh:              make(chan event.EventChannel, 100), // Large buffer for all events
-		configName:           "test-config",
-		clockType:            event.BC,
-		lastTransitionResult: "",
-		tbcStateDetector:     detector, // Use real detector with real config
+		eventCh:          make(chan event.EventChannel, 100), // Large buffer for all events
+		configName:       "test-config",
+		clockType:        event.BC,
+		tbcStateDetector: detector, // Use real detector with real config
+		dn:               mockDaemon,
 	}
 
 	// Read the log file line by line
@@ -893,17 +1015,17 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 		}
 
 		// Capture initial state
-		initialState := process.lastTransitionResult
+		initialState := process.tBCAttributes.lastReportedState
 
 		// Process the line through the function under test
-		process.processTBCTransitionHardwareConfig(line, pm)
+		process.processTBCTransitionHardwareConfig(line)
 
 		// Check if state changed
-		if process.lastTransitionResult != initialState {
+		if process.tBCAttributes.lastReportedState != initialState {
 			transitionsDetected++
-			stateChanges = append(stateChanges, process.lastTransitionResult)
+			stateChanges = append(stateChanges, process.tBCAttributes.lastReportedState)
 			t.Logf("Line %d: State transition detected: %s -> %s",
-				linesProcessed, initialState, process.lastTransitionResult)
+				linesProcessed, initialState, process.tBCAttributes.lastReportedState)
 			t.Logf("  Log line: %s", line)
 		}
 
@@ -932,7 +1054,7 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 	t.Logf("ens4f1 lines found: %d", ens4f1LinesFound)
 	t.Logf("State transitions detected: %d", transitionsDetected)
 	t.Logf("PTP events generated: %d", eventsGenerated)
-	t.Logf("Final PTP state: %s", process.lastTransitionResult)
+	t.Logf("Final PTP state: %s", process.tBCAttributes.lastReportedState)
 
 	if len(stateChanges) > 0 {
 		t.Logf("State change sequence: %v", stateChanges)
@@ -957,7 +1079,10 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 
 		process := &ptpProcess{
 			tBCAttributes: tBCProcessAttributes{
-				trIfaceName: "ens4f0",
+				trIfaceName:       "ens4f0",
+				trPortsConfigFile: "test-config",    // Must match configName for offset filter logic to run
+				lastAppliedState:  event.PTP_NOTSET, // Must not be PTP_LOCKED for event to be sent
+				offsetThreshold:   10.0,             // Set threshold > offset (5.0) to allow event to be sent
 			},
 			nodeProfile: ptpv1.PtpProfile{
 				Name: stringPointer("test-profile"),
@@ -969,20 +1094,36 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 			eventCh:    make(chan event.EventChannel, 1),
 			configName: "test-config",
 			clockType:  event.BC,
+			offset:     5.0, // Set offset < threshold (10.0) to allow event to be sent
 		}
 
-		// Call with locked transition log
+		// First call: Set state to LOCKED (no event sent yet)
 		process.tBCTransitionCheck("ptp4l[123] port 1 (ens4f0): to SLAVE on MASTER_CLOCK_SELECTED", pm)
 
 		// Verify state changed to LOCKED
-		assert.Equal(t, event.PTP_LOCKED, process.lastTransitionResult)
+		assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
 
-		// Verify event was sent
+		// Verify no event was sent yet (event is only sent when filter is full)
+		select {
+		case <-process.eventCh:
+			t.Error("Event should not be sent immediately on locked transition")
+		default:
+			// Good, no event yet
+		}
+
+		// Fill the offset filter by calling tBCTransitionCheck with messages containing the interface name
+		// The filter needs to be full (64 samples) before the event is sent
+		// First call already inserted 1 sample, so we need 63 more to fill it
+		for i := 0; i < 63; i++ {
+			process.tBCTransitionCheck("ptp4l[123] port 1 (ens4f0): some other log message", pm)
+		}
+
+		// Verify event was sent after filter is full
 		select {
 		case <-process.eventCh:
 			// Event was sent, good
 		default:
-			t.Error("Expected PTP event to be sent")
+			t.Error("Expected PTP event to be sent after filter is full")
 		}
 	})
 
@@ -1013,7 +1154,7 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 		process.tBCTransitionCheck("ptp4l[123] port 1 (ens4f0): SLAVE to", pm)
 
 		// Verify state changed to FREERUN
-		assert.Equal(t, event.PTP_FREERUN, process.lastTransitionResult)
+		assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState)
 
 		// Verify event was sent
 		select {
@@ -1047,13 +1188,13 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 			clockType:  event.BC,
 		}
 
-		initialState := process.lastTransitionResult
+		initialState := process.tBCAttributes.lastReportedState
 
 		// Call with log that doesn't match any transition
 		process.tBCTransitionCheck("ptp4l[123] port 1 (ens4f0): some other message", pm)
 
 		// Verify state didn't change
-		assert.Equal(t, initialState, process.lastTransitionResult)
+		assert.Equal(t, initialState, process.tBCAttributes.lastReportedState)
 
 		// Verify no event was sent
 		select {
