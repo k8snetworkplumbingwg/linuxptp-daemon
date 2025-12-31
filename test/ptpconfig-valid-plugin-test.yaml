@@ -1,0 +1,59 @@
+# PtpConfig CR for testing hardware plugin validation (valid case)
+# This config contains a valid plugin name "e810"
+# When applied, the linuxptp-daemon should NOT add any warning to the status
+#
+# Usage:
+#   kubectl apply -f ptpconfig-valid-plugin-test.yaml
+#
+# Verify no warning (status.conditions should be empty or not contain HardwarePluginConfigurationWarning):
+#   kubectl get ptpconfig test-valid-plugin -n openshift-ptp -o jsonpath='{.status.conditions}' | jq
+#
+# Clean up:
+#   kubectl delete -f ptpconfig-valid-plugin-test.yaml
+
+apiVersion: ptp.openshift.io/v1
+kind: PtpConfig
+metadata:
+  name: test-valid-plugin
+  namespace: openshift-ptp
+spec:
+  profile:
+    - name: test-valid-plugin
+      interface: ens1f0
+      phc2sysOpts: -a -r -n 24
+      ptp4lOpts: -2 --summary_interval -4
+      ptp4lConf: |
+        [global]
+        twoStepFlag 1
+        domainNumber 24
+        clockAccuracy 0xFE
+        offsetScaledLogVariance 0xFFFF
+        dataset_comparison G.8275.x
+        G.8275.defaultDS.localPriority 128
+        logAnnounceInterval -3
+        logSyncInterval -4
+        logMinDelayReqInterval -4
+        announceReceiptTimeout 6
+        network_transport L2
+        delay_mechanism E2E
+        time_stamping hardware
+        tsproc_mode filter
+        delay_filter moving_median
+        delay_filter_length 10
+        [ens1f0]
+        masterOnly 0
+      plugins:
+        # Valid plugin name - e810 is a recognized plugin
+        e810:
+          enableDefaultConfig: false
+      ptpClockThreshold:
+        holdOverTimeout: 5
+        maxOffsetThreshold: 100
+        minOffsetThreshold: -100
+  recommend:
+    - match:
+        # Matches all nodes - adjust as needed for your test environment
+        - nodeLabel: node-role.kubernetes.io/worker
+      priority: 10
+      profile: test-valid-plugin
+

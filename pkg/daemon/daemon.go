@@ -37,6 +37,7 @@ import (
 
 	"github.com/golang/glog"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
@@ -307,6 +308,10 @@ type Daemon struct {
 	// kubeClient allows interaction with Kubernetes, including the node we are running on.
 	kubeClient *kubernetes.Clientset
 
+	// restConfig is the Kubernetes REST config used to create dynamic clients
+	// for updating PtpConfig status when hardware plugin validation errors are found
+	restConfig *rest.Config
+
 	ptpUpdate *LinuxPTPConfUpdate
 
 	processManager *ProcessManager
@@ -357,6 +362,7 @@ func New(
 	namespace string,
 	stdoutToSocket bool,
 	kubeClient *kubernetes.Clientset,
+	restConfig *rest.Config,
 	ptpUpdate *LinuxPTPConfUpdate,
 	stopCh <-chan struct{},
 	plugins []string,
@@ -371,6 +377,9 @@ func New(
 	}
 	InitializeOffsetMaps()
 	pluginManager := registerPlugins(plugins)
+	// Set RestConfig and Namespace for plugin validation status updates
+	pluginManager.RestConfig = restConfig
+	pluginManager.Namespace = namespace
 	eventChannel := make(chan event.EventChannel, 100)
 	pm := &ProcessManager{
 		process:         nil,
@@ -403,6 +412,7 @@ func New(
 		namespace:             namespace,
 		stdoutToSocket:        stdoutToSocket,
 		kubeClient:            kubeClient,
+		restConfig:            restConfig,
 		ptpUpdate:             ptpUpdate,
 		pluginManager:         pluginManager,
 		hwconfigs:             hwconfigs,
@@ -654,6 +664,11 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
 	*dn.refreshNodePtpDevice = true
 	dn.readyTracker.setConfig(true)
+
+	// Validate plugin names and report errors to PtpConfig status
+	// This is called after profiles are applied to ensure proper status updates
+	dn.pluginManager.ValidateAndReportPluginErrors(dn.ptpUpdate.NodeProfiles)
+
 	return nil
 }
 
