@@ -25,11 +25,11 @@ pinDefaults:
       state: disconnected
     eec:
       state: disconnected
-  CVL-SDP23:
-    pps:
-      state: connected
-    eec:
-      state: connected
+  # CVL-SDP23:
+  #   pps:
+  #     state: connected
+  #   eec:
+  #     state: connected
   C827_0-RCLKA:
     eec:
       priority: 8
