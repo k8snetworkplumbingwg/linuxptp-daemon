@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+
 	"github.com/golang/glog"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -27,10 +28,47 @@ func GetDevStatusUpdate(nodePTPDev *ptpv1.NodePtpDevice) (*ptpv1.NodePtpDevice, 
 	}
 	glog.Infof("PTP capable NICs: %v", hostDevs)
 
+	// Track existing devices for change detection
+	oldDevices := nodePTPDev.Status.Devices
+	existingDeviceMap := make(map[string]bool)
+	for _, dev := range oldDevices {
+		existingDeviceMap[dev.Name] = true
+	}
+
+	// Build new device list with hardware info
 	newDevices := make([]ptpv1.PtpDevice, 0)
 	for _, hostDev := range hostDevs {
-		newDevices = append(newDevices, ptpv1.PtpDevice{Name: hostDev, Profile: ""})
+		var hwInfo *ptpv1.HardwareInfo
+
+		if !existingDeviceMap[hostDev] {
+			// New device - get hardware info and log
+			glog.Infof("New PTP device discovered: %s", hostDev)
+
+			hwInfo, err = getHardwareInfo(hostDev)
+			if err != nil {
+				glog.Warningf("Failed to get hardware info: %v", err)
+			} else {
+				logStructuredHardwareInfo(hostDev, hwInfo)
+			}
+		} else {
+			// Existing device - get hardware info silently
+			hwInfo, err = getHardwareInfo(hostDev)
+			if err != nil {
+				glog.Errorf("failed to get hardware info for device %s: %v", hostDev, err)
+				continue
+			}
+		}
+
+		newDevices = append(newDevices, ptpv1.PtpDevice{
+			Name:         hostDev,
+			Profile:      "",
+			HardwareInfo: hwInfo,
+		})
 	}
+
+	// Log device changes (additions and removals)
+	logDeviceChanges(oldDevices, newDevices)
+
 	nodePTPDev.Status.Devices = newDevices
 	return nodePTPDev, nil
 }
