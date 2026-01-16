@@ -119,6 +119,7 @@ func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
 		"openshift-ptp",
 		false,
 		nil,
+		nil, // restConfig not needed for tests
 		&LinuxPTPConfUpdate{
 			UpdateCh:     make(chan bool),
 			NodeProfiles: []ptpv1.PtpProfile{*profile},
@@ -205,6 +206,7 @@ func Test_applyProfile_TBC(t *testing.T) {
 		"openshift-ptp",
 		false,
 		nil,
+		nil, // restConfig not needed for tests
 		&LinuxPTPConfUpdate{
 			UpdateCh:     make(chan bool),
 			NodeProfiles: []ptpv1.PtpProfile{},
