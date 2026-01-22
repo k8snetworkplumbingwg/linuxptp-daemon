@@ -55,7 +55,7 @@ connections:
   - from: "NAC0 PTP phase output"
     to: "DPLL 1kHz input"
     description: "Routing delay from NAC to DPLL 1kHz input"
-    delayPs: 0
+    delayPs: -2000
 
   # DPLL to NAC (during holdover)
   - from: "DPLL 1kHz phase output"
@@ -71,11 +71,11 @@ connections:
   - from: "DPLL ePPS output 1"
     to: "CF1 ePPS input"
     description: "Internal routing delay from DPLL output 1 to CF1 input"
-    delayPs: -37500
+    delayPs: -40000
   - from: "DPLL ePPS output 2"
     to: "CF2 ePPS input"
     description: "Internal routing delay from DPLL output 2 to CF2 input"
-    delayPs: -37500
+    delayPs: -40000
   
 
 
