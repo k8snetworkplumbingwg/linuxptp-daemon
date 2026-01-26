@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -62,6 +63,47 @@ func logStructuredHardwareInfo(deviceName string, hwInfo *ptpv1.HardwareInfo) {
 	}
 }
 
+// ethtoolInfo holds driver and firmware information from ethtool
+type ethtoolInfo struct {
+	Driver          string
+	DriverVersion   string
+	FirmwareVersion string
+	BusInfo         string
+}
+
+// getEthtoolInfo uses ethtool -i to get driver and firmware information
+// This is more reliable than sysfs paths which vary by device type
+func getEthtoolInfo(deviceName string) (*ethtoolInfo, error) {
+	cmd := exec.Command("ethtool", "-i", deviceName)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("ethtool -i %s failed: %v", deviceName, err)
+	}
+
+	info := &ethtoolInfo{}
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		switch key {
+		case "driver":
+			info.Driver = value
+		case "version":
+			info.DriverVersion = value
+		case "firmware-version":
+			info.FirmwareVersion = value
+		case "bus-info":
+			info.BusInfo = value
+		}
+	}
+	return info, nil
+}
+
 // getHardwareInfo collects detailed hardware information for a network device
 func getHardwareInfo(deviceName string) (*ptpv1.HardwareInfo, error) {
 	net, err := ghw.Network()
@@ -91,29 +133,30 @@ func getHardwareInfo(deviceName string) (*ptpv1.HardwareInfo, error) {
 	hwInfo.PCIAddress = *targetNIC.PCIAddress
 	pciPath := fmt.Sprintf("/sys/bus/pci/devices/%s", *targetNIC.PCIAddress)
 
-	// Read PCI IDs from sysfs
+	// Read PCI IDs from sysfs (these are reliable and always present for PCI devices)
 	hwInfo.VendorID = readSysfsFile(filepath.Join(pciPath, "vendor"))
 	hwInfo.DeviceID = readSysfsFile(filepath.Join(pciPath, "device"))
 	hwInfo.SubsystemVendorID = readSysfsFile(filepath.Join(pciPath, "subsystem_vendor"))
 	hwInfo.SubsystemDeviceID = readSysfsFile(filepath.Join(pciPath, "subsystem_device"))
 
-	// Get driver information
-	driverLink, readErr := os.Readlink(filepath.Join(pciPath, "driver"))
-	if readErr != nil {
-		return nil, fmt.Errorf("failed to get driver for device %s: %v", deviceName, readErr)
-	}
-	driverName := filepath.Base(driverLink)
-	driverModulePath := filepath.Join(pciPath, "driver", "module")
-
-	// Try to get driver version
-	if driverVer := readSysfsFile(filepath.Join(driverModulePath, "version")); driverVer != "" {
-		hwInfo.DriverVersion = fmt.Sprintf("%s v%s", driverName, driverVer)
+	// Get driver and firmware information via ethtool (more reliable than sysfs)
+	ethtoolData, err := getEthtoolInfo(deviceName)
+	if err != nil {
+		glog.V(2).Infof("Could not get ethtool info for %s: %v", deviceName, err)
+		// Fallback to basic driver info from sysfs
+		driverLink, readErr := os.Readlink(filepath.Join(pciPath, "driver"))
+		if readErr == nil {
+			hwInfo.DriverVersion = filepath.Base(driverLink)
+		}
 	} else {
-		hwInfo.DriverVersion = driverName
+		// Use ethtool data for driver and firmware
+		if ethtoolData.DriverVersion != "" {
+			hwInfo.DriverVersion = fmt.Sprintf("%s v%s", ethtoolData.Driver, ethtoolData.DriverVersion)
+		} else if ethtoolData.Driver != "" {
+			hwInfo.DriverVersion = ethtoolData.Driver
+		}
+		hwInfo.FirmwareVersion = ethtoolData.FirmwareVersion
 	}
-
-	// Try to get firmware version (device-specific paths)
-	hwInfo.FirmwareVersion = getFirmwareVersion(pciPath, deviceName)
 
 	// Try to get VPD data
 	vpdData := readVPDData(pciPath)
@@ -123,38 +166,22 @@ func getHardwareInfo(deviceName string) (*ptpv1.HardwareInfo, error) {
 		hwInfo.VPDManufacturerID = vpdData.ManufacturerID
 		hwInfo.VPDProductName = vpdData.ProductName
 	} else {
-		glog.V(2).Infof("No VPD data found for device %s", deviceName)
+		glog.V(4).Infof("No VPD data found for device %s", deviceName)
 	}
 
 	return hwInfo, nil
 }
 
 // readSysfsFile reads a single-line value from sysfs and trims whitespace
+// Returns empty string silently if file doesn't exist (normal for many device types)
 func readSysfsFile(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		glog.V(2).Infof("could not read sysfs file %s: %v", path, err)
+		// Silent failure - PCI ID files should exist for PCI devices,
+		// but missing files are expected for virtual/bonded interfaces
 		return ""
 	}
 	return strings.TrimSpace(string(data))
-}
-
-// getFirmwareVersion attempts to read firmware version from various device-specific locations
-func getFirmwareVersion(pciPath, deviceName string) string {
-	// Try common firmware version paths
-	fwPaths := []string{
-		filepath.Join(pciPath, "firmware_version"),
-		filepath.Join("/sys/class/net", deviceName, "device", "fw_version"),
-		filepath.Join(pciPath, "fw_ver"),
-	}
-
-	for _, path := range fwPaths {
-		if fwVer := readSysfsFile(path); fwVer != "" {
-			return fwVer
-		}
-	}
-
-	return ""
 }
 
 // VPDData holds Vital Product Data parsed from device VPD
