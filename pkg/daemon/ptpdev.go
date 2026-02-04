@@ -31,12 +31,12 @@ func GetDevStatusUpdate(nodePTPDev *ptpv1.NodePtpDevice) (*ptpv1.NodePtpDevice, 
 	// Build new device list with hardware info
 	newDevices := make([]ptpv1.PtpDevice, 0)
 	for _, hostDev := range hostDevs {
-		hwInfo, hwErr := getHardwareInfo(hostDev)
+		hwInfo, hwErr := ptpnetwork.GetHardwareInfo(hostDev)
 		if hwErr != nil {
 			glog.Warningf("Failed to get hardware info for device %s: %v", hostDev, hwErr)
 			continue
 		}
-		logStructuredHardwareInfo(hostDev, hwInfo)
+		ptpnetwork.LogStructuredHardwareInfo(hostDev, hwInfo)
 
 		newDevices = append(newDevices, ptpv1.PtpDevice{
 			Name:         hostDev,
@@ -46,7 +46,7 @@ func GetDevStatusUpdate(nodePTPDev *ptpv1.NodePtpDevice) (*ptpv1.NodePtpDevice, 
 	}
 
 	// Log device changes (additions and removals)
-	logDeviceChanges(nodePTPDev.Status.Devices, newDevices)
+	ptpnetwork.LogDeviceChanges(nodePTPDev.Status.Devices, newDevices)
 
 	nodePTPDev.Status.Devices = newDevices
 	return nodePTPDev, nil
