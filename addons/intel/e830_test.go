@@ -71,7 +71,6 @@ func Test_OnPTPConfigChangeE830(t *testing.T) {
 	}
 	for _, tc := range tcs {
 		t.Run(tc.name, func(tt *testing.T) {
-			unitTest = true
 			mockPins, restorePins := setupMockPinConfig()
 			defer restorePins()
 			profile, err := loadProfile(tc.profile)
