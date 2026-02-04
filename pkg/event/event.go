@@ -11,6 +11,7 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/debug"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/socket"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
@@ -581,6 +582,29 @@ func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, cloc
 	e.clockAccuracy = clockAcc
 
 	utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
+	if !e.stdoutToSocket && e.clockClassMetric != nil {
+		e.clockClassMetric.With(prometheus.Labels{
+			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
+	}
+}
+
+// AnnounceClockClassWithSocket announces clock class changes using a reconnectable socket.
+// This version handles broken pipe errors by automatically reconnecting.
+func (e *EventHandler) AnnounceClockClassWithSocket(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, rs *socket.ReconnectableSocket, clockType ClockType) {
+	e.announceClockClassWithSocket(clockClass, clockAcc, cfgName, rs)
+	clockClassRequestCh <- ClockClassRequest{
+		cfgName:       cfgName,
+		clockClass:    clockClass,
+		clockType:     clockType,
+		clockAccuracy: clockAcc,
+	}
+}
+
+func (e *EventHandler) announceClockClassWithSocket(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, rs *socket.ReconnectableSocket) {
+	e.clockClass = clockClass
+	e.clockAccuracy = clockAcc
+
+	utils.EmitClockClassWithSocket(rs, PTP4lProcessName, cfgName, e.clockClass)
 	if !e.stdoutToSocket && e.clockClassMetric != nil {
 		e.clockClassMetric.With(prometheus.Labels{
 			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))

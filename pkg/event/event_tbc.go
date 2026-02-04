@@ -9,6 +9,7 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/socket"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
@@ -269,6 +270,15 @@ func (e *EventHandler) EmitClockClass(cfgName string, c net.Conn) {
 		return
 	}
 	e.announceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
+}
+
+// EmitClockClassWithSocket emits the current clock class and accuracy using a reconnectable socket.
+// This version handles broken pipe errors by automatically reconnecting.
+func (e *EventHandler) EmitClockClassWithSocket(cfgName string, rs *socket.ReconnectableSocket) {
+	if _, ok := e.clkSyncState[cfgName]; !ok {
+		return
+	}
+	e.announceClockClassWithSocket(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, rs)
 }
 
 // Implements Rec. ITU-T G.8275 (2024) Amd. 1 (08/2024)
