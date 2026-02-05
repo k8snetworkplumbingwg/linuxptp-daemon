@@ -182,6 +182,7 @@ func main() {
 		daemon.PtpNamespace,
 		stdoutToSocket,
 		kubeClient,
+		cfg, // REST config for dynamic client to update PtpConfig status
 		ptpConfUpdate,
 		stopCh,
 		plugins,
@@ -219,7 +220,7 @@ func main() {
 			runHybridMode(cfg, cp, nodeName, ptpConfUpdate, daemonInstance, ptpClient, nodeName, &hwconfigs, &refreshNodePtpDevice, tickerPull, sigCh, closeProcessManager)
 		}
 	} else {
-		runLegacyMode(cp, nodeName, ptpConfUpdate, ptpClient, nodeName, &hwconfigs, &refreshNodePtpDevice, tickerPull, sigCh, closeProcessManager)
+		runLegacyMode(cp, nodeName, ptpConfUpdate, daemonInstance, ptpClient, nodeName, &hwconfigs, &refreshNodePtpDevice, tickerPull, sigCh, closeProcessManager)
 	}
 }
 
@@ -405,7 +406,7 @@ func runHybridMode(cfg *rest.Config, cp *cliParams, nodeName string, ptpConfUpda
 }
 
 // runLegacyMode runs in legacy file-based mode without any controllers
-func runLegacyMode(cp *cliParams, _ string, ptpConfUpdate *daemon.LinuxPTPConfUpdate, ptpClient *ptpclient.Clientset, nodeNameForDevice string, hwconfigs *[]ptpv1.HwConfig, refreshNodePtpDevice *bool, tickerPull *time.Ticker, sigCh chan os.Signal, closeProcessManager chan bool) {
+func runLegacyMode(cp *cliParams, _ string, ptpConfUpdate *daemon.LinuxPTPConfUpdate, _ *daemon.Daemon, ptpClient *ptpclient.Clientset, nodeNameForDevice string, hwconfigs *[]ptpv1.HwConfig, refreshNodePtpDevice *bool, tickerPull *time.Ticker, sigCh chan os.Signal, closeProcessManager chan bool) {
 	glog.Info("Running in legacy file-based mode (no controllers)")
 
 	for {
