@@ -312,7 +312,10 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 			glog.Errorf("Failed to set external GM properties: %v", err)
 		}
 	}()
-	e.announceClockClass(clockClass, clockAccuracy, cfgName, c)
+	if brokenPipe := e.announceClockClass(clockClass, clockAccuracy, cfgName, c); brokenPipe {
+		glog.Warning("Broken pipe detected in announceLocalData, signaling reconnection")
+		e.signalBrokenPipe()
+	}
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
 			ClockClass:              clockClass,
@@ -401,7 +404,10 @@ func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
 		StepsRemoved: upsteamData.CurrentDS.StepsRemoved,
 	}
 	glog.Infof("%++v", es)
-	e.announceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, cfgName, c)
+	if brokenPipe := e.announceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, cfgName, c); brokenPipe {
+		glog.Warning("Broken pipe detected in downstreamAnnounceIWF, signaling reconnection")
+		e.signalBrokenPipe()
+	}
 	if err = pmc.RunPMCExpSetExternalGMPropertiesNP(controlledPortsConfig, es); err != nil {
 		glog.Error(err)
 	}

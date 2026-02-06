@@ -169,6 +169,7 @@ type EventHandler struct {
 	stdoutToSocket     bool
 	processChannel     <-chan EventChannel
 	closeCh            chan bool
+	brokenPipeCh       chan struct{} // signals broken pipe from background goroutines to trigger reconnection
 	data               map[string][]*Data
 	offsetMetric       *prometheus.GaugeVec
 	clockMetric        *prometheus.GaugeVec
@@ -217,6 +218,7 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		stdoutSocket:       socketName,
 		stdoutToSocket:     stdOutToSocket,
 		closeCh:            closeCh,
+		brokenPipeCh:       make(chan struct{}, 1),
 		processChannel:     processChannel,
 		data:               map[string][]*Data{},
 		clockMetric:        clockMetric,
@@ -592,16 +594,69 @@ func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, cloc
 	return brokenPipe
 }
 
+// signalBrokenPipe sends a non-blocking signal on brokenPipeCh to notify
+// the ProcessEvents loop that the socket connection needs reconnection.
+func (e *EventHandler) signalBrokenPipe() {
+	select {
+	case e.brokenPipeCh <- struct{}{}:
+	default:
+		// Channel already has a pending signal; no need to duplicate.
+	}
+}
+
+// reconnectEventSocket closes the old connection and dials a new one.
+// Returns the new connection, or nil if dialing fails after retries.
+func (e *EventHandler) reconnectEventSocket(oldConn net.Conn) net.Conn {
+	if oldConn != nil {
+		oldConn.Close()
+	}
+	retryCount := 0
+	for {
+		select {
+		case <-e.closeCh:
+			return nil
+		default:
+		}
+		newConn, err := net.Dial("unix", e.stdoutSocket)
+		if err == nil {
+			glog.Info("Successfully reconnected to event socket")
+			return newConn
+		}
+		if retryCount == 0 || retryCount%5 == 0 {
+			glog.Errorf("reconnecting to event socket, retrying: %s", err)
+		}
+		retryCount = (retryCount + 1) % 6
+		time.Sleep(connectionRetryInterval)
+	}
+}
+
 // ProcessEvents ... process events to generate new events
 func (e *EventHandler) ProcessEvents() {
 	var c net.Conn
+	var connMu sync.Mutex
 	var err error
 	redialClockClass := true
 	retryCount := 0
+
+	// getConn returns the current connection under lock, safe for use from goroutines.
+	getConn := func() net.Conn {
+		connMu.Lock()
+		defer connMu.Unlock()
+		return c
+	}
+	// setConn replaces the current connection under lock.
+	setConn := func(newC net.Conn) {
+		connMu.Lock()
+		defer connMu.Unlock()
+		c = newC
+	}
+
 	defer func() {
-		if e.stdoutToSocket && c != nil {
-			if err = c.Close(); err != nil {
-				glog.Errorf("closing connection returned error %s", err)
+		if e.stdoutToSocket {
+			if conn := getConn(); conn != nil {
+				if err = conn.Close(); err != nil {
+					glog.Errorf("closing connection returned error %s", err)
+				}
 			}
 		}
 	}()
@@ -612,17 +667,18 @@ connect:
 		return
 	default:
 		if e.stdoutToSocket {
-			c, err = net.Dial("unix", e.stdoutSocket)
-			if err != nil {
+			newConn, dialErr := net.Dial("unix", e.stdoutSocket)
+			if dialErr != nil {
 				// reduce log spam
 				if retryCount == 0 || retryCount%5 == 0 {
-					glog.Errorf("waiting for event socket, retrying %s", err)
+					glog.Errorf("waiting for event socket, retrying %s", dialErr)
 				}
 				retryCount = (retryCount + 1) % 6
 				time.Sleep(connectionRetryInterval)
 				goto connect
 			}
 			retryCount = 0
+			setConn(newConn)
 		}
 	}
 
@@ -640,7 +696,7 @@ connect:
 				case clk := <-clockClassRequestCh:
 					cfgName = clk.cfgName
 					if clk.clockType != BC { // This is because this produces the wrong value for BC at the moment this needs looking into.
-						e.UpdateClockClass(c, clk)
+						e.UpdateClockClass(getConn(), clk)
 					} else {
 						e.Lock()
 						e.clockClass = clk.clockClass
@@ -670,7 +726,10 @@ connect:
 							// Stop double emmit
 							cfgName = ""
 						}
-						utils.EmitClockClass(c, PTP4lProcessName, clkCfgName, clockClass)
+						if brokenPipe := utils.EmitClockClass(getConn(), PTP4lProcessName, clkCfgName, clockClass); brokenPipe {
+							glog.Warning("Broken pipe detected in clock class ticker, signaling reconnection")
+							e.signalBrokenPipe()
+						}
 					}
 
 					if cfgName != "" {
@@ -681,7 +740,10 @@ connect:
 						e.Lock()
 						currentClockClass := e.clockClass
 						e.Unlock()
-						utils.EmitClockClass(c, PTP4lProcessName, cfgName, currentClockClass)
+						if brokenPipe := utils.EmitClockClass(getConn(), PTP4lProcessName, cfgName, currentClockClass); brokenPipe {
+							glog.Warning("Broken pipe detected in clock class ticker, signaling reconnection")
+							e.signalBrokenPipe()
+						}
 					}
 				}
 			}
@@ -769,7 +831,7 @@ connect:
 					event = e.convergeConfig(event)
 					dataDetails = e.addEvent(event)
 					e.Lock()
-					clockState = e.updateBCState(event, c)
+					clockState = e.updateBCState(event, getConn())
 					e.Unlock()
 				}
 				logDataValues = dataDetails.logData
@@ -861,10 +923,24 @@ connect:
 				if e.stdoutToSocket {
 					for _, l := range logOut {
 						fmt.Printf("%s", l)
-						_, err = c.Write([]byte(l))
-						if err != nil {
-							glog.Errorf("Write %s error %s:", l, err)
-							goto connect
+						conn := getConn()
+						if conn == nil {
+							glog.Error("No connection available, attempting reconnect")
+							newConn := e.reconnectEventSocket(nil)
+							if newConn == nil {
+								return
+							}
+							setConn(newConn)
+							conn = newConn
+						}
+						_, writeErr := conn.Write([]byte(l))
+						if writeErr != nil {
+							glog.Errorf("Write %s error %s:", l, writeErr)
+							newConn := e.reconnectEventSocket(conn)
+							if newConn == nil {
+								return
+							}
+							setConn(newConn)
 						}
 					}
 				} else {
@@ -873,6 +949,16 @@ connect:
 					}
 				}
 			}
+		case <-e.brokenPipeCh:
+			// A background goroutine detected a broken pipe on the event socket.
+			// Close the old connection and reconnect.
+			glog.Info("Broken pipe signal received, reconnecting event socket")
+			oldConn := getConn()
+			newConn := e.reconnectEventSocket(oldConn)
+			if newConn == nil {
+				return
+			}
+			setConn(newConn)
 		case <-e.closeCh:
 			return
 		}
