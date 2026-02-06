@@ -69,28 +69,34 @@ func (pmc *PMCProcess) getConn() net.Conn {
 // setConn sets the socket connection under lock, closing the previous one if it exists.
 func (pmc *PMCProcess) setConn(c net.Conn) {
 	pmc.lock.Lock()
-	defer pmc.lock.Unlock()
-	if pmc.c != nil && pmc.c != c {
-		pmc.c.Close()
-	}
+	oldConn := pmc.c
 	pmc.c = c
+	pmc.lock.Unlock()
+	if oldConn != nil && oldConn != c {
+		oldConn.Close()
+	}
 }
 
 // reconnectSocket closes the old socket connection and establishes a new one.
 // It retries with exponential backoff and is responsive to shutdown signals.
 // The lock is only held while modifying pmc.c to avoid blocking CmdStop().
 func (pmc *PMCProcess) reconnectSocket() {
+	var oldConn net.Conn
 	pmc.lock.Lock()
 	if !pmc.stdToSocket {
 		pmc.lock.Unlock()
 		return
 	}
 	if pmc.c != nil {
-		glog.Info("Closing old socket connection due to broken pipe")
-		pmc.c.Close()
+		oldConn = pmc.c
 		pmc.c = nil
 	}
 	pmc.lock.Unlock()
+
+	if oldConn != nil {
+		glog.Info("Closing old socket connection due to broken pipe")
+		oldConn.Close()
+	}
 
 	glog.Info("Attempting to reconnect to event socket")
 

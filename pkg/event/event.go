@@ -622,10 +622,10 @@ func (e *EventHandler) reconnectEventSocket(oldConn net.Conn) net.Conn {
 			glog.Info("Successfully reconnected to event socket")
 			return newConn
 		}
-		if retryCount == 0 || retryCount%5 == 0 {
-			glog.Errorf("reconnecting to event socket, retrying: %s", err)
+		if retryCount%5 == 0 {
+			glog.Errorf("reconnecting to event socket (attempt %d), retrying: %s", retryCount, err)
 		}
-		retryCount = (retryCount + 1) % 6
+		retryCount++
 		time.Sleep(connectionRetryInterval)
 	}
 }
@@ -941,6 +941,10 @@ connect:
 								return
 							}
 							setConn(newConn)
+							// Retry write on the new connection
+							if _, retryErr := newConn.Write([]byte(l)); retryErr != nil {
+								glog.Errorf("Write failed again after reconnect for %s: %s", l, retryErr)
+							}
 						}
 					}
 				} else {
