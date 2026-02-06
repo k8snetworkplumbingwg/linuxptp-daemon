@@ -77,7 +77,10 @@ func newLeadingClockParams() *LeadingClockParams {
 	}
 }
 
-func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncState {
+// updateBCState updates the BC/TSC state machine.
+// Called with e.Lock() held. Returns the clock sync state and whether a TTSC clock class
+// announcement is needed (the caller must perform the I/O after releasing the lock).
+func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) (clockSyncState, bool) {
 	cfgName := event.CfgName
 	dpllState := PTP_NOTSET
 	ts2phcState := PTP_FREERUN
@@ -91,7 +94,7 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 	leadingInterface := e.getLeadingInterfaceBC()
 	if leadingInterface == LEADING_INTERFACE_UNKNOWN {
 		glog.Infof("Leading interface is not yet identified, clock state reporting delayed.")
-		return clockSyncState{leadingIFace: leadingInterface}
+		return clockSyncState{leadingIFace: leadingInterface}, false
 	}
 
 	if _, ok := e.clkSyncState[cfgName]; !ok {
@@ -126,7 +129,7 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 		e.clkSyncState[cfgName].clkLog = fmt.Sprintf("T-BC[%d]:[%s] %s offset %d T-BC-STATUS %s\n",
 			e.clkSyncState[cfgName].lastLoggedTime, cfgName, leadingInterface, e.clkSyncState[cfgName].clockOffset,
 			e.clkSyncState[cfgName].state)
-		return *e.clkSyncState[cfgName]
+		return *e.clkSyncState[cfgName], false
 	}
 
 	isTTSC := (e.LeadingClockData.clockID != "" && e.LeadingClockData.controlledPortsConfig == "")
@@ -224,9 +227,12 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 	if isTTSC && e.clkSyncState[cfgName].clockClass != fbprotocol.ClockClassSlaveOnly {
 		e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClassSlaveOnly
 	}
+	needsTTSCAnnounce := false
 	if updateDownstreamData && e.clkSyncState[cfgName].clockClass != protocol.ClockClassUninitialized {
 		if isTTSC {
-			e.announceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
+			// Set clock class fields under lock; the caller will emit after releasing the lock
+			e.setClockClassLocked(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy)
+			needsTTSCAnnounce = true
 		} else {
 			go e.updateDownstreamData(cfgName, c)
 		}
@@ -242,7 +248,7 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) clockSyncSt
 		glog.Infof("dpll State %s, tsphc state %s, BC state %s, BC offset %d",
 			dpllState, ts2phcState, e.clkSyncState[cfgName].state, e.clkSyncState[cfgName].clockOffset)
 	}
-	return rclockSyncState
+	return rclockSyncState, needsTTSCAnnounce
 }
 
 // UpdateUpstreamParentDataSet updates the upstream time properties, parent data set, and current data set

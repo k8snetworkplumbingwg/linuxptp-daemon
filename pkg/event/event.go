@@ -582,10 +582,22 @@ func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, cloc
 
 func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn) bool {
 	e.Lock()
-	e.clockClass = clockClass
-	e.clockAccuracy = clockAcc
+	e.setClockClassLocked(clockClass, clockAcc)
 	e.Unlock()
 
+	return e.emitClockClass(clockClass, cfgName, c)
+}
+
+// setClockClassLocked updates the clock class and accuracy fields.
+// Caller must hold e.Lock().
+func (e *EventHandler) setClockClassLocked(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy) {
+	e.clockClass = clockClass
+	e.clockAccuracy = clockAcc
+}
+
+// emitClockClass writes the clock class to the socket and updates the metric.
+// Must NOT be called while holding e.Lock().
+func (e *EventHandler) emitClockClass(clockClass fbprotocol.ClockClass, cfgName string, c net.Conn) bool {
 	brokenPipe := utils.EmitClockClass(c, PTP4lProcessName, cfgName, clockClass)
 	if !e.stdoutToSocket && e.clockClassMetric != nil {
 		e.clockClassMetric.With(prometheus.Labels{
@@ -604,14 +616,24 @@ func (e *EventHandler) signalBrokenPipe() {
 	}
 }
 
+const (
+	maxEventReconnectAttempts = 10
+	eventReconnectBackoffBase = 100 * time.Millisecond
+	maxEventReconnectBackoff  = 5 * time.Second
+)
+
 // reconnectEventSocket closes the old connection and dials a new one.
-// Returns the new connection, or nil if dialing fails after retries.
+// It uses exponential backoff and a maximum number of retries, consistent
+// with the reconnection logic in pkg/daemon/pmc.go.
+// Returns the new connection, or nil if the handler is shutting down or all retries are exhausted.
 func (e *EventHandler) reconnectEventSocket(oldConn net.Conn) net.Conn {
 	if oldConn != nil {
 		oldConn.Close()
 	}
-	retryCount := 0
-	for {
+
+	glog.Info("Attempting to reconnect to event socket")
+	backoff := eventReconnectBackoffBase
+	for attempt := 1; attempt <= maxEventReconnectAttempts; attempt++ {
 		select {
 		case <-e.closeCh:
 			return nil
@@ -619,15 +641,25 @@ func (e *EventHandler) reconnectEventSocket(oldConn net.Conn) net.Conn {
 		}
 		newConn, err := net.Dial("unix", e.stdoutSocket)
 		if err == nil {
-			glog.Info("Successfully reconnected to event socket")
+			glog.Infof("Successfully reconnected to event socket after %d attempt(s)", attempt)
 			return newConn
 		}
-		if retryCount%5 == 0 {
-			glog.Errorf("reconnecting to event socket (attempt %d), retrying: %s", retryCount, err)
+		if attempt < maxEventReconnectAttempts {
+			glog.Warningf("Failed to reconnect to event socket (attempt %d/%d): %v, retrying in %v",
+				attempt, maxEventReconnectAttempts, err, backoff)
+			select {
+			case <-time.After(backoff):
+			case <-e.closeCh:
+				return nil
+			}
+			backoff *= 2
+			if backoff > maxEventReconnectBackoff {
+				backoff = maxEventReconnectBackoff
+			}
 		}
-		retryCount++
-		time.Sleep(connectionRetryInterval)
 	}
+	glog.Errorf("Failed to reconnect to event socket after %d attempts", maxEventReconnectAttempts)
+	return nil
 }
 
 // ProcessEvents ... process events to generate new events
@@ -828,11 +860,19 @@ connect:
 						}
 					}
 				} else { // T-BC or T-TSC
+					e.Lock()
 					event = e.convergeConfig(event)
 					dataDetails = e.addEvent(event)
-					e.Lock()
-					clockState = e.updateBCState(event, getConn())
+					var needsTTSCAnnounce bool
+					clockState, needsTTSCAnnounce = e.updateBCState(event, getConn())
 					e.Unlock()
+					// Perform TTSC clock class announcement I/O after releasing the lock
+					if needsTTSCAnnounce {
+						if brokenPipe := e.emitClockClass(clockState.clockClass, event.CfgName, getConn()); brokenPipe {
+							glog.Warning("Broken pipe detected in TTSC clock class announcement, signaling reconnection")
+							e.signalBrokenPipe()
+						}
+					}
 				}
 				logDataValues = dataDetails.logData
 				if event.WriteToLog && logDataValues != "" {
