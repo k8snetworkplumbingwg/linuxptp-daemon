@@ -65,19 +65,19 @@ const (
 // reconnectSocket closes the old socket connection and establishes a new one.
 // This should be called when a broken pipe error is detected.
 // It retries with exponential backoff to handle cases where cloud-event-proxy is restarting.
+// The lock is released during the retry loop to avoid blocking other operations like CmdStop().
 func (pmc *PMCProcess) reconnectSocket() {
 	pmc.lock.Lock()
-	defer pmc.lock.Unlock()
-
+	if !pmc.stdToSocket {
+		pmc.lock.Unlock()
+		return
+	}
 	if pmc.c != nil {
 		glog.Info("Closing old socket connection due to broken pipe")
 		pmc.c.Close()
 		pmc.c = nil
 	}
-
-	if !pmc.stdToSocket {
-		return
-	}
+	pmc.lock.Unlock()
 
 	glog.Info("Attempting to reconnect to event socket")
 
@@ -88,8 +88,16 @@ func (pmc *PMCProcess) reconnectSocket() {
 	for attempt := 1; attempt <= maxReconnectAttempts; attempt++ {
 		newConn, err = dialSocket()
 		if err == nil {
-			pmc.c = newConn
-			glog.Infof("Successfully reconnected to event socket after %d attempt(s)", attempt)
+			pmc.lock.Lock()
+			if pmc.c == nil {
+				pmc.c = newConn
+				glog.Infof("Successfully reconnected to event socket after %d attempt(s)", attempt)
+			} else {
+				// Another goroutine reconnected first. Close the new connection.
+				newConn.Close()
+				glog.Info("Socket already reconnected by another goroutine")
+			}
+			pmc.lock.Unlock()
 			return
 		}
 
