@@ -9,7 +9,6 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/socket"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
@@ -265,20 +264,12 @@ func (e *EventHandler) updateDownstreamData(cfgName string, c net.Conn) {
 }
 
 // EmitClockClass emits the current clock class and accuracy for the specified configuration.
-func (e *EventHandler) EmitClockClass(cfgName string, c net.Conn) {
+// Returns true if a broken pipe error occurred (caller should reconnect and retry).
+func (e *EventHandler) EmitClockClass(cfgName string, c net.Conn) bool {
 	if _, ok := e.clkSyncState[cfgName]; !ok {
-		return
+		return false
 	}
-	e.announceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
-}
-
-// EmitClockClassWithSocket emits the current clock class and accuracy using a reconnectable socket.
-// This version handles broken pipe errors by automatically reconnecting.
-func (e *EventHandler) EmitClockClassWithSocket(cfgName string, rs *socket.ReconnectableSocket) {
-	if _, ok := e.clkSyncState[cfgName]; !ok {
-		return
-	}
-	e.announceClockClassWithSocket(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, rs)
+	return e.announceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
 }
 
 // Implements Rec. ITU-T G.8275 (2024) Amd. 1 (08/2024)

@@ -14,7 +14,6 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	pmcPkg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/socket"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
@@ -48,9 +47,37 @@ type PMCProcess struct {
 	parentDSCh        chan protocol.ParentDataSet
 	exitCh            chan struct{}
 	clockType         string
-	eventSocket       *socket.ReconnectableSocket
+	c                 net.Conn
+	stdToSocket       bool // indicates if we should reconnect on broken pipe
 	messageTag        string
 	eventHandler      *event.EventHandler
+}
+
+// reconnectSocket closes the old socket connection and establishes a new one.
+// This should be called when a broken pipe error is detected.
+func (pmc *PMCProcess) reconnectSocket() {
+	pmc.lock.Lock()
+	defer pmc.lock.Unlock()
+
+	if pmc.c != nil {
+		glog.Info("Closing old socket connection due to broken pipe")
+		pmc.c.Close()
+		pmc.c = nil
+	}
+
+	if !pmc.stdToSocket {
+		return
+	}
+
+	glog.Info("Attempting to reconnect to event socket")
+	newConn, err := dialSocket()
+	if err != nil {
+		glog.Warningf("Failed to reconnect to event socket: %v", err)
+		return
+	}
+
+	pmc.c = newConn
+	glog.Info("Successfully reconnected to event socket")
 }
 
 // Name returns the process name.
@@ -88,10 +115,11 @@ func (pmc *PMCProcess) CmdInit() {
 }
 
 // ProcessStatus processes status updates for the PMC process.
-// Note: The net.Conn parameter is kept for interface compatibility but the PMCProcess
-// now uses its internal ReconnectableSocket for automatic reconnection on broken pipe.
-func (pmc *PMCProcess) ProcessStatus(_ net.Conn, status int64) {
-	processStatusWithSocket(pmc.eventSocket, PMCProcessName, pmc.messageTag, status)
+func (pmc *PMCProcess) ProcessStatus(c net.Conn, status int64) {
+	if c != nil {
+		pmc.c = c
+	}
+	processStatus(pmc.c, PMCProcessName, pmc.messageTag, status)
 }
 
 func btof(b bool) string {
@@ -119,11 +147,19 @@ const (
 	pollTimeout = 5 * time.Minute
 )
 
-// EmitClockClassLogs emits clock class change logs using the reconnectable socket.
-// Note: The net.Conn parameter is kept for backward compatibility but is no longer used.
-// The PMCProcess now uses its internal ReconnectableSocket for automatic reconnection.
-func (pmc *PMCProcess) EmitClockClassLogs(_ net.Conn) {
-	go pmc.eventHandler.EmitClockClassWithSocket(pmc.configFileName, pmc.eventSocket)
+// EmitClockClassLogs emits clock class change logs to the provided connection.
+func (pmc *PMCProcess) EmitClockClassLogs(c net.Conn) {
+	if c != nil {
+		pmc.c = c
+	}
+	go func() {
+		brokenPipe := pmc.eventHandler.EmitClockClass(pmc.configFileName, pmc.c)
+		if brokenPipe {
+			pmc.reconnectSocket()
+			// Retry after reconnect
+			pmc.eventHandler.EmitClockClass(pmc.configFileName, pmc.c)
+		}
+	}()
 }
 
 // CmdRun starts the PMC monitoring process.
@@ -133,23 +169,23 @@ func (pmc *PMCProcess) CmdRun(stdToSocket bool) {
 		return
 	}
 	pmc.exitCh = make(chan struct{}, 1)
+	pmc.stdToSocket = stdToSocket
 
 	go func() {
-		// Create a reconnectable socket if we need to send events to cloud-event-proxy
-		if stdToSocket && pmc.eventSocket == nil {
-			pmc.eventSocket = socket.NewReconnectableSocket()
-			glog.Info("Created reconnectable socket for PMC process")
-		}
-
 		for {
 			if pmc.Stopped() {
-				if pmc.eventSocket != nil {
-					pmc.eventSocket.Close()
-				}
 				return
 			}
 
-			monitorErr := pmc.Monitor()
+			var c net.Conn
+			if stdToSocket {
+				cAttempt, dialErr := dialSocket()
+				for dialErr != nil {
+					cAttempt, dialErr = dialSocket()
+				}
+				c = cAttempt
+			}
+			monitorErr := pmc.Monitor(c)
 			if monitorErr == nil && pmc.Stopped() {
 				return
 			}
@@ -180,7 +216,11 @@ func (pmc *PMCProcess) Poll() {
 	pmc.parentDSCh <- parentDS
 }
 
-func (pmc *PMCProcess) monitor() error {
+func (pmc *PMCProcess) monitor(conn net.Conn) error {
+	if conn != nil {
+		pmc.c = conn
+	}
+
 	exp, r, err := pmcPkg.GetPMCMontior(pmc.configFileName)
 	if err != nil {
 		if exp != nil {
@@ -262,19 +302,29 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 	if pmc.clockType == TBC {
 		pmc.eventHandler.UpdateUpstreamParentDataSet(parentDS)
 	} else if oldParentDS == nil || oldParentDS.GrandmasterClockClass != parentDS.GrandmasterClockClass {
-		pmc.eventHandler.AnnounceClockClassWithSocket(
+		brokenPipe := pmc.eventHandler.AnnounceClockClass(
 			fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
 			fbprotocol.ClockAccuracy(parentDS.GrandmasterClockClass),
-			pmc.configFileName, pmc.eventSocket,
+			pmc.configFileName, pmc.c,
 			event.ClockType(pmc.clockType),
 		)
+		if brokenPipe {
+			pmc.reconnectSocket()
+			// Retry after reconnect
+			pmc.eventHandler.AnnounceClockClass(
+				fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
+				fbprotocol.ClockAccuracy(parentDS.GrandmasterClockClass),
+				pmc.configFileName, pmc.c,
+				event.ClockType(pmc.clockType),
+			)
+		}
 	}
 }
 
 // Monitor continuously monitors the PMC process and handles restarts.
-func (pmc *PMCProcess) Monitor() error {
+func (pmc *PMCProcess) Monitor(c net.Conn) error {
 	for {
-		err := pmc.monitor()
+		err := pmc.monitor(c)
 		if err != nil {
 			select {
 			case <-pmc.exitCh:

@@ -34,7 +34,6 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/socket"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
 
@@ -1262,33 +1261,6 @@ func logProcessStatus(processName string, cfgName string, status int64, c net.Co
 	_, err := c.Write([]byte(message + "\n"))
 	if err != nil {
 		glog.Errorf("Write error sending ptp4l/phc2sys process healths status%s:", err)
-	}
-}
-
-// processStatusWithSocket processes status updates using a reconnectable socket.
-// This version handles broken pipe errors by automatically reconnecting.
-func processStatusWithSocket(rs *socket.ReconnectableSocket, processName, messageTag string, status int64) {
-	cfgName := strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
-	if cfgName != "" {
-		cfgName = strings.Split(cfgName, MessageTagSuffixSeperator)[0]
-	}
-
-	if rs == nil {
-		UpdateProcessStatusMetrics(processName, cfgName, status)
-		return
-	}
-	logProcessStatusWithSocket(processName, cfgName, status, rs)
-}
-
-func logProcessStatusWithSocket(processName string, cfgName string, status int64, rs *socket.ReconnectableSocket) {
-	if rs == nil {
-		return
-	}
-	message := fmt.Sprintf("%s[%d]:[%s] PTP_PROCESS_STATUS:%d", processName, time.Now().Unix(), cfgName, status)
-	glog.Info(message)
-	_, err := rs.Write([]byte(message + "\n"))
-	if err != nil {
-		glog.Errorf("Write error sending ptp4l/phc2sys process health status: %s", err)
 	}
 }
 

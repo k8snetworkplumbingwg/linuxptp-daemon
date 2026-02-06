@@ -11,7 +11,6 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/debug"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/socket"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
@@ -567,48 +566,28 @@ func (e *EventHandler) hasMetric(name string) (*prometheus.GaugeVec, bool) {
 }
 
 // AnnounceClockClass announces clock class changes to the event handler and writes to the connection.
-func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn, clockType ClockType) {
-	e.announceClockClass(clockClass, clockAcc, cfgName, c)
+// Returns true if a broken pipe error occurred (caller should reconnect and retry).
+func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn, clockType ClockType) bool {
+	brokenPipe := e.announceClockClass(clockClass, clockAcc, cfgName, c)
 	clockClassRequestCh <- ClockClassRequest{
 		cfgName:       cfgName,
 		clockClass:    clockClass,
 		clockType:     clockType,
 		clockAccuracy: clockAcc,
 	}
+	return brokenPipe
 }
 
-func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn) {
+func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn) bool {
 	e.clockClass = clockClass
 	e.clockAccuracy = clockAcc
 
-	utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
+	brokenPipe := utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
 	if !e.stdoutToSocket && e.clockClassMetric != nil {
 		e.clockClassMetric.With(prometheus.Labels{
 			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
 	}
-}
-
-// AnnounceClockClassWithSocket announces clock class changes using a reconnectable socket.
-// This version handles broken pipe errors by automatically reconnecting.
-func (e *EventHandler) AnnounceClockClassWithSocket(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, rs *socket.ReconnectableSocket, clockType ClockType) {
-	e.announceClockClassWithSocket(clockClass, clockAcc, cfgName, rs)
-	clockClassRequestCh <- ClockClassRequest{
-		cfgName:       cfgName,
-		clockClass:    clockClass,
-		clockType:     clockType,
-		clockAccuracy: clockAcc,
-	}
-}
-
-func (e *EventHandler) announceClockClassWithSocket(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, rs *socket.ReconnectableSocket) {
-	e.clockClass = clockClass
-	e.clockAccuracy = clockAcc
-
-	utils.EmitClockClassWithSocket(rs, PTP4lProcessName, cfgName, e.clockClass)
-	if !e.stdoutToSocket && e.clockClassMetric != nil {
-		e.clockClassMetric.With(prometheus.Labels{
-			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
-	}
+	return brokenPipe
 }
 
 // ProcessEvents ... process events to generate new events

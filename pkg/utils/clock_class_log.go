@@ -1,13 +1,14 @@
 package utils
 
 import (
+	"errors"
 	"fmt"
 	"net"
+	"syscall"
 	"time"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/socket"
 )
 
 // GetClockClassLogMessage formats a clock class change message with timestamp.
@@ -18,31 +19,41 @@ func GetClockClassLogMessage(name, configName string, clockClass fbprotocol.Cloc
 	)
 }
 
+// IsBrokenPipe checks if the error indicates a broken pipe or connection issue
+func IsBrokenPipe(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for common connection errors
+	if errors.Is(err, syscall.EPIPE) || // Broken pipe
+		errors.Is(err, syscall.ECONNRESET) || // Connection reset by peer
+		errors.Is(err, syscall.ECONNREFUSED) || // Connection refused
+		errors.Is(err, syscall.ENOTCONN) { // Not connected
+		return true
+	}
+
+	// Check for net.OpError wrapping these errors
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return IsBrokenPipe(opErr.Err)
+	}
+
+	return false
+}
+
 // EmitClockClass writes a clock class change event to log and the network connection if provided.
-// Deprecated: Use EmitClockClassWithSocket instead for automatic reconnection on broken pipe.
-func EmitClockClass(c net.Conn, name string, configName string, clockClass fbprotocol.ClockClass) {
+// Returns true if a broken pipe error occurred (caller should reconnect and retry).
+func EmitClockClass(c net.Conn, name string, configName string, clockClass fbprotocol.ClockClass) bool {
 	glog.Info(GetClockClassLogMessage(name, configName, clockClass))
 	if c == nil {
-		return
+		return false
 	}
 
 	_, err := c.Write([]byte(GetClockClassLogMessage(name, configName, clockClass)))
 	if err != nil {
 		glog.Errorf("failed to write class change event to socket: %s", err.Error())
+		return IsBrokenPipe(err)
 	}
-}
-
-// EmitClockClassWithSocket writes a clock class change event to log and the reconnectable socket.
-// This version handles broken pipe errors by automatically reconnecting.
-func EmitClockClassWithSocket(rs *socket.ReconnectableSocket, name string, configName string, clockClass fbprotocol.ClockClass) {
-	msg := GetClockClassLogMessage(name, configName, clockClass)
-	glog.Info(msg)
-	if rs == nil {
-		return
-	}
-
-	_, err := rs.Write([]byte(msg))
-	if err != nil {
-		glog.Errorf("failed to write class change event to socket: %s", err.Error())
-	}
+	return false
 }
