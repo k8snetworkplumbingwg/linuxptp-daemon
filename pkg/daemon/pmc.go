@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -21,11 +22,6 @@ const (
 	// PMCProcessName is the name identifier for PMC processes
 	PMCProcessName = "pmc"
 	pollTimeout    = 5 * time.Minute
-
-	// Socket reconnect parameters
-	maxReconnectAttempts = 5
-	reconnectBackoffBase = 100 * time.Millisecond
-	maxReconnectBackoff  = 2 * time.Second
 )
 
 // NewPMCProcess creates a new PMC process instance for monitoring PTP events.
@@ -77,8 +73,8 @@ func (pmc *PMCProcess) setConn(c net.Conn) {
 	}
 }
 
-// reconnectSocket closes the old socket connection and establishes a new one.
-// It retries with exponential backoff and is responsive to shutdown signals.
+// reconnectSocket closes the old socket connection and establishes a new one
+// using the shared reconnection utility with exponential backoff.
 // The lock is only held while modifying pmc.c to avoid blocking CmdStop().
 func (pmc *PMCProcess) reconnectSocket() {
 	var oldConn net.Conn
@@ -98,47 +94,32 @@ func (pmc *PMCProcess) reconnectSocket() {
 		oldConn.Close()
 	}
 
-	glog.Info("Attempting to reconnect to event socket")
-
-	backoff := reconnectBackoffBase
-	for attempt := 1; attempt <= maxReconnectAttempts; attempt++ {
-		if pmc.Stopped() {
-			glog.Info("PMC process stopped, aborting reconnect attempt")
-			return
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		select {
+		case <-pmc.exitCh:
+			cancel()
+		case <-ctx.Done():
 		}
+	}()
+	defer cancel()
 
-		newConn, err := dialSocket()
-		if err == nil {
-			pmc.lock.Lock()
-			if pmc.c == nil {
-				pmc.c = newConn
-				glog.Infof("Successfully reconnected to event socket after %d attempt(s)", attempt)
-			} else {
-				// Another goroutine reconnected first
-				newConn.Close()
-				glog.Info("Socket already reconnected by another goroutine")
-			}
-			pmc.lock.Unlock()
-			return
+	newConn := utils.ReconnectWithBackoff(ctx, dialSocket, utils.ReconnectConfig{
+		MaxAttempts: 5,
+		BackoffBase: utils.DefaultReconnectBackoffBase,
+		MaxBackoff:  2 * time.Second,
+	})
+	if newConn != nil {
+		pmc.lock.Lock()
+		if pmc.c == nil {
+			pmc.c = newConn
+		} else {
+			// Another goroutine reconnected first
+			newConn.Close()
+			glog.Info("Socket already reconnected by another goroutine")
 		}
-
-		if attempt < maxReconnectAttempts {
-			glog.Warningf("Failed to reconnect to event socket (attempt %d/%d): %v, retrying in %v",
-				attempt, maxReconnectAttempts, err, backoff)
-			select {
-			case <-time.After(backoff):
-			case <-pmc.exitCh:
-				glog.Info("PMC process stopped during backoff, aborting reconnect")
-				return
-			}
-			backoff *= 2
-			if backoff > maxReconnectBackoff {
-				backoff = maxReconnectBackoff
-			}
-		}
+		pmc.lock.Unlock()
 	}
-
-	glog.Errorf("Failed to reconnect to event socket after %d attempts", maxReconnectAttempts)
 }
 
 // withRetryOnBrokenPipe executes fn with the current connection. If fn reports a

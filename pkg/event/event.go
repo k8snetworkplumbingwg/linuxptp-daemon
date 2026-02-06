@@ -1,6 +1,7 @@
 package event
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sort"
@@ -616,50 +617,26 @@ func (e *EventHandler) signalBrokenPipe() {
 	}
 }
 
-const (
-	maxEventReconnectAttempts = 10
-	eventReconnectBackoffBase = 100 * time.Millisecond
-	maxEventReconnectBackoff  = 5 * time.Second
-)
-
-// reconnectEventSocket closes the old connection and dials a new one.
-// It uses exponential backoff and a maximum number of retries, consistent
-// with the reconnection logic in pkg/daemon/pmc.go.
+// reconnectEventSocket closes the old connection and dials a new one using
+// the shared reconnection utility with exponential backoff.
 // Returns the new connection, or nil if the handler is shutting down or all retries are exhausted.
 func (e *EventHandler) reconnectEventSocket(oldConn net.Conn) net.Conn {
 	if oldConn != nil {
 		oldConn.Close()
 	}
-
-	glog.Info("Attempting to reconnect to event socket")
-	backoff := eventReconnectBackoffBase
-	for attempt := 1; attempt <= maxEventReconnectAttempts; attempt++ {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
 		select {
 		case <-e.closeCh:
-			return nil
-		default:
+			cancel()
+		case <-ctx.Done():
 		}
-		newConn, err := net.Dial("unix", e.stdoutSocket)
-		if err == nil {
-			glog.Infof("Successfully reconnected to event socket after %d attempt(s)", attempt)
-			return newConn
-		}
-		if attempt < maxEventReconnectAttempts {
-			glog.Warningf("Failed to reconnect to event socket (attempt %d/%d): %v, retrying in %v",
-				attempt, maxEventReconnectAttempts, err, backoff)
-			select {
-			case <-time.After(backoff):
-			case <-e.closeCh:
-				return nil
-			}
-			backoff *= 2
-			if backoff > maxEventReconnectBackoff {
-				backoff = maxEventReconnectBackoff
-			}
-		}
-	}
-	glog.Errorf("Failed to reconnect to event socket after %d attempts", maxEventReconnectAttempts)
-	return nil
+	}()
+	defer cancel()
+	return utils.ReconnectWithBackoff(ctx,
+		func() (net.Conn, error) { return net.Dial("unix", e.stdoutSocket) },
+		utils.DefaultReconnectConfig(),
+	)
 }
 
 // ProcessEvents ... process events to generate new events
