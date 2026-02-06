@@ -45,12 +45,13 @@ func IsBrokenPipe(err error) bool {
 // EmitClockClass writes a clock class change event to log and the network connection if provided.
 // Returns true if a broken pipe error occurred (caller should reconnect and retry).
 func EmitClockClass(c net.Conn, name string, configName string, clockClass fbprotocol.ClockClass) bool {
-	glog.Info(GetClockClassLogMessage(name, configName, clockClass))
+	logMsg := GetClockClassLogMessage(name, configName, clockClass)
+	glog.Info(logMsg)
 	if c == nil {
 		return false
 	}
 
-	_, err := c.Write([]byte(GetClockClassLogMessage(name, configName, clockClass)))
+	_, err := c.Write([]byte(logMsg))
 	if err != nil {
 		glog.Errorf("failed to write class change event to socket: %s", err.Error())
 		return IsBrokenPipe(err)
