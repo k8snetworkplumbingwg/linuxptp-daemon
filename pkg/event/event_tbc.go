@@ -387,6 +387,7 @@ func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
 	upsteamData, err := pmc.RunPMCExpGetParentTimeAndCurrentDataSets(cfgName)
 	if err != nil {
 		glog.Error("Failed to fetch upstream data, downstream data can not be updated.")
+		return
 	}
 
 	// Update LeadingClockData upstream fields under lock

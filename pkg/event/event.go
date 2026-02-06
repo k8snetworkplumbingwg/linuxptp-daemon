@@ -761,6 +761,7 @@ connect:
 						if brokenPipe := utils.EmitClockClass(getConn(), PTP4lProcessName, clkCfgName, clockClass); brokenPipe {
 							glog.Warning("Broken pipe detected in clock class ticker, signaling reconnection")
 							e.signalBrokenPipe()
+							break
 						}
 					}
 
