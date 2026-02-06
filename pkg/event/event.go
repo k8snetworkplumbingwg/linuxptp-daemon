@@ -967,23 +967,27 @@ connect:
 						if conn == nil {
 							glog.Error("No connection available, attempting reconnect")
 							newConn := e.reconnectEventSocket(nil)
-							if newConn == nil {
-								return
+							if newConn != nil {
+								setConn(newConn)
+								conn = newConn
+							} else {
+								glog.Warning("Reconnect failed, skipping socket write; will retry on next event")
+								continue
 							}
-							setConn(newConn)
-							conn = newConn
 						}
 						_, writeErr := conn.Write([]byte(l))
 						if writeErr != nil {
 							glog.Errorf("Write %s error %s:", l, writeErr)
 							newConn := e.reconnectEventSocket(conn)
-							if newConn == nil {
-								return
-							}
-							setConn(newConn)
-							// Retry write on the new connection
-							if _, retryErr := newConn.Write([]byte(l)); retryErr != nil {
-								glog.Errorf("Write failed again after reconnect for %s: %s", l, retryErr)
+							if newConn != nil {
+								setConn(newConn)
+								// Retry write on the new connection
+								if _, retryErr := newConn.Write([]byte(l)); retryErr != nil {
+									glog.Errorf("Write failed again after reconnect for %s: %s", l, retryErr)
+								}
+							} else {
+								glog.Warning("Reconnect failed after write error, skipping socket write; will retry on next event")
+								setConn(nil)
 							}
 						}
 					}
@@ -999,10 +1003,12 @@ connect:
 			glog.Info("Broken pipe signal received, reconnecting event socket")
 			oldConn := getConn()
 			newConn := e.reconnectEventSocket(oldConn)
-			if newConn == nil {
-				return
+			if newConn != nil {
+				setConn(newConn)
+			} else {
+				glog.Warning("Reconnect failed after broken pipe signal; will retry on next event")
+				setConn(nil)
 			}
-			setConn(newConn)
 		case <-e.closeCh:
 			return
 		}
