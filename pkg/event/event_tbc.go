@@ -384,8 +384,8 @@ func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
 	controlledPortsConfig := e.LeadingClockData.controlledPortsConfig
 	e.Unlock()
 
-	upsteamData, err := pmc.RunPMCExpGetParentTimeAndCurrentDataSets(cfgName)
-	if err != nil {
+	upsteamData, fetchErr := pmc.RunPMCExpGetParentTimeAndCurrentDataSets(cfgName)
+	if fetchErr != nil {
 		glog.Error("Failed to fetch upstream data, downstream data can not be updated.")
 		return
 	}
@@ -415,10 +415,10 @@ func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
 		glog.Warning("Broken pipe detected in downstreamAnnounceIWF, signaling reconnection")
 		e.signalBrokenPipe()
 	}
-	if err = pmc.RunPMCExpSetExternalGMPropertiesNP(controlledPortsConfig, es); err != nil {
+	if err := pmc.RunPMCExpSetExternalGMPropertiesNP(controlledPortsConfig, es); err != nil {
 		glog.Error(err)
 	}
-	if err = pmc.RunPMCExpSetGMSettings(controlledPortsConfig, gs); err != nil {
+	if err := pmc.RunPMCExpSetGMSettings(controlledPortsConfig, gs); err != nil {
 		glog.Error(err)
 	}
 	glog.Infof("%++v", es)
