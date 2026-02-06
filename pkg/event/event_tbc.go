@@ -254,9 +254,15 @@ func (e *EventHandler) UpdateUpstreamParentDataSet(parentDS protocol.ParentDataS
 }
 
 func (e *EventHandler) updateDownstreamData(cfgName string, c net.Conn) {
-	if data, ok := e.clkSyncState[cfgName]; !ok {
+	e.Lock()
+	data, ok := e.clkSyncState[cfgName]
+	if !ok {
+		e.Unlock()
 		return
-	} else if data.state == PTP_LOCKED {
+	}
+	state := data.state
+	e.Unlock()
+	if state == PTP_LOCKED {
 		go e.downstreamAnnounceIWF(cfgName, c)
 	} else {
 		go e.announceLocalData(cfgName, c)
@@ -266,10 +272,16 @@ func (e *EventHandler) updateDownstreamData(cfgName string, c net.Conn) {
 // EmitClockClass emits the current clock class and accuracy for the specified configuration.
 // Returns true if a broken pipe error occurred (caller should reconnect and retry).
 func (e *EventHandler) EmitClockClass(cfgName string, c net.Conn) bool {
-	if _, ok := e.clkSyncState[cfgName]; !ok {
+	e.Lock()
+	state, ok := e.clkSyncState[cfgName]
+	if !ok {
+		e.Unlock()
 		return false
 	}
-	return e.announceClockClass(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy, cfgName, c)
+	clockClass := state.clockClass
+	clockAccuracy := state.clockAccuracy
+	e.Unlock()
+	return e.announceClockClass(clockClass, clockAccuracy, cfgName, c)
 }
 
 // Implements Rec. ITU-T G.8275 (2024) Amd. 1 (08/2024)

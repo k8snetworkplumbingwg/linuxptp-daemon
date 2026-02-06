@@ -579,10 +579,12 @@ func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, cloc
 }
 
 func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string, c net.Conn) bool {
+	e.Lock()
 	e.clockClass = clockClass
 	e.clockAccuracy = clockAcc
+	e.Unlock()
 
-	brokenPipe := utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
+	brokenPipe := utils.EmitClockClass(c, PTP4lProcessName, cfgName, clockClass)
 	if !e.stdoutToSocket && e.clockClassMetric != nil {
 		e.clockClassMetric.With(prometheus.Labels{
 			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
@@ -640,15 +642,23 @@ connect:
 					if clk.clockType != BC { // This is because this produces the wrong value for BC at the moment this needs looking into.
 						e.UpdateClockClass(c, clk)
 					} else {
+						e.Lock()
 						e.clockClass = clk.clockClass
 						e.clockAccuracy = clk.clockAccuracy
+						e.Unlock()
 					}
 
 				case <-e.closeCh:
 					return
 				case <-classTicker.C: // send clock class event 60 secs interval
-					for clkCfgName, data := range e.clkSyncState {
-						clockClass := data.clockClass
+					// Snapshot the clock sync state under lock to avoid concurrent map access
+					e.Lock()
+					clkSnapshot := make(map[string]fbprotocol.ClockClass, len(e.clkSyncState))
+					for k, v := range e.clkSyncState {
+						clkSnapshot[k] = v.clockClass
+					}
+					e.Unlock()
+					for clkCfgName, clockClass := range clkSnapshot {
 						parts := strings.SplitN(clkCfgName, ".", 2)
 						if len(parts) >= 2 {
 							clkCfgName = "ptp4l." + strings.Join(parts[1:], ".")
@@ -668,7 +678,10 @@ connect:
 						if len(parts) >= 2 {
 							cfgName = "ptp4l." + strings.Join(parts[1:], ".")
 						}
-						utils.EmitClockClass(c, PTP4lProcessName, cfgName, e.clockClass)
+						e.Lock()
+						currentClockClass := e.clockClass
+						e.Unlock()
+						utils.EmitClockClass(c, PTP4lProcessName, cfgName, currentClockClass)
 					}
 				}
 			}
@@ -712,7 +725,9 @@ connect:
 							}
 						}
 					}
+					e.Lock()
 					delete(e.clkSyncState, event.CfgName) // delete the clkSyncState
+					e.Unlock()
 					e.outOfSpec = false
 					e.frequencyTraceable = false
 				}
@@ -738,11 +753,13 @@ connect:
 				if event.ClockType == GM {
 					dataDetails = e.addEvent(event)
 					// Computes GM state
+					e.Lock()
 					clockState = e.updateGMState(event.CfgName)
 					// right now if GPS offset || mode is bad then consider source lost
 					if e.clkSyncState[event.CfgName] != nil {
 						e.clkSyncState[event.CfgName].sourceLost = event.OutOfSpec
 					}
+					e.Unlock()
 					if clockState.state != PTP_LOCKED { // here update nmea status
 						if _, ok := event.Values[NMEA_STATUS]; ok {
 							event.Values[NMEA_STATUS] = 0
@@ -751,7 +768,9 @@ connect:
 				} else { // T-BC or T-TSC
 					event = e.convergeConfig(event)
 					dataDetails = e.addEvent(event)
+					e.Lock()
 					clockState = e.updateBCState(event, c)
+					e.Unlock()
 				}
 				logDataValues = dataDetails.logData
 				if event.WriteToLog && logDataValues != "" {
@@ -1093,8 +1112,10 @@ func (e *EventHandler) UpdateClockClass(c net.Conn, clk ClockClassRequest) {
 		glog.Errorf("error updating clock class %s", classErr)
 	} else {
 		glog.Infof("updated clock class for last clock class %d to %d with clock accuracy %d", clk.clockClass, clockClass, clockAccuracy)
+		e.Lock()
 		e.clockClass = clockClass
 		e.clockAccuracy = clockAccuracy
+		e.Unlock()
 		clockClassOut := utils.GetClockClassLogMessage(PTP4lProcessName, clk.cfgName, clockClass)
 		if e.stdoutToSocket {
 			if c != nil {

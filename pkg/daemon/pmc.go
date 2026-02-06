@@ -66,10 +66,13 @@ func (pmc *PMCProcess) getConn() net.Conn {
 	return pmc.c
 }
 
-// setConn sets the socket connection under lock.
+// setConn sets the socket connection under lock, closing the previous one if it exists.
 func (pmc *PMCProcess) setConn(c net.Conn) {
 	pmc.lock.Lock()
 	defer pmc.lock.Unlock()
+	if pmc.c != nil && pmc.c != c {
+		pmc.c.Close()
+	}
 	pmc.c = c
 }
 
@@ -231,7 +234,9 @@ func (pmc *PMCProcess) CmdRun(stdToSocket bool) {
 		return
 	}
 	pmc.exitCh = make(chan struct{}, 1)
+	pmc.lock.Lock()
 	pmc.stdToSocket = stdToSocket
+	pmc.lock.Unlock()
 
 	go func() {
 		for {
