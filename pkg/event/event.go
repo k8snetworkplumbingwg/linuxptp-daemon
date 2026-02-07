@@ -681,6 +681,7 @@ func (e *EventHandler) writeLogToSocket(l string) bool {
 		// Retry write on the new connection
 		if _, retryErr := e.getConn().Write([]byte(l)); retryErr != nil {
 			glog.Errorf("Write failed again after reconnect for %s: %s", l, retryErr)
+			return false
 		}
 	}
 	return true
@@ -712,7 +713,8 @@ func (e *EventHandler) ProcessEvents() {
 			case <-e.closeCh:
 				return
 			default:
-				glog.Warning("Initial connection to event socket failed, retrying...")
+				glog.Warning("Initial connection to event socket failed, retrying in 1 second...")
+				time.Sleep(1 * time.Second)
 			}
 		}
 	}
@@ -970,7 +972,9 @@ func (e *EventHandler) ProcessEvents() {
 					}
 					for _, l := range logOut {
 						fmt.Printf("%s", l)
-						e.writeLogToSocket(l)
+						if !e.writeLogToSocket(l) {
+							break
+						}
 					}
 				} else {
 					for _, l := range logOut {
@@ -1271,8 +1275,7 @@ func (e *EventHandler) SetPortRole(cfgName, portNane string, event *parser.PTPEv
 func (e *EventHandler) EmitClockSyncLogs() {
 	glog.Info("Re-emitting metrics logs for event-proxy as requested")
 
-	c := e.getConn()
-	if c == nil {
+	if e.getConn() == nil {
 		glog.Error("Failed to emit clock sync logs, connection is nil")
 		return
 	}
@@ -1288,16 +1291,16 @@ func (e *EventHandler) EmitClockSyncLogs() {
 
 	for _, l := range logs {
 		glog.Info(l)
-		if _, err := c.Write([]byte(l)); err != nil {
-			glog.Errorf("Write error sending syncState metric update: %s", err)
+		if !e.writeLogToSocket(l) {
+			glog.Warning("Broken pipe detected while emitting clock sync logs, stopping.")
+			break
 		}
 	}
 }
 
 // EmitPortRoleLogs emits the port role logs
 func (e *EventHandler) EmitPortRoleLogs() {
-	c := e.getConn()
-	if c == nil {
+	if e.getConn() == nil {
 		glog.Error("Failed to emit port state logs connection provided is nil")
 		return
 	}
@@ -1320,8 +1323,9 @@ func (e *EventHandler) EmitPortRoleLogs() {
 
 	for _, entry := range entries {
 		glog.Infof("Port Event %s", entry.raw)
-		if _, err := c.Write([]byte(entry.raw)); err != nil {
-			glog.Errorf("Write error sending port role: %s", err)
+		if !e.writeLogToSocket(entry.raw) {
+			glog.Warning("Broken pipe detected while emitting port role logs, stopping.")
+			break
 		}
 	}
 }
