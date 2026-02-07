@@ -663,6 +663,29 @@ func (e *EventHandler) reconnectEventSocket() bool {
 	return false
 }
 
+// writeLogToSocket writes a single log line to the event socket.
+// If the write fails, it attempts to reconnect and retry once.
+// Returns true if the connection is still usable for subsequent writes,
+// false if the connection is unavailable and remaining writes should be skipped.
+func (e *EventHandler) writeLogToSocket(l string) bool {
+	conn := e.getConn()
+	if conn == nil {
+		return false
+	}
+	if _, err := conn.Write([]byte(l)); err != nil {
+		glog.Errorf("Write %s error %s:", l, err)
+		if !e.reconnectEventSocket() {
+			glog.Warning("Reconnect failed after write error, skipping remaining socket writes; will retry on next event")
+			return false
+		}
+		// Retry write on the new connection
+		if _, retryErr := e.getConn().Write([]byte(l)); retryErr != nil {
+			glog.Errorf("Write failed again after reconnect for %s: %s", l, retryErr)
+		}
+	}
+	return true
+}
+
 // ProcessEvents ... process events to generate new events
 func (e *EventHandler) ProcessEvents() {
 	redialClockClass := true
@@ -939,34 +962,15 @@ func (e *EventHandler) ProcessEvents() {
 
 			if len(logOut) > 0 {
 				if e.stdoutToSocket {
-					conn := e.getConn()
-					if conn == nil {
+					if e.getConn() == nil {
 						glog.Error("No connection available, attempting reconnect")
-						if e.reconnectEventSocket() {
-							conn = e.getConn()
-						} else {
+						if !e.reconnectEventSocket() {
 							glog.Warning("Reconnect failed, skipping socket writes; will retry on next event")
 						}
 					}
 					for _, l := range logOut {
 						fmt.Printf("%s", l)
-						if conn == nil {
-							continue
-						}
-						_, writeErr := conn.Write([]byte(l))
-						if writeErr != nil {
-							glog.Errorf("Write %s error %s:", l, writeErr)
-							if e.reconnectEventSocket() {
-								conn = e.getConn()
-								// Retry write on the new connection
-								if _, retryErr := conn.Write([]byte(l)); retryErr != nil {
-									glog.Errorf("Write failed again after reconnect for %s: %s", l, retryErr)
-								}
-							} else {
-								glog.Warning("Reconnect failed after write error, skipping remaining socket writes; will retry on next event")
-								conn = nil
-							}
-						}
+						e.writeLogToSocket(l)
 					}
 				} else {
 					for _, l := range logOut {
