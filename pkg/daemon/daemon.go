@@ -215,7 +215,7 @@ func (p *ProcessManager) EmitProcessStatusLogs() {
 }
 
 // EmitClockClassLogs ...
-func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
+func (p *ProcessManager) EmitClockClassLogs() {
 	for _, proc := range p.process {
 		if proc.name == ptp4lProcessName {
 			for _, dp := range proc.depProcess {
@@ -225,7 +225,7 @@ func (p *ProcessManager) EmitClockClassLogs(c net.Conn) {
 						// if parentDS is nil that means the clock class will
 						// be announced as soon as we get one
 						// therefore no need force it.
-						pmc.EmitClockClassLogs(c)
+						pmc.EmitClockClassLogs()
 					}
 				}
 			}

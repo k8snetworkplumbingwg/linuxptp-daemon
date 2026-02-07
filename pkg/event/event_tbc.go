@@ -3,7 +3,6 @@ package event
 import (
 	"fmt"
 	"math"
-	"net"
 	"strings"
 	"time"
 
@@ -80,7 +79,7 @@ func newLeadingClockParams() *LeadingClockParams {
 // updateBCState updates the BC/TSC state machine.
 // Called with e.Lock() held. Returns the clock sync state and whether a TTSC clock class
 // announcement is needed (the caller must perform the I/O after releasing the lock).
-func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) (clockSyncState, bool) {
+func (e *EventHandler) updateBCState(event EventChannel) (clockSyncState, bool) {
 	cfgName := event.CfgName
 	dpllState := PTP_NOTSET
 	ts2phcState := PTP_FREERUN
@@ -234,7 +233,7 @@ func (e *EventHandler) updateBCState(event EventChannel, c net.Conn) (clockSyncS
 			e.setClockClassLocked(e.clkSyncState[cfgName].clockClass, e.clkSyncState[cfgName].clockAccuracy)
 			needsTTSCAnnounce = true
 		} else {
-			go e.updateDownstreamData(cfgName, c)
+			go e.updateDownstreamData(cfgName)
 		}
 	}
 	// this will reduce log noise and prints 1 per sec
@@ -259,7 +258,7 @@ func (e *EventHandler) UpdateUpstreamParentDataSet(parentDS protocol.ParentDataS
 	}
 }
 
-func (e *EventHandler) updateDownstreamData(cfgName string, c net.Conn) {
+func (e *EventHandler) updateDownstreamData(cfgName string) {
 	e.Lock()
 	data, ok := e.clkSyncState[cfgName]
 	if !ok {
@@ -269,31 +268,31 @@ func (e *EventHandler) updateDownstreamData(cfgName string, c net.Conn) {
 	state := data.state
 	e.Unlock()
 	if state == PTP_LOCKED {
-		go e.downstreamAnnounceIWF(cfgName, c)
+		go e.downstreamAnnounceIWF(cfgName)
 	} else {
-		go e.announceLocalData(cfgName, c)
+		go e.announceLocalData(cfgName)
 	}
 }
 
 // EmitClockClass emits the current clock class and accuracy for the specified configuration.
-// Returns true if a broken pipe error occurred (caller should reconnect and retry).
-func (e *EventHandler) EmitClockClass(cfgName string, c net.Conn) bool {
+// Broken pipe errors are handled internally via signalBrokenPipe.
+func (e *EventHandler) EmitClockClass(cfgName string) {
 	e.Lock()
 	state, ok := e.clkSyncState[cfgName]
 	if !ok {
 		e.Unlock()
-		return false
+		return
 	}
 	clockClass := state.clockClass
 	clockAccuracy := state.clockAccuracy
 	e.Unlock()
-	return e.announceClockClass(clockClass, clockAccuracy, cfgName, c)
+	e.announceClockClass(clockClass, clockAccuracy, cfgName)
 }
 
 // Implements Rec. ITU-T G.8275 (2024) Amd. 1 (08/2024)
 // Table VIII.3 − T-BC-/ T-BC-P/ T-BC-A Announce message contents
 // for free-run (acquiring), holdover within / out of the specification
-func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
+func (e *EventHandler) announceLocalData(cfgName string) {
 	// Snapshot shared data under lock to prevent data races with updateBCState
 	e.Lock()
 	clockID := e.LeadingClockData.clockID
@@ -318,10 +317,7 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 			glog.Errorf("Failed to set external GM properties: %v", err)
 		}
 	}()
-	if brokenPipe := e.announceClockClass(clockClass, clockAccuracy, cfgName, c); brokenPipe {
-		glog.Warning("Broken pipe detected in announceLocalData, signaling reconnection")
-		e.signalBrokenPipe()
-	}
+	e.announceClockClass(clockClass, clockAccuracy, cfgName)
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
 			ClockClass:              clockClass,
@@ -375,7 +371,7 @@ func (e *EventHandler) announceLocalData(cfgName string, c net.Conn) {
 }
 
 // this function runs in a goroutine
-func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
+func (e *EventHandler) downstreamAnnounceIWF(cfgName string) {
 	ptpCfgName := strings.Replace(cfgName, "ts2phc", "ptp4l", 1)
 	glog.Infof("downstreamAnnounceIWF: %s", ptpCfgName)
 
@@ -411,10 +407,7 @@ func (e *EventHandler) downstreamAnnounceIWF(cfgName string, c net.Conn) {
 		StepsRemoved: upsteamData.CurrentDS.StepsRemoved,
 	}
 	glog.Infof("%++v", es)
-	if brokenPipe := e.announceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, cfgName, c); brokenPipe {
-		glog.Warning("Broken pipe detected in downstreamAnnounceIWF, signaling reconnection")
-		e.signalBrokenPipe()
-	}
+	e.announceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, cfgName)
 	if err := pmc.RunPMCExpSetExternalGMPropertiesNP(controlledPortsConfig, es); err != nil {
 		glog.Error(err)
 	}

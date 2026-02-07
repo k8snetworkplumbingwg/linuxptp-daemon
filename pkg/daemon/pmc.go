@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -73,70 +72,6 @@ func (pmc *PMCProcess) setConn(c net.Conn) {
 	}
 }
 
-// reconnectSocket closes the old socket connection and establishes a new one
-// using the shared reconnection utility with exponential backoff.
-// The lock is only held while modifying pmc.c to avoid blocking CmdStop().
-func (pmc *PMCProcess) reconnectSocket() {
-	var oldConn net.Conn
-	pmc.lock.Lock()
-	if !pmc.stdToSocket {
-		pmc.lock.Unlock()
-		return
-	}
-	if pmc.c != nil {
-		oldConn = pmc.c
-		pmc.c = nil
-	}
-	pmc.lock.Unlock()
-
-	if oldConn != nil {
-		glog.Info("Closing old socket connection due to broken pipe")
-		oldConn.Close()
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		select {
-		case <-pmc.exitCh:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-	defer cancel()
-
-	newConn := utils.ReconnectWithBackoff(ctx, dialSocket, utils.DefaultReconnectConfig())
-	if newConn != nil {
-		pmc.lock.Lock()
-		if pmc.c == nil {
-			pmc.c = newConn
-		} else {
-			// Another goroutine reconnected first
-			newConn.Close()
-			glog.Info("Socket already reconnected by another goroutine")
-		}
-		pmc.lock.Unlock()
-	}
-}
-
-// withRetryOnBrokenPipe executes fn with the current connection. If fn reports a
-// broken pipe, it reconnects and retries once.
-func (pmc *PMCProcess) withRetryOnBrokenPipe(fn func(net.Conn) bool) {
-	if !fn(pmc.getConn()) {
-		return
-	}
-
-	pmc.reconnectSocket()
-
-	c := pmc.getConn()
-	if c == nil {
-		glog.Warning("Socket reconnect failed, event may not have been sent")
-		return
-	}
-	if fn(c) {
-		glog.Warning("Socket write failed again after reconnect, event may not have been sent")
-	}
-}
-
 // Name returns the process name.
 func (pmc *PMCProcess) Name() string {
 	return PMCProcessName
@@ -200,14 +135,9 @@ func (pmc *PMCProcess) getMonitorSubcribeCommand() string {
 	)
 }
 
-// EmitClockClassLogs emits clock class change logs to the provided connection.
-func (pmc *PMCProcess) EmitClockClassLogs(c net.Conn) {
-	if c != nil {
-		pmc.setConn(c)
-	}
-	go pmc.withRetryOnBrokenPipe(func(conn net.Conn) bool {
-		return pmc.eventHandler.EmitClockClass(pmc.configFileName, conn)
-	})
+// EmitClockClassLogs emits clock class change logs via the EventHandler's connection.
+func (pmc *PMCProcess) EmitClockClassLogs() {
+	go pmc.eventHandler.EmitClockClass(pmc.configFileName)
 }
 
 // CmdRun starts the PMC monitoring process.
@@ -352,14 +282,12 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 	if pmc.clockType == TBC {
 		pmc.eventHandler.UpdateUpstreamParentDataSet(parentDS)
 	} else if oldParentDS == nil || oldParentDS.GrandmasterClockClass != parentDS.GrandmasterClockClass {
-		pmc.withRetryOnBrokenPipe(func(c net.Conn) bool {
-			return pmc.eventHandler.AnnounceClockClass(
-				fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
-				fbprotocol.ClockAccuracy(parentDS.GrandmasterClockClass),
-				pmc.configFileName, c,
-				event.ClockType(pmc.clockType),
-			)
-		})
+		pmc.eventHandler.AnnounceClockClass(
+			fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
+			fbprotocol.ClockAccuracy(parentDS.GrandmasterClockClass),
+			pmc.configFileName,
+			event.ClockType(pmc.clockType),
+		)
 	}
 }
 
