@@ -682,10 +682,7 @@ func (e *EventHandler) ProcessEvents() {
 	// Establish initial connection to the event socket using exponential backoff.
 	// Retries indefinitely until connected or the handler is shutting down.
 	if e.stdoutToSocket {
-		for {
-			if e.reconnectEventSocket() {
-				break
-			}
+		for !e.reconnectEventSocket() {
 			// reconnectEventSocket returns false on shutdown or exhausted retries;
 			// check for shutdown before retrying
 			select {
