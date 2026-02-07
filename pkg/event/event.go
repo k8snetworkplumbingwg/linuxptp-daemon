@@ -1276,13 +1276,20 @@ func (e *EventHandler) EmitClockSyncLogs() {
 		glog.Error("Failed to emit clock sync logs, connection is nil")
 		return
 	}
+	// Snapshot clkSyncState logs under lock to avoid concurrent map access
+	e.Lock()
+	logs := make([]string, 0, len(e.clkSyncState))
 	for _, syncState := range e.clkSyncState {
 		if syncState.clkLog != "" {
-			_, err := c.Write([]byte(syncState.clkLog))
-			glog.Info(syncState.clkLog)
-			if err != nil {
-				glog.Errorf("Write error sending syncState metric update: %s", err)
-			}
+			logs = append(logs, syncState.clkLog)
+		}
+	}
+	e.Unlock()
+
+	for _, l := range logs {
+		glog.Info(l)
+		if _, err := c.Write([]byte(l)); err != nil {
+			glog.Errorf("Write error sending syncState metric update: %s", err)
 		}
 	}
 }
@@ -1295,16 +1302,26 @@ func (e *EventHandler) EmitPortRoleLogs() {
 		return
 	}
 	glog.Info("Re-emitting metrics logs for event-proxy as requested")
+
+	// Snapshot port role data under lock to avoid concurrent map access
+	e.Lock()
+	type portRoleEntry struct {
+		raw string
+	}
+	var entries []portRoleEntry
 	for _, ports := range e.portRole {
 		for _, portEvent := range ports {
-			if portEvent == nil {
-				continue
+			if portEvent != nil {
+				entries = append(entries, portRoleEntry{raw: portEvent.Raw})
 			}
-			glog.Info("Conn ", c, "\nPort Event ", portEvent)
-			_, err := c.Write([]byte(portEvent.Raw))
-			if err != nil {
-				glog.Errorf("Write error sending port role: %s", err)
-			}
+		}
+	}
+	e.Unlock()
+
+	for _, entry := range entries {
+		glog.Infof("Port Event %s", entry.raw)
+		if _, err := c.Write([]byte(entry.raw)); err != nil {
+			glog.Errorf("Write error sending port role: %s", err)
 		}
 	}
 }
