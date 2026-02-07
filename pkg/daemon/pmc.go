@@ -104,11 +104,7 @@ func (pmc *PMCProcess) reconnectSocket() {
 	}()
 	defer cancel()
 
-	newConn := utils.ReconnectWithBackoff(ctx, dialSocket, utils.ReconnectConfig{
-		MaxAttempts: 5,
-		BackoffBase: utils.DefaultReconnectBackoffBase,
-		MaxBackoff:  2 * time.Second,
-	})
+	newConn := utils.ReconnectWithBackoff(ctx, dialSocket, utils.DefaultReconnectConfig())
 	if newConn != nil {
 		pmc.lock.Lock()
 		if pmc.c == nil {

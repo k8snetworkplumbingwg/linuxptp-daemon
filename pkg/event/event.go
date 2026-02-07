@@ -149,8 +149,6 @@ const (
 	PTP_NOTSET PTPState = "-2"
 )
 
-const connectionRetryInterval = 1 * time.Second
-
 type clockSyncState struct {
 	state          PTPState
 	clockClass     fbprotocol.ClockClass
@@ -644,7 +642,6 @@ func (e *EventHandler) ProcessEvents() {
 	var c net.Conn
 	var connMu sync.Mutex
 	redialClockClass := true
-	retryCount := 0
 
 	// getConn returns the current connection under lock, safe for use from goroutines.
 	getConn := func() net.Conn {
@@ -669,24 +666,24 @@ func (e *EventHandler) ProcessEvents() {
 		}
 	}()
 	var lastClockState PTPState
-connect:
-	select {
-	case <-e.closeCh:
-		return
-	default:
-		if e.stdoutToSocket {
-			newConn, dialErr := net.Dial("unix", e.stdoutSocket)
-			if dialErr != nil {
-				// reduce log spam
-				if retryCount == 0 || retryCount%5 == 0 {
-					glog.Errorf("waiting for event socket, retrying %s", dialErr)
-				}
-				retryCount = (retryCount + 1) % 6
-				time.Sleep(connectionRetryInterval)
-				goto connect
+
+	// Establish initial connection to the event socket using exponential backoff.
+	// Retries indefinitely until connected or the handler is shutting down.
+	if e.stdoutToSocket {
+		for {
+			newConn := e.reconnectEventSocket(nil)
+			if newConn != nil {
+				setConn(newConn)
+				break
 			}
-			retryCount = 0
-			setConn(newConn)
+			// reconnectEventSocket returns nil on shutdown or exhausted retries;
+			// check for shutdown before retrying
+			select {
+			case <-e.closeCh:
+				return
+			default:
+				glog.Warning("Initial connection to event socket failed, retrying...")
+			}
 		}
 	}
 
