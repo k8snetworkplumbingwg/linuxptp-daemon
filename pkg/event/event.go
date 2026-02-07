@@ -171,6 +171,7 @@ type EventHandler struct {
 	brokenPipeCh       chan struct{} // signals broken pipe from background goroutines to trigger reconnection
 	conn               net.Conn      // event socket connection, guarded by connMu
 	connMu             sync.Mutex    // separate mutex for conn to avoid deadlocks with embedded sync.Mutex
+	reconnectMu        sync.Mutex    // serializes reconnection attempts to prevent leaked connections
 	data               map[string][]*Data
 	offsetMetric       *prometheus.GaugeVec
 	clockMetric        *prometheus.GaugeVec
@@ -192,11 +193,17 @@ func (e *EventHandler) getConn() net.Conn {
 	return e.conn
 }
 
-// setConn replaces the current event socket connection under lock.
+// setConn replaces the current event socket connection under lock, closing the previous one if it exists.
 func (e *EventHandler) setConn(c net.Conn) {
 	e.connMu.Lock()
-	defer e.connMu.Unlock()
+	oldConn := e.conn
 	e.conn = c
+	e.connMu.Unlock()
+	if oldConn != nil && oldConn != c {
+		if err := oldConn.Close(); err != nil {
+			glog.Warningf("failed to close old event handler connection: %v", err)
+		}
+	}
 }
 
 // EventChannel .. event channel to subscriber to events
@@ -635,14 +642,21 @@ func (e *EventHandler) signalBrokenPipe() {
 
 // reconnectEventSocket closes the current connection and dials a new one using
 // the shared reconnection utility with exponential backoff.
+// Serialized via reconnectMu to prevent concurrent reconnection attempts from leaking connections.
 // On success, stores the new connection via e.setConn and returns true.
 // Returns false if the handler is shutting down or all retries are exhausted.
 func (e *EventHandler) reconnectEventSocket() bool {
-	oldConn := e.getConn()
-	e.setConn(nil)
-	if oldConn != nil {
-		oldConn.Close()
+	e.reconnectMu.Lock()
+	defer e.reconnectMu.Unlock()
+
+	// Another goroutine may have already reconnected while we were waiting for the lock.
+	if e.getConn() != nil {
+		return true
 	}
+
+	// setConn(nil) closes the old connection if still present.
+	e.setConn(nil)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		select {
@@ -673,14 +687,23 @@ func (e *EventHandler) writeLogToSocket(l string) bool {
 		return false
 	}
 	if _, err := conn.Write([]byte(l)); err != nil {
-		glog.Errorf("Write %s error %s:", l, err)
+		glog.Errorf("Write error for %q: %v", l, err)
+		// Clear the broken connection before reconnecting so that
+		// concurrent callers waiting on reconnectMu see conn==nil
+		// and don't mistakenly return the broken connection.
+		e.setConn(nil)
 		if !e.reconnectEventSocket() {
 			glog.Warning("Reconnect failed after write error, skipping remaining socket writes; will retry on next event")
 			return false
 		}
 		// Retry write on the new connection
-		if _, retryErr := e.getConn().Write([]byte(l)); retryErr != nil {
-			glog.Errorf("Write failed again after reconnect for %s: %s", l, retryErr)
+		retryConn := e.getConn()
+		if retryConn == nil {
+			glog.Warning("Connection is nil after reconnect, skipping retry")
+			return false
+		}
+		if _, retryErr := retryConn.Write([]byte(l)); retryErr != nil {
+			glog.Errorf("Write failed again after reconnect for %q: %v", l, retryErr)
 			return false
 		}
 	}
@@ -693,12 +716,7 @@ func (e *EventHandler) ProcessEvents() {
 
 	defer func() {
 		if e.stdoutToSocket {
-			if conn := e.getConn(); conn != nil {
-				e.setConn(nil)
-				if closeErr := conn.Close(); closeErr != nil {
-					glog.Errorf("closing connection returned error %s", closeErr)
-				}
-			}
+			e.setConn(nil) // closes the connection if present
 		}
 	}()
 	var lastClockState PTPState
@@ -984,8 +1002,9 @@ func (e *EventHandler) ProcessEvents() {
 			}
 		case <-e.brokenPipeCh:
 			// A background goroutine detected a broken pipe on the event socket.
-			// Close the old connection and reconnect.
+			// Clear the broken connection and reconnect.
 			glog.Info("Broken pipe signal received, reconnecting event socket")
+			e.setConn(nil)
 			if !e.reconnectEventSocket() {
 				glog.Warning("Reconnect failed after broken pipe signal; will retry on next event")
 			}

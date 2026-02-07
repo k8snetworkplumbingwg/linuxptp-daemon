@@ -68,7 +68,9 @@ func (pmc *PMCProcess) setConn(c net.Conn) {
 	pmc.c = c
 	pmc.lock.Unlock()
 	if oldConn != nil && oldConn != c {
-		oldConn.Close()
+		if err := oldConn.Close(); err != nil {
+			glog.Warningf("failed to close old pmc connection: %v", err)
+		}
 	}
 }
 
