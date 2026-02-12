@@ -130,13 +130,8 @@ func GetHardwareInfo(deviceName string) (*ptpv1.HardwareInfo, error) {
 		hwInfo.FEC = linkInfo.FEC
 	}
 
-	// Get VPD data using the proper parser
-	// Try PCI path first, then fall back to network device path (works better in some containers)
-	vpdData, err := GetVPDInfoByPCIPath(pciPath)
-	if err != nil {
-		glog.V(4).Infof("VPD not found via PCI path for %s, trying network device path: %v", deviceName, err)
-		vpdData, err = GetVPDInfo(deviceName)
-	}
+	// Get VPD data - tries ethtool -e with all port names/aliases, then falls back to sysfs
+	vpdData, err := GetVPDInfoForPCIDevice(hwInfo.PCIAddress, deviceName)
 	if err != nil {
 		glog.V(4).Infof("No VPD data found for device %s: %v", deviceName, err)
 	} else {

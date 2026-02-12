@@ -290,35 +290,39 @@ func GetPCIAddress(deviceName string) (string, error) {
 	return "", fmt.Errorf("device %s not found", deviceName)
 }
 
-// GetNetDeviceFromPCI returns the network device name for a given PCI address.
-// It tries multiple sysfs paths since availability varies by environment (containers, etc.)
-func GetNetDeviceFromPCI(pciAddress string) (string, error) {
+// GetNetDevicesFromPCI returns all network interface names associated with a PCI address.
+// It checks multiple sysfs paths since availability varies by environment (containers, etc.).
+func GetNetDevicesFromPCI(pciAddress string) []string {
+	seen := map[string]bool{}
+	var names []string
+
 	// Method 1: Try /sys/bus/pci/devices/<pci_addr>/net/
 	netDir := fmt.Sprintf("/sys/bus/pci/devices/%s/net", pciAddress)
-	entries, err := os.ReadDir(netDir)
-	if err == nil && len(entries) > 0 {
-		return entries[0].Name(), nil
+	if entries, err := os.ReadDir(netDir); err == nil {
+		for _, e := range entries {
+			if !seen[e.Name()] {
+				names = append(names, e.Name())
+				seen[e.Name()] = true
+			}
+		}
 	}
 
 	// Method 2: Scan /sys/class/net/*/device symlinks
-	netDevices, err := os.ReadDir("/sys/class/net")
-	if err != nil {
-		return "", fmt.Errorf("cannot read /sys/class/net: %v", err)
-	}
-
-	for _, dev := range netDevices {
-		deviceLink := filepath.Join("/sys/class/net", dev.Name(), "device")
-		target, linkErr := os.Readlink(deviceLink)
-		if linkErr != nil {
-			continue
-		}
-		// The symlink target contains the PCI address as the last component
-		if strings.HasSuffix(target, pciAddress) || strings.Contains(target, pciAddress) {
-			return dev.Name(), nil
+	if netDevices, err := os.ReadDir("/sys/class/net"); err == nil {
+		for _, dev := range netDevices {
+			deviceLink := filepath.Join("/sys/class/net", dev.Name(), "device")
+			target, linkErr := os.Readlink(deviceLink)
+			if linkErr != nil {
+				continue
+			}
+			if strings.HasSuffix(target, pciAddress) && !seen[dev.Name()] {
+				names = append(names, dev.Name())
+				seen[dev.Name()] = true
+			}
 		}
 	}
 
-	return "", fmt.Errorf("no network device found for PCI address %s", pciAddress)
+	return names
 }
 
 // ReadSysfsFile reads a single-line value from sysfs and trims whitespace
@@ -352,6 +356,91 @@ func GetVPDInfoByPCIPath(pciPath string) (*VPDInfo, error) {
 	}
 
 	return ParseVPD(data), nil
+}
+
+// GetVPDInfoByEthtool uses "ethtool -e" to dump EEPROM/VPD data for a network device.
+// This works in containers where sysfs VPD files may not be exposed, since it goes
+// through the kernel's netdev ioctl interface rather than reading sysfs files directly.
+func GetVPDInfoByEthtool(deviceName string) (*VPDInfo, error) {
+	if !ethtoolInstalled() {
+		return nil, fmt.Errorf("ethtool not installed")
+	}
+
+	out, err := exec.Command("ethtool", "-e", deviceName).Output()
+	if err != nil {
+		return nil, fmt.Errorf("ethtool -e %s failed: %v", deviceName, err)
+	}
+
+	data := parseEthtoolEEPROM(string(out))
+	if len(data) == 0 {
+		return nil, fmt.Errorf("no EEPROM data returned by ethtool -e %s", deviceName)
+	}
+
+	return ParseVPD(data), nil
+}
+
+// parseEthtoolEEPROM parses the hex dump output of "ethtool -e" into raw bytes.
+// Output format:
+//
+//	Offset		Values
+//	------		------
+//	0x0000:		82 1e 00 49 6e 74 65 6c ...
+func parseEthtoolEEPROM(output string) []byte {
+	var result []byte
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Data lines start with "0x"
+		if !strings.HasPrefix(strings.TrimSpace(line), "0x") {
+			continue
+		}
+		// Split on ":" to get the hex values portion
+		colonIdx := strings.Index(line, ":")
+		if colonIdx < 0 || colonIdx+1 >= len(line) {
+			continue
+		}
+		hexPart := strings.TrimSpace(line[colonIdx+1:])
+		for _, hexByte := range strings.Fields(hexPart) {
+			var b byte
+			if _, err := fmt.Sscanf(hexByte, "%x", &b); err == nil {
+				result = append(result, b)
+			}
+		}
+	}
+	return result
+}
+
+// GetVPDInfoForPCIDevice collects VPD data for a PCI device by trying multiple methods.
+// It resolves all network interface names (port names/aliases) for the PCI address
+// and tries ethtool -e on each, falling back to sysfs if needed.
+func GetVPDInfoForPCIDevice(pciAddress, primaryDeviceName string) (*VPDInfo, error) {
+	// Build candidate list: primary device name first, then any aliases from sysfs
+	candidates := []string{primaryDeviceName}
+	for _, name := range GetNetDevicesFromPCI(pciAddress) {
+		if name != primaryDeviceName {
+			candidates = append(candidates, name)
+		}
+	}
+
+	// Try ethtool -e with each candidate (works in containers via netdev ioctl)
+	for _, name := range candidates {
+		vpd, err := GetVPDInfoByEthtool(name)
+		if err == nil {
+			return vpd, nil
+		}
+		glog.V(4).Infof("ethtool -e %s failed: %v", name, err)
+	}
+
+	// Fallback: try sysfs VPD file for each candidate port name
+	for _, name := range candidates {
+		vpd, err := GetVPDInfo(name)
+		if err == nil {
+			return vpd, nil
+		}
+		glog.V(4).Infof("sysfs VPD for %s failed: %v", name, err)
+	}
+
+	return nil, fmt.Errorf("no VPD data found for PCI device %s (tried interfaces: %v)", pciAddress, candidates)
 }
 
 // ParseVPD parses binary VPD data according to PCI Local Bus Specification
