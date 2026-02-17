@@ -10,7 +10,6 @@ plugins:
     devices:
       - enp108s0f0
   e825:
-    enableDefaultConfig: false
     devices:
       - eno5
     settings:
