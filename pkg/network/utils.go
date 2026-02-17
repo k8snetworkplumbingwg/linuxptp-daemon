@@ -358,15 +358,15 @@ func GetVPDInfoByPCIPath(pciPath string) (*VPDInfo, error) {
 	return ParseVPD(data), nil
 }
 
-// GetVPDInfoByEthtool uses "ethtool -e" to dump EEPROM/VPD data for a network device.
-// This works in containers where sysfs VPD files may not be exposed, since it goes
-// through the kernel's netdev ioctl interface rather than reading sysfs files directly.
+// GetVPDInfoByEthtool uses "ethtool -e" to read EEPROM data for a network device.
+// This is the preferred method as some drivers expose EEPROM via ethtool but do not
+// create the sysfs vpd file. It uses the kernel's ETHTOOL_GEEPROM ioctl.
 func GetVPDInfoByEthtool(deviceName string) (*VPDInfo, error) {
 	if !ethtoolInstalled() {
 		return nil, fmt.Errorf("ethtool not installed")
 	}
 
-	out, err := exec.Command("ethtool", "-e", deviceName).Output()
+	out, err := exec.Command("ethtool", "-e", deviceName, "offset", "0", "length", "512").Output()
 	if err != nil {
 		return nil, fmt.Errorf("ethtool -e %s failed: %v", deviceName, err)
 	}
@@ -410,19 +410,26 @@ func parseEthtoolEEPROM(output string) []byte {
 	return result
 }
 
-// GetVPDInfoForPCIDevice collects VPD data for a PCI device by trying multiple methods.
-// It resolves all network interface names (port names/aliases) for the PCI address
-// and tries ethtool -e on each, falling back to sysfs if needed.
-func GetVPDInfoForPCIDevice(pciAddress, primaryDeviceName string) (*VPDInfo, error) {
-	// Build candidate list: primary device name first, then any aliases from sysfs
+// ResolveNetDeviceNames returns all network interface names for a PCI address,
+// with primaryDeviceName listed first. Additional port names/aliases are discovered
+// from sysfs and appended in the order found.
+func ResolveNetDeviceNames(pciAddress, primaryDeviceName string) []string {
 	candidates := []string{primaryDeviceName}
 	for _, name := range GetNetDevicesFromPCI(pciAddress) {
 		if name != primaryDeviceName {
 			candidates = append(candidates, name)
 		}
 	}
+	return candidates
+}
 
-	// Try ethtool -e with each candidate (works in containers via netdev ioctl)
+// GetVPDInfoForPCIDevice collects VPD data for a PCI device by trying multiple methods.
+// It resolves all network interface names (port names/aliases) for the PCI address
+// and tries ethtool -e on each, falling back to sysfs if needed.
+func GetVPDInfoForPCIDevice(pciAddress, primaryDeviceName string) (*VPDInfo, error) {
+	candidates := ResolveNetDeviceNames(pciAddress, primaryDeviceName)
+
+	// Try ethtool -e with each candidate
 	for _, name := range candidates {
 		vpd, err := GetVPDInfoByEthtool(name)
 		if err == nil {
