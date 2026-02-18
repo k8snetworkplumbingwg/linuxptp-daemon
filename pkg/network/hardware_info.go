@@ -97,11 +97,11 @@ func GetHardwareInfo(deviceName string) (*ptpv1.HardwareInfo, error) {
 	hwInfo.PCIAddress = *targetNIC.PCIAddress
 	pciPath := fmt.Sprintf("/sys/bus/pci/devices/%s", *targetNIC.PCIAddress)
 
-	// Get driver and firmware information via ethtool (more reliable than sysfs)
+	// Get driver name, driver version, and firmware version via "ethtool -i"
 	ethtoolData, err := GetEthtoolInfo(deviceName)
 	if err != nil {
 		glog.V(2).Infof("Could not get ethtool info for %s: %v", deviceName, err)
-		// Fallback to basic driver info from sysfs
+		// Falling back to reading the driver symlink on sysfs at <pciPath>/driver
 		driverLink, readErr := os.Readlink(filepath.Join(pciPath, "driver"))
 		if readErr == nil {
 			hwInfo.DriverVersion = filepath.Base(driverLink)
@@ -130,7 +130,7 @@ func GetHardwareInfo(deviceName string) (*ptpv1.HardwareInfo, error) {
 		hwInfo.FEC = linkInfo.FEC
 	}
 
-	// Get VPD data - tries ethtool -e with all port names/aliases, then falls back to sysfs
+	// Get VPD data from the sysfs vpd file exposed by the kernel driver at /sys/class/net/<dev>/device/vpd
 	vpdData, err := GetVPDInfoForPCIDevice(hwInfo.PCIAddress, deviceName)
 	if err != nil {
 		glog.V(4).Infof("No VPD data found for device %s: %v", deviceName, err)

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -336,78 +337,26 @@ func ReadSysfsFile(path string) string {
 }
 
 // GetVPDInfo reads and parses VPD (Vital Product Data) for a network device
-// VPD contains manufacturing info like part number, serial number, etc.
+// by streaming the sysfs vpd file exposed by the kernel driver.
 func GetVPDInfo(deviceName string) (*VPDInfo, error) {
 	vpdPath := fmt.Sprintf("/sys/class/net/%s/device/vpd", deviceName)
-	data, err := os.ReadFile(vpdPath)
+	f, err := os.Open(vpdPath)
 	if err != nil {
-		return nil, fmt.Errorf("could not read VPD for %s: %v", deviceName, err)
+		return nil, fmt.Errorf("could not open VPD for %s: %v", deviceName, err)
 	}
-
-	return ParseVPD(data), nil
+	defer f.Close()
+	return ParseVPD(f)
 }
 
-// GetVPDInfoByPCIPath reads and parses VPD from a PCI device path
+// GetVPDInfoByPCIPath reads and parses VPD from a PCI device sysfs path
 func GetVPDInfoByPCIPath(pciPath string) (*VPDInfo, error) {
 	vpdPath := filepath.Join(pciPath, "vpd")
-	data, err := os.ReadFile(vpdPath)
+	f, err := os.Open(vpdPath)
 	if err != nil {
-		return nil, fmt.Errorf("could not read VPD: %v", err)
+		return nil, fmt.Errorf("could not open VPD: %v", err)
 	}
-
-	return ParseVPD(data), nil
-}
-
-// GetVPDInfoByEthtool uses "ethtool -e" to read EEPROM data for a network device.
-// This is the preferred method as some drivers expose EEPROM via ethtool but do not
-// create the sysfs vpd file. It uses the kernel's ETHTOOL_GEEPROM ioctl.
-func GetVPDInfoByEthtool(deviceName string) (*VPDInfo, error) {
-	if !ethtoolInstalled() {
-		return nil, fmt.Errorf("ethtool not installed")
-	}
-
-	out, err := exec.Command("ethtool", "-e", deviceName, "offset", "0", "length", "512").Output()
-	if err != nil {
-		return nil, fmt.Errorf("ethtool -e %s failed: %v", deviceName, err)
-	}
-
-	data := parseEthtoolEEPROM(string(out))
-	if len(data) == 0 {
-		return nil, fmt.Errorf("no EEPROM data returned by ethtool -e %s", deviceName)
-	}
-
-	return ParseVPD(data), nil
-}
-
-// parseEthtoolEEPROM parses the hex dump output of "ethtool -e" into raw bytes.
-// Output format:
-//
-//	Offset		Values
-//	------		------
-//	0x0000:		82 1e 00 49 6e 74 65 6c ...
-func parseEthtoolEEPROM(output string) []byte {
-	var result []byte
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	for scanner.Scan() {
-		line := scanner.Text()
-		// Data lines start with "0x"
-		if !strings.HasPrefix(strings.TrimSpace(line), "0x") {
-			continue
-		}
-		// Split on ":" to get the hex values portion
-		colonIdx := strings.Index(line, ":")
-		if colonIdx < 0 || colonIdx+1 >= len(line) {
-			continue
-		}
-		hexPart := strings.TrimSpace(line[colonIdx+1:])
-		for _, hexByte := range strings.Fields(hexPart) {
-			var b byte
-			if _, err := fmt.Sscanf(hexByte, "%x", &b); err == nil {
-				result = append(result, b)
-			}
-		}
-	}
-	return result
+	defer f.Close()
+	return ParseVPD(f)
 }
 
 // ResolveNetDeviceNames returns all network interface names for a PCI address,
@@ -423,22 +372,12 @@ func ResolveNetDeviceNames(pciAddress, primaryDeviceName string) []string {
 	return candidates
 }
 
-// GetVPDInfoForPCIDevice collects VPD data for a PCI device by trying multiple methods.
-// It resolves all network interface names (port names/aliases) for the PCI address
-// and tries ethtool -e on each, falling back to sysfs if needed.
+// GetVPDInfoForPCIDevice reads VPD from the sysfs vpd file at /sys/class/net/<dev>/device/vpd.
+// The kernel driver exposes VPD as a dedicated sysfs file, so there is no need to parse
+// raw EEPROM data. It resolves all network interface names (port names/aliases) for the
+// PCI address and tries each until a readable vpd file is found.
 func GetVPDInfoForPCIDevice(pciAddress, primaryDeviceName string) (*VPDInfo, error) {
 	candidates := ResolveNetDeviceNames(pciAddress, primaryDeviceName)
-
-	// Try ethtool -e with each candidate
-	for _, name := range candidates {
-		vpd, err := GetVPDInfoByEthtool(name)
-		if err == nil {
-			return vpd, nil
-		}
-		glog.V(4).Infof("ethtool -e %s failed: %v", name, err)
-	}
-
-	// Fallback: try sysfs VPD file for each candidate port name
 	for _, name := range candidates {
 		vpd, err := GetVPDInfo(name)
 		if err == nil {
@@ -446,40 +385,40 @@ func GetVPDInfoForPCIDevice(pciAddress, primaryDeviceName string) (*VPDInfo, err
 		}
 		glog.V(4).Infof("sysfs VPD for %s failed: %v", name, err)
 	}
-
 	return nil, fmt.Errorf("no VPD data found for PCI device %s (tried interfaces: %v)", pciAddress, candidates)
 }
 
-// ParseVPD parses binary VPD data according to PCI Local Bus Specification
-func ParseVPD(vpdFile []byte) *VPDInfo {
+// ParseVPD streams and parses binary VPD data from an io.Reader according to
+// the PCI Local Bus Specification. It reads tag-by-tag, only consuming as many
+// bytes as the VPD structure contains, and stops at the end tag (0x78).
+func ParseVPD(r io.Reader) (*VPDInfo, error) {
 	vpd := &VPDInfo{}
-	lenFile := len(vpdFile)
-	if lenFile < pciVPDBlockDescriptorLen {
-		return vpd
-	}
+	header := make([]byte, pciVPDBlockDescriptorLen)
 
-	offset := 0
-parseLoop:
-	for offset < lenFile-pciVPDBlockDescriptorLen {
-		tag := vpdFile[offset]
-		blockDesc := vpdFile[offset : offset+pciVPDBlockDescriptorLen]
-		l := blockDesc[1:pciVPDBlockDescriptorLen]
-		lenBlock := int(binary.LittleEndian.Uint16(l))
+	for {
+		if _, err := io.ReadFull(r, header); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			return vpd, fmt.Errorf("reading VPD header: %w", err)
+		}
 
-		// Bounds check
-		if offset+pciVPDBlockDescriptorLen+lenBlock > lenFile {
+		tag := header[0]
+		if tag == pciVPDEndTag {
 			break
 		}
 
-		block := vpdFile[offset+pciVPDBlockDescriptorLen : offset+pciVPDBlockDescriptorLen+lenBlock]
-		offset += lenBlock + pciVPDBlockDescriptorLen
+		lenBlock := int(binary.LittleEndian.Uint16(header[1:pciVPDBlockDescriptorLen]))
+		block := make([]byte, lenBlock)
+		if _, err := io.ReadFull(r, block); err != nil {
+			return vpd, fmt.Errorf("reading VPD block (tag 0x%02x, len %d): %w", tag, lenBlock, err)
+		}
 
 		switch tag {
 		case pciVPDIDStringTag:
 			vpd.IdentifierString = cleanVPDString(string(block))
 		case pciVPDROTag:
-			ro := parseVPDBlock(block)
-			for k, v := range ro {
+			for k, v := range parseVPDBlock(block) {
 				switch k {
 				case "SN":
 					vpd.SerialNumber = v
@@ -495,12 +434,10 @@ parseLoop:
 					vpd.VendorSpecific2 = v
 				}
 			}
-		case pciVPDEndTag:
-			break parseLoop
 		}
 	}
 
-	return vpd
+	return vpd, nil
 }
 
 // parseVPDBlock parses a VPD read-only or read-write block
