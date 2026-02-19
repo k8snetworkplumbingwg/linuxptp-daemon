@@ -1,0 +1,70 @@
+# PtpConfig CR for testing hardware plugin validation
+# This config contains an invalid plugin name "e81" (typo of "e810")
+# When applied, the linuxptp-daemon should:
+# 1. Log a warning about the unrecognized plugin
+# 2. Update the PtpConfig status with a HardwarePluginConfigurationWarning condition
+#
+# Usage:
+#   kubectl apply -f ptpconfig-invalid-plugin-test.yaml
+#
+# Verify the warning:
+#   kubectl get ptpconfig test-invalid-plugin -n openshift-ptp -o jsonpath='{.status.conditions}' | jq
+#
+# Expected output:
+#   [{
+#     "type": "HardwarePluginConfigurationWarning",
+#     "status": "True",
+#     "reason": "InvalidPluginName",
+#     "message": "Profile 'test-invalid-plugin' contains unrecognized hardware plugin(s): [e81]. Valid plugins are: [e810 e825 e830 reference ntpfailover]"
+#   }]
+#
+# Clean up:
+#   kubectl delete -f ptpconfig-invalid-plugin-test.yaml
+
+apiVersion: ptp.openshift.io/v1
+kind: PtpConfig
+metadata:
+  name: test-invalid-plugin
+  namespace: openshift-ptp
+spec:
+  profile:
+    - name: test-invalid-plugin
+      interface: ens1f0
+      phc2sysOpts: -a -r -n 24
+      ptp4lOpts: -2 --summary_interval -4
+      ptp4lConf: |
+        [global]
+        twoStepFlag 1
+        domainNumber 24
+        clockAccuracy 0xFE
+        offsetScaledLogVariance 0xFFFF
+        dataset_comparison G.8275.x
+        G.8275.defaultDS.localPriority 128
+        logAnnounceInterval -3
+        logSyncInterval -4
+        logMinDelayReqInterval -4
+        announceReceiptTimeout 6
+        network_transport L2
+        delay_mechanism E2E
+        time_stamping hardware
+        tsproc_mode filter
+        delay_filter moving_median
+        delay_filter_length 10
+        [ens1f0]
+        masterOnly 0
+      plugins:
+        # Invalid plugin name - "e81" is a typo of "e810"
+        # This should trigger a HardwarePluginConfigurationWarning in the status
+        e81:
+          enableDefaultConfig: false
+      ptpClockThreshold:
+        holdOverTimeout: 5
+        maxOffsetThreshold: 100
+        minOffsetThreshold: -100
+  recommend:
+    - match:
+        # Matches all nodes - adjust as needed for your test environment
+        - nodeLabel: node-role.kubernetes.io/worker
+      priority: 10
+      profile: test-invalid-plugin
+
