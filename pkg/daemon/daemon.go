@@ -841,17 +841,17 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 	// Report plugin errors to PtpConfig CRD status
 	if dn.ptpClient != nil {
-		configName, found := FindPtpConfigByProfileName(*nodeProfile.Name)
+		configName, originalProfileName, found := FindPtpConfigByProfileName(*nodeProfile.Name)
 		if found {
 			if len(pluginErrors) > 0 {
-				glog.Warningf("Hardware plugin errors for profile %s: %v", *nodeProfile.Name, pluginErrors)
+				glog.Warningf("Hardware plugin errors for profile %s: %v", originalProfileName, pluginErrors)
 
 				var msgs []string
 				for _, e := range pluginErrors {
 					msgs = append(msgs, e.Error())
 				}
 				message := fmt.Sprintf("Hardware plugin configuration errors on node %s for profile %s: %s",
-					dn.nodeName, *nodeProfile.Name, strings.Join(msgs, "; "))
+					dn.nodeName, originalProfileName, strings.Join(msgs, "; "))
 
 				UpdatePtpConfigCondition(dn.ptpClient, configName,
 					ConditionTypeHardwarePluginReady,
@@ -864,11 +864,11 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 					ConditionTypeHardwarePluginReady,
 					metav1.ConditionTrue,
 					"HardwarePluginConfigured",
-					fmt.Sprintf("Hardware plugin configured successfully for profile %s on node %s", *nodeProfile.Name, dn.nodeName),
+					fmt.Sprintf("Hardware plugin configured successfully for profile %s on node %s", originalProfileName, dn.nodeName),
 				)
 			}
 		} else if len(pluginErrors) > 0 {
-			glog.Warningf("Could not find PtpConfig for profile %s to report plugin errors: %v", *nodeProfile.Name, pluginErrors)
+			glog.Warningf("Could not find PtpConfig for profile %s to report plugin errors: %v", originalProfileName, pluginErrors)
 		}
 	} else if len(pluginErrors) > 0 {
 		glog.Warningf("ptpClient is nil, cannot update PtpConfig status for plugin errors: %v", pluginErrors)

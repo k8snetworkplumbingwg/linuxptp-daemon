@@ -17,13 +17,13 @@ const (
 	ProfileNameSeparator = "_"
 )
 
-// FindPtpConfigByProfileName extracts the PtpConfig CR name from a qualified profile name.
-func FindPtpConfigByProfileName(profileName string) (string, bool) {
+// FindPtpConfigByProfileName extracts the PtpConfig CR name and the original profile name.
+func FindPtpConfigByProfileName(profileName string) (string, string, bool) {
 	parts := strings.SplitN(profileName, ProfileNameSeparator, 2)
 	if len(parts) < 2 {
-		return "", false
+		return "", profileName, false
 	}
-	return parts[0], true
+	return parts[0], parts[1], true
 }
 
 // UpdatePtpConfigCondition updates a condition on the given PtpConfig's status.
