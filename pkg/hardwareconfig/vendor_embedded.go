@@ -13,6 +13,9 @@ var intelE810DefaultsYAML []byte
 //go:embed hardware-vendor/intel/e825/defaults.yaml
 var intelE825DefaultsYAML []byte
 
+//go:embed hardware-vendor/intel/e830/defaults.yaml
+var intelE830DefaultsYAML []byte
+
 //go:embed hardware-vendor/intel/e825/behavior-profiles.yaml
 var intelE825BehaviorProfilesYAML []byte
 
@@ -30,6 +33,7 @@ var dellXR8720tDelaysYAML []byte
 var embeddedDefaults = map[string][]byte{
 	"intel/e810": intelE810DefaultsYAML,
 	"intel/e825": intelE825DefaultsYAML,
+	"intel/e830": intelE830DefaultsYAML,
 }
 
 // embeddedBehaviorProfiles maps hwDefPath -> raw YAML contents for behavior profiles.

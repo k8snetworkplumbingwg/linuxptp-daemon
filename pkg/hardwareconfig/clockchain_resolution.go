@@ -211,6 +211,13 @@ func (hcm *HardwareConfigManager) ResolveClockChain(hwConfig *ptpv2alpha1.Hardwa
 	for i := range resolvedConfig.Spec.Profile.ClockChain.Structure {
 		subsystem := &resolvedConfig.Spec.Profile.ClockChain.Structure[i]
 
+		// Unmanaged DPLLs (e.g., E830) intentionally have no PhaseInputs/Ethernet
+		// and no behavior templates -- skip structure derivation and pin injection.
+		if hcm.isUnmanagedDPLL(subsystem) {
+			glog.Infof("Subsystem %s is an unmanaged DPLL (has dpllFlags), skipping structure derivation", subsystem.Name)
+			continue
+		}
+
 		// Derive structure from ptpconfig if not explicitly provided
 		if subsystem.DPLL.NetworkInterface == "" || len(subsystem.DPLL.PhaseInputs) == 0 || len(subsystem.Ethernet) == 0 {
 			if err := hcm.deriveSubsystemStructure(subsystem, ptpProfile, clockType); err != nil {
@@ -323,6 +330,29 @@ func (hcm *HardwareConfigManager) deriveSubsystemStructure(subsystem *ptpv2alpha
 	}
 
 	return nil
+}
+
+// isUnmanagedDPLL checks whether a subsystem represents an unmanaged DPLL by looking for
+// DPLLFlags in the hardware vendor defaults. Unmanaged DPLLs (e.g., E830) only report
+// device status and intentionally have no PhaseInputs, Ethernet, or behavior templates.
+func (hcm *HardwareConfigManager) isUnmanagedDPLL(subsystem *ptpv2alpha1.Subsystem) bool {
+	hwDefPath := strings.TrimSpace(subsystem.HardwareSpecificDefinitions)
+	if hwDefPath == "" {
+		return false
+	}
+
+	hwDefaults, err := hcm.getHardwareDefaults(hwDefPath)
+	if err != nil || hwDefaults == nil {
+		return false
+	}
+
+	flags, err := hwDefaults.ParseDPLLFlags()
+	if err != nil {
+		glog.Warningf("Subsystem %s: failed to parse DPLL flags from %s: %v", subsystem.Name, hwDefPath, err)
+		return false
+	}
+
+	return flags != 0
 }
 
 // injectDelayCompensationPins injects pins from delay compensation model into PhaseOutputs/PhaseInputs
