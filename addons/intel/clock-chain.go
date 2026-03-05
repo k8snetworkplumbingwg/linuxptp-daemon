@@ -229,7 +229,8 @@ func writeSysFs(path string, val string) error {
 	return nil
 }
 
-func (c *ClockChain) SetPinsControl(pins []PinControl) (*[]dpll.PinParentDeviceCtl, error) {
+// SetPinsControl builds DPLL netlink commands for the given pins on the leading NIC.
+func (c *ClockChain) SetPinsControl(pins []PinControl) ([]dpll.PinParentDeviceCtl, error) {
 	pinCommands := []dpll.PinParentDeviceCtl{}
 	for _, pinCtl := range pins {
 		dpllPin := c.DpllPins.GetByLabel(pinCtl.Label, c.LeadingNIC.DpllClockID)
@@ -239,12 +240,12 @@ func (c *ClockChain) SetPinsControl(pins []PinControl) (*[]dpll.PinParentDeviceC
 		}
 		pinCommands = append(pinCommands, SetPinControlData(*dpllPin, pinCtl.ParentControl)...)
 	}
-	return &pinCommands, nil
+	return pinCommands, nil
 }
 
 // SetPinsControlForAllNICs sets pins across all NICs (leading + other NICs)
 // This is used specifically for initialization functions like SetPinDefaults
-func (c *ClockChain) SetPinsControlForAllNICs(pins []PinControl) (*[]dpll.PinParentDeviceCtl, error) {
+func (c *ClockChain) SetPinsControlForAllNICs(pins []PinControl) ([]dpll.PinParentDeviceCtl, error) {
 	pinCommands := []dpll.PinParentDeviceCtl{}
 	errs := make([]error, 0)
 
@@ -259,7 +260,7 @@ func (c *ClockChain) SetPinsControlForAllNICs(pins []PinControl) (*[]dpll.PinPar
 		}
 	}
 
-	return &pinCommands, errors.Join(errs...)
+	return pinCommands, errors.Join(errs...)
 }
 
 // buildDirectionCmd checks if any parent device direction is changing.
@@ -429,7 +430,7 @@ func (c *ClockChain) InitPinsTBC() error {
 	if err != nil {
 		glog.Error("failed to set pins control: ", err)
 	}
-	*commands = append(*commands, *commandsGnss...)
+	commands = append(commands, commandsGnss...)
 
 	err = BatchPinSet(commands)
 	// event if there was an error we still need to refresh the pin state.
@@ -591,14 +592,14 @@ func (c *ClockChain) SetPinDefaults() error {
 // BatchPinSet function pointer allows mocking of BatchPinSet
 var BatchPinSet = batchPinSet
 
-func batchPinSet(commands *[]dpll.PinParentDeviceCtl) error {
+func batchPinSet(commands []dpll.PinParentDeviceCtl) error {
 	conn, err := dpll.Dial(nil)
 	if err != nil {
 		return fmt.Errorf("failed to dial DPLL: %v", err)
 	}
 	//nolint:errcheck
 	defer conn.Close()
-	for _, command := range *commands {
+	for _, command := range commands {
 		glog.Infof("DPLL pin command %#v", command)
 		b, err := dpll.EncodePinControl(command)
 		if err != nil {
