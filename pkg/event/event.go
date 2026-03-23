@@ -78,7 +78,7 @@ type ClockClassRequest struct {
 var (
 	//  make sure only one clock class update is tried if it fails next  try will pass
 	// this will also stop flooding
-	clockClassRequestCh = make(chan ClockClassRequest, 1)
+	clockClassRequestCh = make(chan ClockClassRequest, 2)
 
 	PMCGMGetter = func(cfgName string) (protocol.GrandmasterSettings, error) {
 		cfgName = strings.Replace(cfgName, TS2PHCProcessName, PTP4lProcessName, 1)
@@ -185,8 +185,10 @@ type EventHandler struct {
 	clockClassMetric   *prometheus.GaugeVec
 	clockClass         fbprotocol.ClockClass
 	clockAccuracy      fbprotocol.ClockAccuracy
-	clkSyncState       map[string]*clockSyncState
-	downstreamCancel   map[string]context.CancelFunc // cancels in-flight downstream update goroutines per config
+	clkSyncState          map[string]*clockSyncState
+	convergedPtp4lConfigs map[string]map[string]bool          // converged config → set of original ptp4l config names
+	lastEmittedClockClass map[string]fbprotocol.ClockClass     // per-config last emitted clock class, for re-emission after sidecar restart
+	downstreamCancel      map[string]context.CancelFunc        // cancels in-flight downstream update goroutines per config
 	outOfSpec          bool                          // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
 	frequencyTraceable bool                          // will be tru if synce is traceable
 	ReduceLog          bool                          // reduce logs for every announce
@@ -254,8 +256,10 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		offsetMetric:       offsetMetric,
 		clockClassMetric:   clockClassMetric,
 		clockClass:         protocol.ClockClassUninitialized,
-		clkSyncState:       map[string]*clockSyncState{},
-		downstreamCancel:   map[string]context.CancelFunc{},
+		clkSyncState:          map[string]*clockSyncState{},
+		convergedPtp4lConfigs: map[string]map[string]bool{},
+		lastEmittedClockClass: map[string]fbprotocol.ClockClass{},
+		downstreamCancel:      map[string]context.CancelFunc{},
 		outOfSpec:          false,
 		frequencyTraceable: false,
 		ReduceLog:          true,
@@ -638,16 +642,32 @@ func (e *EventHandler) setClockClassLocked(clockClass fbprotocol.ClockClass, clo
 	e.clockAccuracy = clockAcc
 }
 
+// updateClockClassMetric sets the Prometheus clock class gauge for the given config.
+func (e *EventHandler) updateClockClassMetric(cfgName string, clockClass fbprotocol.ClockClass) {
+	if !e.stdoutToSocket && e.clockClassMetric != nil {
+		e.clockClassMetric.With(prometheus.Labels{
+			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
+	}
+}
+
 // emitClockClass writes the clock class to the socket and updates the metric.
+// Also emits for any original ptp4l config names that were converged into cfgName.
 // Must NOT be called while holding e.Lock().
 func (e *EventHandler) emitClockClass(clockClass fbprotocol.ClockClass, cfgName string) {
 	if e.stdoutToSocket {
 		logMsg := utils.GetClockClassLogMessage(PTP4lProcessName, cfgName, clockClass)
 		e.writeLogToSocket(logMsg)
 	}
-	if !e.stdoutToSocket && e.clockClassMetric != nil {
-		e.clockClassMetric.With(prometheus.Labels{
-			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
+	e.updateClockClassMetric(cfgName, clockClass)
+	e.Lock()
+	e.lastEmittedClockClass[cfgName] = clockClass
+	originals := e.convergedPtp4lConfigs[cfgName]
+	e.Unlock()
+	for name := range originals {
+		e.updateClockClassMetric(name, clockClass)
+		e.Lock()
+		e.lastEmittedClockClass[name] = clockClass
+		e.Unlock()
 	}
 }
 
@@ -777,38 +797,58 @@ func (e *EventHandler) ProcessEvents() {
 					// TODO: UpdateClockClass produces the wrong value for BC, investigate and fix.
 					if clk.clockType != BC {
 						e.UpdateClockClass(clk)
-					} else {
-						e.Lock()
-						e.clockClass = clk.clockClass
-						e.clockAccuracy = clk.clockAccuracy
-						e.Unlock()
+				} else {
+					e.Lock()
+					e.clockClass = clk.clockClass
+					e.clockAccuracy = clk.clockAccuracy
+					if s, ok := e.clkSyncState[clk.cfgName]; ok {
+						s.clockClass = clk.clockClass
+						s.clockAccuracy = clk.clockAccuracy
 					}
+					e.Unlock()
+				}
 
 				case <-e.closeCh:
 					return
 				case <-classTicker.C: // send clock class event 60 secs interval
-					// Snapshot the clock sync state under lock to avoid concurrent map access
+					// Snapshot the clock sync state and converged config mapping under lock
 					e.Lock()
 					clkSnapshot := make(map[string]fbprotocol.ClockClass, len(e.clkSyncState))
 					for k, v := range e.clkSyncState {
 						clkSnapshot[k] = v.clockClass
 					}
+					convergedSnapshot := make(map[string]map[string]bool, len(e.convergedPtp4lConfigs))
+					for k, v := range e.convergedPtp4lConfigs {
+						cp := make(map[string]bool, len(v))
+						for name := range v {
+							cp[name] = true
+						}
+						convergedSnapshot[k] = cp
+					}
 					e.Unlock()
 					for clkCfgName, clockClass := range clkSnapshot {
-						parts := strings.SplitN(clkCfgName, ".", 2)
-						if len(parts) >= 2 {
-							clkCfgName = "ptp4l." + strings.Join(parts[1:], ".")
-						}
 						if clockClass == 0 {
 							continue
 						}
-						if clkCfgName == cfgName {
-							// Stop double emmit
-							cfgName = ""
+						emitNames := make(map[string]bool)
+						parts := strings.SplitN(clkCfgName, ".", 2)
+						if len(parts) >= 2 {
+							emitNames["ptp4l."+strings.Join(parts[1:], ".")] = true
 						}
-						logMsg := utils.GetClockClassLogMessage(PTP4lProcessName, clkCfgName, clockClass)
-						if !e.writeLogToSocket(logMsg) {
-							break
+						if originals, ok := convergedSnapshot[clkCfgName]; ok {
+							for name := range originals {
+								emitNames[name] = true
+							}
+						}
+						for emitName := range emitNames {
+							if emitName == cfgName {
+								cfgName = ""
+							}
+							e.updateClockClassMetric(emitName, clockClass)
+							logMsg := utils.GetClockClassLogMessage(PTP4lProcessName, emitName, clockClass)
+							if !e.writeLogToSocket(logMsg) {
+								break
+							}
 						}
 					}
 
@@ -820,6 +860,7 @@ func (e *EventHandler) ProcessEvents() {
 						e.Lock()
 						currentClockClass := e.clockClass
 						e.Unlock()
+						e.updateClockClassMetric(cfgName, currentClockClass)
 						logMsg := utils.GetClockClassLogMessage(PTP4lProcessName, cfgName, currentClockClass)
 						e.writeLogToSocket(logMsg)
 					}
@@ -1253,6 +1294,13 @@ func (e *EventHandler) addEvent(event EventChannel) *DataDetails {
 
 // UpdateClockClass ... update clock class
 func (e *EventHandler) UpdateClockClass(clk ClockClassRequest) {
+	// For non-GM clock types (BC/OC), updateClockClass reads local GRANDMASTER_SETTINGS_NP
+	// which returns a local value (e.g., 255 for slave-only). AnnounceClockClass already
+	// emitted the correct upstream value, so skip to avoid overwriting it.
+	if clk.clockType != GM {
+		glog.Infof("UpdateClockClass: skipping for non-GM clockType=%v cfg=%s", clk.clockType, clk.cfgName)
+		return
+	}
 	classErr, clockClass, clockAccuracy := e.updateClockClass(clk.cfgName, clk.clockClass, clk.clockType, clk.clockAccuracy,
 		PMCGMGetter, PMCGMSetter)
 	glog.Infof("received %s,%v,%s,%v", clk.cfgName, clk.clockClass, clk.clockType, clk.clockAccuracy)
@@ -1293,7 +1341,8 @@ func (e *EventHandler) SetPortRole(cfgName, portNane string, event *parser.PTPEv
 	e.portRole[cfgName][portNane] = event
 }
 
-// EmitClockSyncLogs emits the clock sync state logs
+// EmitClockSyncLogs emits the clock sync state logs and re-emits
+// CLOCK_CLASS_CHANGE for all configs that had a clock class announced.
 func (e *EventHandler) EmitClockSyncLogs() {
 	glog.Info("Re-emitting metrics logs for event-proxy as requested")
 
@@ -1304,7 +1353,6 @@ func (e *EventHandler) EmitClockSyncLogs() {
 			return
 		}
 	}
-	// Snapshot clkSyncState logs under lock to avoid concurrent map access
 	e.Lock()
 	logs := make([]string, 0, len(e.clkSyncState))
 	for _, syncState := range e.clkSyncState {
@@ -1312,13 +1360,26 @@ func (e *EventHandler) EmitClockSyncLogs() {
 			logs = append(logs, syncState.clkLog)
 		}
 	}
+	clockClassSnapshot := make(map[string]fbprotocol.ClockClass, len(e.lastEmittedClockClass))
+	for cfg, cc := range e.lastEmittedClockClass {
+		clockClassSnapshot[cfg] = cc
+	}
 	e.Unlock()
 
 	for _, l := range logs {
 		glog.Info(l)
 		if !e.writeLogToSocket(l) {
 			glog.Warning("Broken pipe detected while emitting clock sync logs, stopping.")
-			break
+			return
+		}
+	}
+
+	for cfgName, clockClass := range clockClassSnapshot {
+		logMsg := utils.GetClockClassLogMessage(PTP4lProcessName, cfgName, clockClass)
+		glog.Infof("Re-emitting clock class for %s: %d", cfgName, clockClass)
+		if !e.writeLogToSocket(logMsg) {
+			glog.Warning("Broken pipe detected while re-emitting clock class, stopping.")
+			return
 		}
 	}
 }

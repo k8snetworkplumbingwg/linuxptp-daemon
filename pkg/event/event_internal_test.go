@@ -29,7 +29,8 @@ func TestConvergeConfig(t *testing.T) {
 		}
 		mockEventHandler := &MockEventHandler{
 			e: EventHandler{
-				data: mockData.Data,
+				data:                  mockData.Data,
+				convergedPtp4lConfigs: map[string]map[string]bool{},
 			},
 
 			Event: EventChannel{
@@ -51,7 +52,8 @@ func TestConvergeConfig(t *testing.T) {
 		}
 		mockEventHandler := &MockEventHandler{
 			e: EventHandler{
-				data: mockData.Data,
+				data:                  mockData.Data,
+				convergedPtp4lConfigs: map[string]map[string]bool{},
 			},
 			Event: EventChannel{
 				ProcessName: PTP4lProcessName,
@@ -73,7 +75,8 @@ func TestConvergeConfig(t *testing.T) {
 		}
 		mockEventHandler := &MockEventHandler{
 			e: EventHandler{
-				data: mockData.Data,
+				data:                  mockData.Data,
+				convergedPtp4lConfigs: map[string]map[string]bool{},
 			},
 			Event: EventChannel{
 				ProcessName: "otherProcess",

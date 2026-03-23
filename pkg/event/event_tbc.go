@@ -139,6 +139,10 @@ func (e *EventHandler) updateBCState(event EventChannel) (clockSyncState, bool) 
 	case PTP_NOTSET, PTP_FREERUN:
 		if !e.isSourceLostBC(cfgName) && e.inSyncCondition(cfgName) {
 			e.clkSyncState[cfgName].state = PTP_LOCKED
+			if gmClass := e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass; gmClass != 0 && !isTTSC {
+				e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClass(gmClass)
+				e.clkSyncState[cfgName].clockAccuracy = fbprotocol.ClockAccuracy(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockAccuracy)
+			}
 			glog.Info("BC FSM: FREERUN to LOCKED")
 			e.LeadingClockData.lastInSpec = true
 			updateDownstreamData = true
@@ -174,6 +178,10 @@ func (e *EventHandler) updateBCState(event EventChannel) (clockSyncState, bool) 
 	case PTP_HOLDOVER:
 		if e.inSyncCondition(cfgName) && !e.isSourceLostBC(cfgName) {
 			e.clkSyncState[cfgName].state = PTP_LOCKED
+			if gmClass := e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass; gmClass != 0 && !isTTSC {
+				e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClass(gmClass)
+				e.clkSyncState[cfgName].clockAccuracy = fbprotocol.ClockAccuracy(e.LeadingClockData.upstreamParentDataSet.GrandmasterClockAccuracy)
+			}
 			glog.Info("BC FSM: HOLDOVER to LOCKED")
 			updateDownstreamData = true
 		} else if e.freeRunCondition(cfgName) {
@@ -637,6 +645,7 @@ func (e *EventHandler) getLeadingInterfaceBC() string {
 
 func (e *EventHandler) convergeConfig(event EventChannel) EventChannel {
 	if event.ProcessName == PTP4lProcessName {
+		originalCfgName := event.CfgName
 		iface := event.IFace
 		for cfg, dd := range e.data {
 			for _, item := range dd {
@@ -651,6 +660,12 @@ func (e *EventHandler) convergeConfig(event EventChannel) EventChannel {
 					}
 				}
 			}
+		}
+		if event.CfgName != originalCfgName {
+			if e.convergedPtp4lConfigs[event.CfgName] == nil {
+				e.convergedPtp4lConfigs[event.CfgName] = make(map[string]bool)
+			}
+			e.convergedPtp4lConfigs[event.CfgName][originalCfgName] = true
 		}
 	}
 	e.updateLeadingClockData(event)

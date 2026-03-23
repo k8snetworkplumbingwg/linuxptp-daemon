@@ -19,10 +19,11 @@ import (
 // newTestEventHandler creates a minimal EventHandler for testing socket logic.
 func newTestEventHandler(socketPath string) *EventHandler {
 	return &EventHandler{
-		stdoutSocket:   socketPath,
-		stdoutToSocket: true,
-		closeCh:        make(chan bool, 1),
-		clkSyncState:   map[string]*clockSyncState{},
+		stdoutSocket:          socketPath,
+		stdoutToSocket:        true,
+		closeCh:               make(chan bool, 1),
+		clkSyncState:          map[string]*clockSyncState{},
+		lastEmittedClockClass: map[string]fbprotocol.ClockClass{},
 	}
 }
 

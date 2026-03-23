@@ -593,6 +593,8 @@ func deleteMetrics(ifaces config.IFaces, haProfiles map[string][]string, process
 		return
 	}
 	deleteProcessStatusMetrics(config, process)
+	ClockClassMetrics.Delete(prometheus.Labels{
+		"process": ptp4lProcessName, "node": NodeName, "config": config})
 	for _, iface := range ifaces {
 		InterfaceRole.Delete(prometheus.Labels{
 			"process": ptp4lProcessName, "node": NodeName, "iface": iface.Name})
