@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
@@ -30,7 +31,8 @@ type E810PluginData struct {
 }
 
 var (
-	clockChain ClockChainInterface = &ClockChain{DpllPins: DpllPins}
+	clockChains     = map[string]ClockChainInterface{}
+	clockChainMutex = sync.Mutex{}
 
 	// defaultE810PinConfig -> All outputs disabled
 	defaultE810PinConfig = pinSet{
@@ -49,11 +51,10 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 
 	var e810Opts E810Opts
 	e810Opts.Gnss.LeapSources = defaultLeapSourceOptions()
-	var err error
 
 	e810Opts.EnableDefaultConfig = false
 
-	err = DpllPins.FetchPins()
+	err := DpllPins.FetchPins()
 	if err != nil {
 		return err
 	}
@@ -107,26 +108,32 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				}
 			}
 
-			// Initialize clockChain
+			// Initialize clockChain for this profile
+			clockChainMutex.Lock()
 			if e810Opts.PhaseInputs != nil {
-				clockChain, err = InitClockChain(e810Opts, nodeProfile)
+				clockChain, err := InitClockChain(e810Opts, nodeProfile)
 				if err != nil {
+					clockChainMutex.Unlock()
 					return err
 				}
+				clockChains[*nodeProfile.Name] = clockChain
 				(*nodeProfile).PtpSettings["leadingInterface"] = clockChain.GetLeadingNIC().Name
 				(*nodeProfile).PtpSettings["upstreamPort"] = clockChain.GetLeadingNIC().UpstreamPort
 			} else {
 				glog.Infof("No clock chain set: Restoring any previous pin state changes")
-				err = clockChain.SetPinDefaults()
-				if err != nil {
-					glog.Errorf("Could not restore clockChain pin defaults: %s", err)
+				if existing, ok := clockChains[*nodeProfile.Name]; ok {
+					err = existing.SetPinDefaults()
+					if err != nil {
+						glog.Errorf("Could not restore clockChain pin defaults: %s", err)
+					}
+					delete(clockChains, *nodeProfile.Name)
 				}
-				clockChain = &ClockChain{DpllPins: DpllPins}
 				err = DpllPins.FetchPins()
 				if err != nil {
 					glog.Errorf("Could not determine the current state of the dpll pins: %s", err)
 				}
 			}
+			clockChainMutex.Unlock()
 
 			if e810Opts.EnableDefaultConfig {
 				for _, device := range allDevices {
@@ -192,28 +199,45 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 				glog.Infof("AfterRunPTPCommandE810 doing ublx config for command: %s", command)
 				// Execute user-supplied UblxCmds first:
 				pluginData.hwplugins = append(pluginData.hwplugins, e810Opts.UblxCmds.runAll(true)...)
-			case "tbc-ho-exit":
-				err = clockChain.EnterNormalTBC()
+			case "tbc-ho-exit", "tbc-ho-entry", "reset-to-default":
+				err = handleClockChainCommand(*nodeProfile.Name, command)
 				if err != nil {
-					return fmt.Errorf("e810: failed to enter T-BC normal mode")
+					return err
 				}
-				glog.Info("e810: enter T-BC normal mode")
-			case "tbc-ho-entry":
-				err = clockChain.EnterHoldoverTBC()
-				if err != nil {
-					return fmt.Errorf("e810: failed to enter T-BC holdover")
-				}
-				glog.Info("e810: enter T-BC holdover")
-			case "reset-to-default":
-				err = clockChain.SetPinDefaults()
-				if err != nil {
-					return fmt.Errorf("e810: failed to reset pins to default")
-				}
-				glog.Info("e810: reset pins to default")
 			default:
 				glog.Infof("AfterRunPTPCommandE810 doing nothing for command: %s", command)
 			}
 		}
+	}
+	return nil
+}
+
+func handleClockChainCommand(profileName string, command string) error {
+	clockChainMutex.Lock()
+	defer clockChainMutex.Unlock()
+	chain, ok := clockChains[profileName]
+	if !ok {
+		return fmt.Errorf("e810: no clock chain for profile %s", profileName)
+	}
+	switch command {
+	case "tbc-ho-exit":
+		err := chain.EnterNormalTBC()
+		if err != nil {
+			return fmt.Errorf("e810: failed to enter T-BC normal mode")
+		}
+		glog.Info("e810: enter T-BC normal mode")
+	case "tbc-ho-entry":
+		err := chain.EnterHoldoverTBC()
+		if err != nil {
+			return fmt.Errorf("e810: failed to enter T-BC holdover")
+		}
+		glog.Info("e810: enter T-BC holdover")
+	case "reset-to-default":
+		err := chain.SetPinDefaults()
+		if err != nil {
+			return fmt.Errorf("e810: failed to reset pins to default")
+		}
+		glog.Info("e810: reset pins to default")
 	}
 	return nil
 }
