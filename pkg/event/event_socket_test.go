@@ -13,6 +13,7 @@ import (
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -785,6 +786,237 @@ func TestStoreClockClassLocked_MakesEmitClockClassWork(t *testing.T) {
 	select {
 	case got := <-received:
 		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 255")
+		assert.Contains(t, got, "ptp4l.1.config")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for clock class message")
+	}
+
+	e.setConn(nil) // cleanup
+}
+
+// --- announceClockClass stores in clkSyncState ---
+
+func TestAnnounceClockClass_PopulatesClkSyncState(t *testing.T) {
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	received := make(chan string, 10)
+	go acceptAndRead(listener, received)
+
+	e := newTestEventHandler(socketPath)
+	assert.True(t, e.reconnectEventSocket())
+
+	// clkSyncState should be empty initially
+	e.Lock()
+	_, ok := e.clkSyncState["ptp4l.1.config"]
+	e.Unlock()
+	assert.False(t, ok, "clkSyncState should be empty before announceClockClass")
+
+	// announceClockClass should populate clkSyncState AND emit to socket
+	e.announceClockClass(fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21), "ptp4l.1.config")
+
+	// Verify clkSyncState was populated
+	e.Lock()
+	state, ok := e.clkSyncState["ptp4l.1.config"]
+	e.Unlock()
+	assert.True(t, ok, "clkSyncState should have ptp4l.1.config after announceClockClass")
+	assert.Equal(t, fbprotocol.ClockClass(6), state.clockClass)
+	assert.Equal(t, fbprotocol.ClockAccuracy(0x21), state.clockAccuracy)
+
+	// Verify it was written to socket
+	select {
+	case got := <-received:
+		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 6")
+		assert.Contains(t, got, "ptp4l.1.config")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for clock class message on socket")
+	}
+
+	// EmitClockClass should now work for this config
+	e.EmitClockClass("ptp4l.1.config")
+	select {
+	case got := <-received:
+		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 6")
+	case <-time.After(2 * time.Second):
+		t.Fatal("EmitClockClass failed after announceClockClass populated clkSyncState")
+	}
+
+	e.setConn(nil) // cleanup
+}
+
+func TestAnnounceClockClass_UsesPtp4lConfigName(t *testing.T) {
+	// Verifies that clkSyncState key matches the cfgName passed to announceClockClass.
+	// In T-BC mode, downstreamAnnounceIWF must pass ptpCfgName (ptp4l.X.config)
+	// not cfgName (ts2phc.X.config), because EmitClockClass and classTicker
+	// look for ptp4l keys.
+	//
+	// Use storeClockClassLocked directly to test the key logic without
+	// triggering socket writes (which cause slow reconnect timeouts).
+	e := newTestEventHandler("")
+
+	// Simulate the bug: storing under ts2phc name
+	e.Lock()
+	e.storeClockClassLocked("ts2phc.1.config", fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21))
+	_, hasTsphc := e.clkSyncState["ts2phc.1.config"]
+	_, hasPtp4l := e.clkSyncState["ptp4l.1.config"]
+	e.Unlock()
+
+	assert.True(t, hasTsphc)
+	assert.False(t, hasPtp4l, "ptp4l key should NOT exist when stored under ts2phc name")
+
+	// Simulate the fix: storing under ptp4l name
+	e.Lock()
+	e.storeClockClassLocked("ptp4l.1.config", fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21))
+	state, hasPtp4l := e.clkSyncState["ptp4l.1.config"]
+	e.Unlock()
+
+	assert.True(t, hasPtp4l, "clkSyncState should have ptp4l.1.config when stored with correct name")
+	assert.Equal(t, fbprotocol.ClockClass(6), state.clockClass)
+}
+
+// --- AnnounceClockClass (uppercase) feeds clockClassRequestCh ---
+
+func TestAnnounceClockClassUppercase_FeedsClockClassRequestCh(t *testing.T) {
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	received := make(chan string, 10)
+	go acceptAndRead(listener, received)
+
+	e := newTestEventHandler(socketPath)
+	assert.True(t, e.reconnectEventSocket())
+
+	// Drain any existing messages on clockClassRequestCh
+	select {
+	case <-clockClassRequestCh:
+	default:
+	}
+
+	// Call AnnounceClockClass (uppercase) — should emit to socket AND send to channel
+	e.AnnounceClockClass(fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21), "ptp4l.1.config", BC)
+
+	// Verify it was written to socket
+	select {
+	case got := <-received:
+		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 6")
+		assert.Contains(t, got, "ptp4l.1.config")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for clock class message on socket")
+	}
+
+	// Verify it sent to clockClassRequestCh
+	select {
+	case req := <-clockClassRequestCh:
+		assert.Equal(t, "ptp4l.1.config", req.cfgName)
+		assert.Equal(t, fbprotocol.ClockClass(6), req.clockClass)
+		assert.Equal(t, BC, req.clockType)
+	case <-time.After(2 * time.Second):
+		t.Fatal("AnnounceClockClass did not send to clockClassRequestCh")
+	}
+
+	// Verify clkSyncState was populated
+	e.Lock()
+	state, ok := e.clkSyncState["ptp4l.1.config"]
+	e.Unlock()
+	assert.True(t, ok)
+	assert.Equal(t, fbprotocol.ClockClass(6), state.clockClass)
+
+	e.setConn(nil) // cleanup
+}
+
+func TestAnnounceClockClassLowercase_DoesNotFeedChannel(t *testing.T) {
+	e := &EventHandler{
+		stdoutToSocket: false,
+		closeCh:        make(chan bool, 1),
+		clkSyncState:   map[string]*clockSyncState{},
+	}
+
+	// Drain channel
+	select {
+	case <-clockClassRequestCh:
+	default:
+	}
+
+	e.announceClockClass(fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21), "ptp4l.1.config")
+
+	// Channel should be empty
+	select {
+	case <-clockClassRequestCh:
+		t.Fatal("lowercase announceClockClass should NOT send to clockClassRequestCh")
+	default:
+	}
+
+	// But clkSyncState should still be populated
+	e.Lock()
+	state, ok := e.clkSyncState["ptp4l.1.config"]
+	e.Unlock()
+	assert.True(t, ok)
+	assert.Equal(t, fbprotocol.ClockClass(6), state.clockClass)
+}
+
+// --- classTicker emits ptp4l entry even when ts2phc entry coexists ---
+
+func TestClassTicker_EmitsPtp4lWhenTsphcCoexists(t *testing.T) {
+	// Verifies that when clkSyncState has both ts2phc.1.config (clockClass 0)
+	// and ptp4l.1.config (clockClass 6), the classTicker emits the ptp4l entry
+	// and skips the ts2phc entry (clockClass 0 is filtered out).
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	received := make(chan string, 10)
+	go acceptAndRead(listener, received)
+
+	e := newTestEventHandler(socketPath)
+	assert.True(t, e.reconnectEventSocket())
+
+	// Simulate clkSyncState after initial T-BC lock:
+	// ts2phc.1.config is created by updateBCState initialization (clockClass 0)
+	// ptp4l.1.config is created by announceClockClass via downstreamAnnounceIWF (clockClass 6)
+	e.Lock()
+	e.clkSyncState["ts2phc.1.config"] = &clockSyncState{
+		state:      PTP_LOCKED,
+		clockClass: 0, // default/uninitialized
+	}
+	e.clkSyncState["ptp4l.1.config"] = &clockSyncState{
+		state:      PTP_LOCKED,
+		clockClass: fbprotocol.ClockClass(6),
+	}
+	e.Unlock()
+
+	// Simulate what classTicker does: snapshot, rename, filter, emit
+	e.Lock()
+	clkSnapshot := make(map[string]fbprotocol.ClockClass, len(e.clkSyncState))
+	for k, v := range e.clkSyncState {
+		clkSnapshot[k] = v.clockClass
+	}
+	e.Unlock()
+
+	emitted := 0
+	for clkCfgName, clockClass := range clkSnapshot {
+		parts := strings.SplitN(clkCfgName, ".", 2)
+		if len(parts) >= 2 {
+			clkCfgName = "ptp4l." + parts[1]
+		}
+		if clockClass == 0 {
+			continue
+		}
+		logMsg := utils.GetClockClassLogMessage(PTP4lProcessName, clkCfgName, clockClass)
+		e.writeLogToSocket(logMsg)
+		emitted++
+	}
+
+	// Only ptp4l.1.config (clockClass 6) should be emitted; ts2phc.1.config (clockClass 0) is skipped
+	assert.Equal(t, 1, emitted, "only the ptp4l entry with clockClass 6 should be emitted")
+
+	select {
+	case got := <-received:
+		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 6")
 		assert.Contains(t, got, "ptp4l.1.config")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for clock class message")

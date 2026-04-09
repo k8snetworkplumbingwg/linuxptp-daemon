@@ -451,7 +451,7 @@ func (e *EventHandler) downstreamAnnounceIWF(ctx context.Context, cfgName string
 		StepsRemoved: upsteamData.CurrentDS.StepsRemoved,
 	}
 	glog.Infof("%++v", es)
-	e.announceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, cfgName)
+	e.AnnounceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, ptpCfgName, BC)
 	if err := pmc.RunPMCExpSetExternalGMPropertiesNP(controlledPortsConfig, es); err != nil {
 		glog.Error(err)
 	}

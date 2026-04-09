@@ -626,6 +626,7 @@ func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, cloc
 func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string) {
 	e.Lock()
 	e.setClockClassLocked(clockClass, clockAcc)
+	e.storeClockClassLocked(cfgName, clockClass, clockAcc)
 	e.Unlock()
 
 	e.emitClockClass(clockClass, cfgName)
@@ -792,7 +793,13 @@ func (e *EventHandler) ProcessEvents() {
 			for {
 				select {
 				case clk := <-clockClassRequestCh:
+					// Normalize cfgName to ptp4l prefix so the double-emit
+					// check in the classTicker matches the renamed snapshot keys.
+					// Callers may pass ts2phc.X.config (e.g., event processing loop).
 					cfgName = clk.cfgName
+					if parts := strings.SplitN(cfgName, ".", 2); len(parts) >= 2 {
+						cfgName = "ptp4l." + parts[1]
+					}
 					// TODO: UpdateClockClass produces the wrong value for BC, investigate and fix.
 					if clk.clockType != BC {
 						e.UpdateClockClass(clk)
@@ -817,13 +824,13 @@ func (e *EventHandler) ProcessEvents() {
 					for clkCfgName, clockClass := range clkSnapshot {
 						parts := strings.SplitN(clkCfgName, ".", 2)
 						if len(parts) >= 2 {
-							clkCfgName = "ptp4l." + strings.Join(parts[1:], ".")
+							clkCfgName = "ptp4l." + parts[1]
 						}
 						if clockClass == 0 {
 							continue
 						}
 						if clkCfgName == cfgName {
-							// Stop double emmit
+							// Stop double emit
 							cfgName = ""
 						}
 						logMsg := utils.GetClockClassLogMessage(PTP4lProcessName, clkCfgName, clockClass)
@@ -832,11 +839,12 @@ func (e *EventHandler) ProcessEvents() {
 						}
 					}
 
+					// Fallback: emit clock class for the most recently requested config
+					// using e.clockClass directly. This handles the case where cfgName
+					// was not found in clkSyncState (e.g., config was requested but not
+					// yet stored). cfgName is cleared above if the snapshot already
+					// emitted it, preventing double emission.
 					if cfgName != "" {
-						parts := strings.SplitN(cfgName, ".", 2)
-						if len(parts) >= 2 {
-							cfgName = "ptp4l." + strings.Join(parts[1:], ".")
-						}
 						e.Lock()
 						currentClockClass := e.clockClass
 						e.Unlock()
