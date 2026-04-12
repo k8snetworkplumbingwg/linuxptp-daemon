@@ -904,7 +904,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			printNodeProfile(nodeProfile)
 			return err
 		}
-		clockType = ptp4lOutput.clock_type
+		clockType = ptp4lOutput.ClockType
 	}
 
 	for _, pProcess := range ptpProcesses {
@@ -1009,7 +1009,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
 		} else {
 			output.setPtp4lConfOption("", "bindcmdaddress", ChronydSocketPath, true)
-			output.profile_name = *nodeProfile.Name
+			output.profileName = *nodeProfile.Name
 		}
 
 		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
@@ -1115,8 +1115,8 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			}
 		} else if pProcess == ts2phcProcessName { //& if the x plugin is enabled
 			if clockType == event.GM {
-				if output.gnss_serial_port == "" {
-					output.gnss_serial_port = GPSPIPE_SERIALPORT
+				if output.gnssSerialPort == "" {
+					output.gnssSerialPort = GPSPIPE_SERIALPORT
 				}
 				// TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
 				gmInterface := dprocess.ifaces.GetLeadingInterface().Name
@@ -1125,7 +1125,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 					name:        GPSD_PROCESSNAME,
 					execMutex:   sync.Mutex{},
 					cmd:         nil,
-					serialPort:  output.gnss_serial_port,
+					serialPort:  output.gnssSerialPort,
 					exitCh:      make(chan struct{}),
 					gmInterface: gmInterface,
 					stopped:     false,
