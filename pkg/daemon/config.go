@@ -22,13 +22,6 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
-// Predefined config section names, re-exported from ptp4lconf for backward compatibility.
-const (
-	GlobalSectionName  = ptp4lconf.GlobalSectionName
-	NmeaSectionName    = ptp4lconf.NmeaSectionName
-	UnicastSectionName = ptp4lconf.UnicastSectionName
-)
-
 // LinuxPTPUpdate controls whether to update linuxPTP conf
 // and contains linuxPTP conf to be updated. It's rendered
 // and passed to linuxptp instance by daemon.
@@ -77,19 +70,19 @@ func (l *LinuxPTPConfUpdate) GetCurrentPTPProfiles() []string {
 	return profileNames
 }
 
-// Ptp4lConf wraps the shared ptp4lconf.Conf parser with daemon-specific
+// ProfileConfig wraps the shared ptp4lconf.Conf parser with daemon-specific
 // fields (profile name, GNSS serial port) and rendering methods.
-type Ptp4lConf struct {
+type ProfileConfig struct {
 	ptp4lconf.Conf
 	profileName    string
 	gnssSerialPort string
 }
 
-func (conf *Ptp4lConf) getPtp4lConfOptionOrEmptyString(sectionName, key string) (string, bool) {
+func (conf *ProfileConfig) getPtp4lConfOptionOrEmptyString(sectionName, key string) (string, bool) {
 	return conf.GetOption(sectionName, key)
 }
 
-func (conf *Ptp4lConf) setPtp4lConfOption(sectionName, key, value string, overwrite bool) {
+func (conf *ProfileConfig) setPtp4lConfOption(sectionName, key, value string, overwrite bool) {
 	conf.SetOption(sectionName, key, value, overwrite)
 }
 
@@ -176,29 +169,29 @@ func tryToLoadOldConfig(nodeProfilesJSON []byte) ([]ptpv1.PtpProfile, bool) {
 	return []ptpv1.PtpProfile{*ptpConfig}, true
 }
 
-// PopulatePtp4lConf delegates INI parsing and clock-type inference to ptp4lconf.Conf.Populate.
-func (conf *Ptp4lConf) PopulatePtp4lConf(config *string, cliArgs *string) error {
+// PopulatePtp4lConf takes as input a PtpProfile.ProfileConfig string and outputs as ProfileConfig struct
+func (conf *ProfileConfig) PopulatePtp4lConf(config *string, cliArgs *string) error {
 	return conf.Populate(config, cliArgs)
 }
 
 // ExtendGlobalSection extends Ptp4lConf struct with fields not from ptp4lConf
-func (conf *Ptp4lConf) ExtendGlobalSection(profileName string, messageTag string, socketPath string, pProcess string) {
+func (conf *ProfileConfig) ExtendGlobalSection(profileName string, messageTag string, socketPath string, pProcess string) {
 	conf.profileName = profileName
-	conf.setPtp4lConfOption(GlobalSectionName, "message_tag", messageTag, true)
+	conf.setPtp4lConfOption(ptp4lconf.GlobalSectionName, "message_tag", messageTag, true)
 	if socketPath != "" {
-		conf.setPtp4lConfOption(GlobalSectionName, "uds_address", socketPath, true)
+		conf.setPtp4lConfOption(ptp4lconf.GlobalSectionName, "uds_address", socketPath, true)
 	}
-	if gnssSerialPort, ok := conf.getPtp4lConfOptionOrEmptyString(GlobalSectionName, "ts2phc.nmea_serialport"); ok {
+	if gnssSerialPort, ok := conf.getPtp4lConfOptionOrEmptyString(ptp4lconf.GlobalSectionName, "ts2phc.nmea_serialport"); ok {
 		conf.gnssSerialPort = strings.TrimSpace(gnssSerialPort)
-		conf.setPtp4lConfOption(GlobalSectionName, "ts2phc.nmea_serialport", GPSPIPE_SERIALPORT, true)
+		conf.setPtp4lConfOption(ptp4lconf.GlobalSectionName, "ts2phc.nmea_serialport", GPSPIPE_SERIALPORT, true)
 	}
-	if _, ok := conf.getPtp4lConfOptionOrEmptyString(GlobalSectionName, "leapfile"); ok || pProcess == ts2phcProcessName { // not required to check process if leapfile is always included
-		conf.setPtp4lConfOption(GlobalSectionName, "leapfile", fmt.Sprintf("%s/%s", config.DefaultLeapConfigPath, os.Getenv("NODE_NAME")), true)
+	if _, ok := conf.getPtp4lConfOptionOrEmptyString(ptp4lconf.GlobalSectionName, "leapfile"); ok || pProcess == ts2phcProcessName { // not required to check process if leapfile is always included
+		conf.setPtp4lConfOption(ptp4lconf.GlobalSectionName, "leapfile", fmt.Sprintf("%s/%s", config.DefaultLeapConfigPath, os.Getenv("NODE_NAME")), true)
 	}
 }
 
-// AddInterfaceSection adds interface to Ptp4lConf
-func (conf *Ptp4lConf) AddInterfaceSection(iface string) {
+// AddInterfaceSection adds interface to ProfileConfig
+func (conf *ProfileConfig) AddInterfaceSection(iface string) {
 	ifaceSectionName := fmt.Sprintf("[%s]", iface)
 	conf.setPtp4lConfOption(ifaceSectionName, "", "", false)
 }
@@ -220,7 +213,7 @@ func getSource(isTs2phcMaster string) event.EventSource {
 //     (UNTIL next device section).
 //  2. Port section - any other section not starting with < (e.g. [eth0]) is the port section.
 //     Multiple port sections are allowed. Each port participates in SyncE communication.
-func (conf *Ptp4lConf) extractSynceRelations() *synce.Relations {
+func (conf *ProfileConfig) extractSynceRelations() *synce.Relations {
 	var err error
 	r := &synce.Relations{
 		Devices: []*synce.Config{},
@@ -267,7 +260,7 @@ func (conf *Ptp4lConf) extractSynceRelations() *synce.Relations {
 			synceRelationInfo.ExtendedTlv = extendedTlv
 		} else if strings.HasPrefix(sectionName, "[{") {
 			synceRelationInfo.ExternalSource = re.ReplaceAllString(sectionName, "")
-		} else if strings.HasPrefix(sectionName, "[") && sectionName != GlobalSectionName {
+		} else if strings.HasPrefix(sectionName, "[") && sectionName != ptp4lconf.GlobalSectionName {
 			iface := re.ReplaceAllString(sectionName, "")
 			ifaces = append(ifaces, iface)
 		}
@@ -282,14 +275,14 @@ func (conf *Ptp4lConf) extractSynceRelations() *synce.Relations {
 }
 
 // RenderSyncE4lConf outputs synce4l config as string
-func (conf *Ptp4lConf) RenderSyncE4lConf(ptpSettings map[string]string) (configOut string, relations *synce.Relations) {
-	configOut = fmt.Sprintf("#profile: %s\n", conf.profileName)
+func (conf *ProfileConfig) RenderSyncE4lConf(ptpSettings map[string]string) (configOut string, relations *synce.Relations) {
+	configOut = "#profile: " + conf.profileName + "\n"
 	relations = conf.extractSynceRelations()
 	relations.AddClockIds(ptpSettings)
 	deviceIdx := 0
 
 	for i, section := range conf.Sections {
-		configOut = fmt.Sprintf("%s\n%s", configOut, section.SectionName)
+		configOut += "\n" + section.SectionName
 		if strings.HasPrefix(section.SectionName, "[<") {
 			if _, found := conf.getPtp4lConfOptionOrEmptyString(section.SectionName, "clock_id"); !found {
 				conf.setPtp4lConfOption(section.SectionName, "clock_id", relations.Devices[deviceIdx].ClockId, true)
@@ -297,26 +290,26 @@ func (conf *Ptp4lConf) RenderSyncE4lConf(ptpSettings map[string]string) (configO
 			}
 		}
 		for _, option := range conf.Sections[i].Options {
-			configOut = fmt.Sprintf("%s\n%s %s", configOut, option.Key, option.Value)
+			configOut += "\n" + option.Key + " " + option.Value
 		}
 	}
 	return
 }
 
 // RenderPtp4lConf outputs ptp4l config as string
-func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces) {
-	configOut = fmt.Sprintf("#profile: %s\n", conf.profileName)
+func (conf *ProfileConfig) RenderPtp4lConf() (configOut string, ifaces config.IFaces) {
+	configOut = "#profile: " + conf.profileName + "\n"
 	var nmea_source event.EventSource
 
 	for _, section := range conf.Sections {
-		configOut = fmt.Sprintf("%s\n%s", configOut, section.SectionName)
+		configOut += "\n" + section.SectionName
 
-		if section.SectionName == NmeaSectionName {
+		if section.SectionName == ptp4lconf.NmeaSectionName {
 			if source, ok := conf.getPtp4lConfOptionOrEmptyString(section.SectionName, "ts2phc.master"); ok {
 				nmea_source = getSource(source)
 			}
 		}
-		if section.SectionName != GlobalSectionName && section.SectionName != NmeaSectionName && section.SectionName != UnicastSectionName {
+		if section.SectionName != ptp4lconf.GlobalSectionName && section.SectionName != ptp4lconf.NmeaSectionName && section.SectionName != ptp4lconf.UnicastSectionName {
 			iface := config.Iface{Name: ptp4lconf.SectionName(section.SectionName)}
 			iface.PhcId = network.GetPhcId(iface.Name)
 
@@ -333,7 +326,7 @@ func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces
 			alias.AddInterface(iface.PhcId, iface.Name)
 		}
 		for _, option := range section.Options {
-			configOut = fmt.Sprintf("%s\n%s %s", configOut, option.Key, option.Value)
+			configOut += "\n" + option.Key + " " + option.Value
 		}
 	}
 	alias.CalculateAliases()

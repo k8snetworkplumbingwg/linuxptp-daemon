@@ -30,8 +30,7 @@ type Section struct {
 	Options     []Option
 }
 
-// Conf represents a parsed ptp4l INI-style configuration
-// that can be queried, mutated, and rendered back to text.
+// Conf represents a parsed ptp4l configuration (section-based, space-delimited key-value format).
 type Conf struct {
 	Sections  []Section
 	ClockType event.ClockType
@@ -88,8 +87,8 @@ func (c *Conf) SetOption(sectionName, key, value string, overwrite bool) {
 	c.Sections[index] = updatedSection
 }
 
-// Populate parses a ptp4l INI-style config string and optional CLI args,
-// populating the Conf struct with sections, options, and inferred clock type.
+// Populate parses a ptp4l config string and optional CLI args into sections/options
+// and infers the clock type.
 func (c *Conf) Populate(config *string, cliArgs *string) error {
 	var currentSectionName string
 	c.Sections = make([]Section, 0)
@@ -125,7 +124,7 @@ func (c *Conf) Populate(config *string, cliArgs *string) error {
 				}
 				c.SetOption(currentSectionName, "", "", false)
 			} else {
-				split := strings.IndexByte(line, ' ')
+				split := strings.IndexAny(line, " \t")
 				if split > 0 {
 					key := line[:split]
 					value := strings.TrimSpace(line[split:])
@@ -164,7 +163,7 @@ func SectionName(name string) string {
 func RenderOptions(s Section) string {
 	var out string
 	for _, opt := range s.Options {
-		out = fmt.Sprintf("%s\n%s %s", out, opt.Key, opt.Value)
+		out += "\n" + opt.Key + " " + opt.Value
 	}
 	return out
 }

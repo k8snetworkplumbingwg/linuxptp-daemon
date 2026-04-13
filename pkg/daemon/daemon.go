@@ -895,7 +895,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 	// If unset default to clock type inferred from ptp4l
 	if clockType == event.ClockUnset {
-		ptp4lOutput := &Ptp4lConf{}
+		ptp4lOutput := &ProfileConfig{}
 		// Parsing ptp4l needs to be done here to get the fallback clock type.
 		// Needs to be done outside the loop as we need to guarantee clockType
 		// set before the ts2phcProcessName case where it is used.
@@ -985,7 +985,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			messageTag = fmt.Sprintf("[chronyd.%d.config]", runID)
 		}
 
-		output := &Ptp4lConf{}
+		output := &ProfileConfig{}
 		err = output.PopulatePtp4lConf(configInput, nil) // cli args not need as we already have clock type from ptp4l
 		if err != nil {
 			printNodeProfile(nodeProfile)

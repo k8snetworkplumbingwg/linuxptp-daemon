@@ -1778,7 +1778,7 @@ func TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			conf := &Ptp4lConf{}
+			conf := &ProfileConfig{}
 			err := conf.PopulatePtp4lConf(&tt.config, tt.cliArgs)
 
 			assert.NoError(t, err, "PopulatePtp4lConf should not return error")
