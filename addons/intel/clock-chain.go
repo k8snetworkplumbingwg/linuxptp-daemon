@@ -241,11 +241,23 @@ func (c *ClockChain) SetPinsControl(pins []PinControl) ([]dpll.PinParentDeviceCt
 	return pinCommands, nil
 }
 
-// SetPinsControlForAllNICs sets pins across all NICs (leading + other NICs)
-// This is used specifically for initialization functions like SetPinDefaults
+// chainClockIDs returns the set of DPLL clock IDs belonging to this chain
+// (leading NIC + other NICs). Used to scope pin operations to this chain's
+// NICs instead of affecting all NICs on the node.
+func (c *ClockChain) chainClockIDs() map[uint64]bool {
+	ids := map[uint64]bool{c.LeadingNIC.DpllClockID: true}
+	for _, nic := range c.OtherNICs {
+		ids[nic.DpllClockID] = true
+	}
+	return ids
+}
+
+// SetPinsControlForAllNICs sets pins across all NICs in this chain
+// Pins belonging to NICs outside this chain are not affected.
 func (c *ClockChain) SetPinsControlForAllNICs(pins []PinControl) ([]dpll.PinParentDeviceCtl, error) {
 	pinCommands := []dpll.PinParentDeviceCtl{}
 	errs := make([]error, 0)
+	chainIDs := c.chainClockIDs()
 
 	for _, pinCtl := range pins {
 		foundPins := c.DpllPins.GetAllPinsByLabel(pinCtl.Label)
@@ -258,6 +270,9 @@ func (c *ClockChain) SetPinsControlForAllNICs(pins []PinControl) ([]dpll.PinPare
 			continue
 		}
 		for _, pin := range foundPins {
+			if !chainIDs[pin.ClockID] {
+				continue
+			}
 			pinCommands = append(pinCommands, SetPinControlData(*pin, pinCtl.ParentControl)...)
 		}
 	}

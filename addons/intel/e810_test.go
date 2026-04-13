@@ -132,8 +132,9 @@ func Test_ProcessProfileTBCNoPhaseInputs(t *testing.T) {
 
 	// Verify that clockChain was initialized (SetPinDefaults is called as part of InitClockChain)
 	// If SetPinDefaults wasn't called, InitClockChain would have failed
-	assert.NotNil(t, clockChain, "clockChain should be initialized")
-	ccData := clockChain.(*ClockChain)
+	chain, ok := clockChains[*profile.Name]
+	assert.True(t, ok, "clockChain should be initialized for profile")
+	ccData := chain.(*ClockChain)
 	assert.Equal(t, ClockTypeTBC, ccData.Type, "clockChain should be T-BC type")
 	assert.NotNil(t, mockPinSet.commands, "Ensure clockChain.SetPinDefaults was called")
 
@@ -318,7 +319,7 @@ func Test_AfterRunPTPCommandE810ClockChain(t *testing.T) {
 	assert.NoError(t, err)
 
 	mClockChain := &mockClockChain{}
-	clockChain = mClockChain
+	clockChains[*profile.Name] = mClockChain
 	err = p.AfterRunPTPCommand(d, profile, "reset-to-default")
 	assert.NoError(t, err)
 	mClockChain.assertCallCounts(t, 0, 0, 1)
@@ -329,7 +330,7 @@ func Test_AfterRunPTPCommandE810ClockChain(t *testing.T) {
 	mClockChain.assertCallCounts(t, 0, 0, 2)
 
 	mClockChain = &mockClockChain{}
-	clockChain = mClockChain
+	clockChains[*profile.Name] = mClockChain
 	err = p.AfterRunPTPCommand(d, profile, "tbc-ho-entry")
 	assert.NoError(t, err)
 	mClockChain.assertCallCounts(t, 0, 1, 0)
@@ -339,7 +340,7 @@ func Test_AfterRunPTPCommandE810ClockChain(t *testing.T) {
 	mClockChain.assertCallCounts(t, 0, 2, 0)
 
 	mClockChain = &mockClockChain{}
-	clockChain = mClockChain
+	clockChains[*profile.Name] = mClockChain
 	err = p.AfterRunPTPCommand(d, profile, "tbc-ho-exit")
 	assert.NoError(t, err)
 	mClockChain.assertCallCounts(t, 1, 0, 0)

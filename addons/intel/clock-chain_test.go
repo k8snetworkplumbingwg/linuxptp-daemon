@@ -38,7 +38,7 @@ func Test_ProcessProfileTbcClockChain(t *testing.T) {
 	p, d := E810("e810")
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
-	ccData := clockChain.(*ClockChain)
+	ccData := clockChains[*profile.Name].(*ClockChain)
 	assert.Equal(t, ClockTypeTBC, ccData.Type, "identified a wrong clock type")
 	assert.Equal(t, uint64(5799633565432596414), ccData.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
 	assert.Equal(t, "ens4f1", ccData.LeadingNIC.UpstreamPort, "wrong upstream port")
@@ -49,13 +49,13 @@ func Test_ProcessProfileTbcClockChain(t *testing.T) {
 
 	// Test holdover entry
 	mockPinSet.reset()
-	err = clockChain.EnterHoldoverTBC()
+	err = clockChains[*profile.Name].EnterHoldoverTBC()
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(mockPinSet.commands))
 
 	// Test holdover exit
 	mockPinSet.reset()
-	err = clockChain.EnterNormalTBC()
+	err = clockChains[*profile.Name].EnterNormalTBC()
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(mockPinSet.commands))
 
@@ -98,7 +98,7 @@ func Test_ProcessProfileTtscClockChain(t *testing.T) {
 	p, d := E810("e810")
 	err = p.OnPTPConfigChange(d, profile)
 	assert.NoError(t, err)
-	ccData := clockChain.(*ClockChain)
+	ccData := clockChains[*profile.Name].(*ClockChain)
 	assert.Equal(t, ClockTypeTBC, ccData.Type, "identified a wrong clock type")
 	assert.Equal(t, uint64(5799633565432596414), ccData.LeadingNIC.DpllClockID, "identified a wrong clock ID ")
 	assert.Equal(t, "ens4f1", ccData.LeadingNIC.UpstreamPort, "wrong upstream port")
@@ -108,13 +108,13 @@ func Test_ProcessProfileTtscClockChain(t *testing.T) {
 
 	// Test holdover entry
 	mockPinSet.reset()
-	err = clockChain.EnterHoldoverTBC()
+	err = clockChains[*profile.Name].EnterHoldoverTBC()
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(mockPinSet.commands))
 
 	// Test holdover exit
 	mockPinSet.reset()
-	err = clockChain.EnterNormalTBC()
+	err = clockChains[*profile.Name].EnterNormalTBC()
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(mockPinSet.commands))
 }
@@ -151,14 +151,14 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 	assert.Equal(t, 0, mockPinConfig.actualPinFrqCount)
 
 	// Verify we have the expected clock chain structure
-	ccData := clockChain.(*ClockChain)
+	ccData := clockChains[*profile.Name].(*ClockChain)
 	assert.Equal(t, ClockTypeTBC, ccData.Type)
 	assert.Equal(t, "ens4f0", ccData.LeadingNIC.Name)
 	assert.Equal(t, 2, len(ccData.OtherNICs), "should have 2 other NICs (ens5f0, ens8f0)")
 
 	// Reset to only capture commands from the explicit SetPinDefaults call
 	mockPinSet.reset()
-	err = clockChain.SetPinDefaults()
+	err = clockChains[*profile.Name].SetPinDefaults()
 	assert.NoError(t, err)
 	assert.NotNil(t, mockPinSet.commands)
 
