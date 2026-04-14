@@ -151,19 +151,9 @@ func (c *Conf) Populate(config *string, cliArgs *string) error {
 	return nil
 }
 
-// SectionName strips bracket characters from a section name header,
-// returning the bare name (e.g. "[ens1f0]" -> "ens1f0").
-func SectionName(name string) string {
-	name = strings.ReplaceAll(name, "[", "")
-	name = strings.ReplaceAll(name, "]", "")
-	return name
-}
-
-// RenderOptions renders all options in a section as newline-separated "key value" lines.
-func RenderOptions(s Section) string {
-	var out string
-	for _, opt := range s.Options {
-		out += "\n" + opt.Key + " " + opt.Value
-	}
-	return out
+// Name returns the section name without brackets (e.g. "[ens1f0]" -> "ens1f0").
+func (s Section) Name() string {
+	n := strings.ReplaceAll(s.SectionName, "[", "")
+	n = strings.ReplaceAll(n, "]", "")
+	return n
 }

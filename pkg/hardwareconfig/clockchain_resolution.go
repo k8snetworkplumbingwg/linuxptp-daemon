@@ -74,7 +74,7 @@ func extractUpstreamPortsFromPtpProfile(ptpProfile *ptpv1.PtpProfile) []string {
 			continue
 		}
 		if val, ok := conf.GetOption(name, "masterOnly"); ok && strings.TrimSpace(val) == "0" {
-			upstreamPorts = append(upstreamPorts, ptp4lconf.SectionName(name))
+			upstreamPorts = append(upstreamPorts, section.Name())
 		}
 	}
 

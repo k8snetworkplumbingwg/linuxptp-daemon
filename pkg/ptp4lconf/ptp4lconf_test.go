@@ -203,8 +203,8 @@ func TestConf_Populate_SkipsComments(t *testing.T) {
 	assert.Equal(t, "24", val)
 }
 
-func TestSectionName(t *testing.T) {
-	assert.Equal(t, "ens1f0", SectionName("[ens1f0]"))
-	assert.Equal(t, "global", SectionName("[global]"))
-	assert.Equal(t, "", SectionName("[]"))
+func TestSection_Name(t *testing.T) {
+	assert.Equal(t, "ens1f0", Section{SectionName: "[ens1f0]"}.Name())
+	assert.Equal(t, "global", Section{SectionName: "[global]"}.Name())
+	assert.Equal(t, "", Section{SectionName: "[]"}.Name())
 }

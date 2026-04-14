@@ -310,7 +310,7 @@ func (conf *ProfileConfig) RenderPtp4lConf() (configOut string, ifaces config.IF
 			}
 		}
 		if section.SectionName != ptp4lconf.GlobalSectionName && section.SectionName != ptp4lconf.NmeaSectionName && section.SectionName != ptp4lconf.UnicastSectionName {
-			iface := config.Iface{Name: ptp4lconf.SectionName(section.SectionName)}
+			iface := config.Iface{Name: section.Name()}
 			iface.PhcId = network.GetPhcId(iface.Name)
 
 			if source, ok := conf.getPtp4lConfOptionOrEmptyString(section.SectionName, "ts2phc.master"); ok {
