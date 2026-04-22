@@ -5,9 +5,8 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/stretchr/testify/assert"
+	"k8s.io/utils/ptr"
 )
-
-func stringPtr(s string) *string { return &s }
 
 func TestConf_Populate_ClockType(t *testing.T) {
 	tests := []struct {
@@ -19,25 +18,25 @@ func TestConf_Populate_ClockType(t *testing.T) {
 		{
 			name:              "OC with -s flag",
 			config:            "[global]\n",
-			cliArgs:           stringPtr("-s -f /etc/ptp4l.conf"),
+			cliArgs:           ptr.To("-s -f /etc/ptp4l.conf"),
 			expectedClockType: event.OC,
 		},
 		{
 			name:              "OC with -s and single interface",
 			config:            "[global]\n[ens1f0]\n",
-			cliArgs:           stringPtr("-s"),
+			cliArgs:           ptr.To("-s"),
 			expectedClockType: event.OC,
 		},
 		{
 			name:              "BC with -s and multiple interfaces",
 			config:            "[global]\n[ens1f0]\nmasterOnly 0\n[ens1f1]\nmasterOnly 1",
-			cliArgs:           stringPtr("-s"),
+			cliArgs:           ptr.To("-s"),
 			expectedClockType: event.BC,
 		},
 		{
 			name:              "GM with masterOnly interfaces",
 			config:            "[global]\n[ens1f0]\nmasterOnly 1\n[ens1f1]\nmasterOnly 1",
-			cliArgs:           stringPtr("-f /etc/ptp4l.conf"),
+			cliArgs:           ptr.To("-f /etc/ptp4l.conf"),
 			expectedClockType: event.GM,
 		},
 		{
@@ -67,49 +66,49 @@ func TestConf_Populate_ClockType(t *testing.T) {
 		{
 			name:              "OC with --slaveOnly 1",
 			config:            "[global]\n",
-			cliArgs:           stringPtr("--slaveOnly 1 -f /etc/ptp4l.conf"),
+			cliArgs:           ptr.To("--slaveOnly 1 -f /etc/ptp4l.conf"),
 			expectedClockType: event.OC,
 		},
 		{
 			name:              "OC with --slaveOnly=1",
 			config:            "[global]\n",
-			cliArgs:           stringPtr("--slaveOnly=1 -f /etc/ptp4l.conf"),
+			cliArgs:           ptr.To("--slaveOnly=1 -f /etc/ptp4l.conf"),
 			expectedClockType: event.OC,
 		},
 		{
 			name:              "GM with --slaveOnly 0",
 			config:            "[global]\n[ens1f0]\n",
-			cliArgs:           stringPtr("--slaveOnly 0 -f /etc/ptp4l.conf"),
+			cliArgs:           ptr.To("--slaveOnly 0 -f /etc/ptp4l.conf"),
 			expectedClockType: event.GM,
 		},
 		{
 			name:              "OC with --clientOnly 1",
 			config:            "[global]\n",
-			cliArgs:           stringPtr("--clientOnly 1 -f /etc/ptp4l.conf"),
+			cliArgs:           ptr.To("--clientOnly 1 -f /etc/ptp4l.conf"),
 			expectedClockType: event.OC,
 		},
 		{
 			name:              "OC with --clientOnly=1",
 			config:            "[global]\n",
-			cliArgs:           stringPtr("--clientOnly=1 -f /etc/ptp4l.conf"),
+			cliArgs:           ptr.To("--clientOnly=1 -f /etc/ptp4l.conf"),
 			expectedClockType: event.OC,
 		},
 		{
 			name:              "GM with --clientOnly 0",
 			config:            "[global]\n[ens1f0]\n",
-			cliArgs:           stringPtr("--clientOnly 0 -f /etc/ptp4l.conf"),
+			cliArgs:           ptr.To("--clientOnly 0 -f /etc/ptp4l.conf"),
 			expectedClockType: event.GM,
 		},
 		{
 			name:              "GM with no slave configuration",
 			config:            "[global]\n[ens1f0]\n[ens1f1]\n",
-			cliArgs:           stringPtr("-f /etc/ptp4l.conf -m"),
+			cliArgs:           ptr.To("-f /etc/ptp4l.conf -m"),
 			expectedClockType: event.GM,
 		},
 		{
 			name:              "OC with -s at end of args",
 			config:            "[global]\n",
-			cliArgs:           stringPtr("-f /etc/ptp4l.conf -s"),
+			cliArgs:           ptr.To("-f /etc/ptp4l.conf -s"),
 			expectedClockType: event.OC,
 		},
 	}

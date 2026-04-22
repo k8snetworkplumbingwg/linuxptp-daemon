@@ -2,7 +2,6 @@ package ptp4lconf
 
 import (
 	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -114,11 +113,10 @@ func (c *Conf) Populate(config *string, cliArgs *string) error {
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			} else if strings.HasPrefix(line, "[") {
-				currentLine := strings.Split(line, "]")
-				if len(currentLine) < 2 {
+				if !strings.HasSuffix(line, "]") {
 					return errors.New("Section missing closing ']': " + line)
 				}
-				currentSectionName = fmt.Sprintf("%s]", currentLine[0])
+				currentSectionName = line
 				if currentSectionName != GlobalSectionName && currentSectionName != NmeaSectionName && currentSectionName != UnicastSectionName {
 					ifaceCount++
 				}

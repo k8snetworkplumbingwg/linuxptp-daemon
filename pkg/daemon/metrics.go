@@ -713,9 +713,9 @@ func addFlagsForMonitor(process string, configOpts *string, conf *ProfileConfig,
 			}
 
 			if !strings.Contains(*configOpts, "--summary_interval") {
-				_, exist := conf.getPtp4lConfOptionOrEmptyString(ptp4lconf.GlobalSectionName, "summary_interval")
+				_, exist := conf.GetOption(ptp4lconf.GlobalSectionName, "summary_interval")
 				if !exist {
-					conf.setPtp4lConfOption(ptp4lconf.GlobalSectionName, "summary_interval", "1", true)
+					conf.SetOption(ptp4lconf.GlobalSectionName, "summary_interval", "1", true)
 				}
 			}
 		}

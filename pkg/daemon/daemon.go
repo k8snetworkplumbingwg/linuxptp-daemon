@@ -899,7 +899,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		// Parsing ptp4l needs to be done here to get the fallback clock type.
 		// Needs to be done outside the loop as we need to guarantee clockType
 		// set before the ts2phcProcessName case where it is used.
-		err = ptp4lOutput.PopulatePtp4lConf(nodeProfile.Ptp4lConf, nodeProfile.Ptp4lOpts)
+		err = ptp4lOutput.Populate(nodeProfile.Ptp4lConf, nodeProfile.Ptp4lOpts)
 		if err != nil {
 			printNodeProfile(nodeProfile)
 			return err
@@ -986,7 +986,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		}
 
 		output := &ProfileConfig{}
-		err = output.PopulatePtp4lConf(configInput, nil) // cli args not need as we already have clock type from ptp4l
+		err = output.Populate(configInput, nil) // cli args not needed as we already have clock type from ptp4l
 		if err != nil {
 			printNodeProfile(nodeProfile)
 			return err
@@ -1008,7 +1008,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		if pProcess != chronydProcessName {
 			output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
 		} else {
-			output.setPtp4lConfOption("", "bindcmdaddress", ChronydSocketPath, true)
+			output.SetOption("", "bindcmdaddress", ChronydSocketPath, true)
 			output.profileName = *nodeProfile.Name
 		}
 
