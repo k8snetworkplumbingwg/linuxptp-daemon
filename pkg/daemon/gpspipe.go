@@ -143,7 +143,7 @@ func (gp *gpspipe) ProcessStatus(c net.Conn, status int64) {
 }
 
 // CmdRun ... run gpspipe
-func (gp *gpspipe) CmdRun(stdoutToSocket bool) {
+func (gp *gpspipe) CmdRun() {
 	defer func() {
 		select {
 		case gp.exitCh <- struct{}{}:

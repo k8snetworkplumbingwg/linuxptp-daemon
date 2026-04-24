@@ -360,7 +360,7 @@ func (d *DpllConfig) ProcessStatus(_ net.Conn, _ int64) {
 }
 
 // CmdRun ... run command
-func (d *DpllConfig) CmdRun(stdToSocket bool) {
+func (d *DpllConfig) CmdRun() {
 	// noting to run, monitor() function takes care of dpll run
 }
 

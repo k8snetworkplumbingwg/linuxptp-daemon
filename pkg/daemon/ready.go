@@ -111,14 +111,12 @@ func (h portAliasesHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 }
 
 // StartReadyServer ...
-func StartReadyServer(bindAddress string, tracker *ReadyTracker, serveInitMetrics bool) {
+func StartReadyServer(bindAddress string, tracker *ReadyTracker) {
 	glog.Info("Starting Ready Server")
 	mux := http.NewServeMux()
 	mux.Handle("/ready", readyHandler{tracker: tracker})
 	mux.Handle("/port-aliases", portAliasesHandler{})
-	if serveInitMetrics {
-		mux.Handle("/emit-logs", metricHandler{tracker: tracker})
-	}
+	mux.Handle("/emit-logs", metricHandler{tracker: tracker})
 	go utilwait.Until(func() {
 		err := http.ListenAndServe(bindAddress, mux)
 		if err != nil {

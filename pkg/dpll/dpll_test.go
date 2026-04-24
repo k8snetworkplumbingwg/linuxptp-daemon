@@ -183,7 +183,7 @@ func TestDpllConfig_MonitorProcessGNSS(t *testing.T) {
 	eChannel := make(chan event.EventChannel, 10)
 	closeChn := make(chan bool)
 	// event has to be running before dpll is started
-	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
+	eventProcessor := event.Init("node", "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
 		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
 	d.CmdInit()
@@ -226,7 +226,7 @@ func TestDpllConfig_MonitorProcessPPS(t *testing.T) {
 	eChannel := make(chan event.EventChannel, 10)
 	closeChn := make(chan bool)
 	// event has to be running before dpll is started
-	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
+	eventProcessor := event.Init("node", "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
 		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, 0)
 	d.CmdInit()
@@ -267,7 +267,7 @@ func TestDpllConfig_MonitorProcessPartial(t *testing.T) {
 	eChannel := make(chan event.EventChannel, 10)
 	closeChn := make(chan bool)
 	// event has to be running before dpll is started
-	eventProcessor := event.Init("node", false, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
+	eventProcessor := event.Init("node", "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
 	d := dpll.NewDpll(clockid, 10, 2, 5, "ens01",
 		[]event.EventSource{event.GNSS}, dpll.MOCK, map[string]map[string]string{}, 0, 0, dpll.FlagOnlyPhaseStatus)
 	d.CmdInit()

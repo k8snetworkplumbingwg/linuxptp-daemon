@@ -32,6 +32,7 @@ func NewPMCProcess(runID int, eventHandler *event.EventHandler, clockType string
 		parentDSCh:           make(chan protocol.ParentDataSet, 10),
 		eventHandler:         eventHandler,
 		clockType:            clockType,
+		outSocketPath:        eventSocket,
 		getMonitorFn:         pmcPkg.GetPMCMontior,
 		runPMCExpGetParentDS: pmcPkg.RunPMCExpGetParentDS,
 	}
@@ -50,6 +51,7 @@ type PMCProcess struct {
 	parentDSCh        chan protocol.ParentDataSet
 	exitCh            chan struct{}
 	clockType         string
+	outSocketPath     string
 	c                 net.Conn // guarded by lock
 	messageTag        string
 	eventHandler      *event.EventHandler
@@ -146,8 +148,17 @@ func (pmc *PMCProcess) EmitClockClassLogs() {
 	go pmc.eventHandler.EmitClockClass(pmc.configFileName)
 }
 
+func (pmc *PMCProcess) dialSocket() (net.Conn, error) {
+	c, err := net.DialTimeout("unix", pmc.outSocketPath, socketDialTimeout)
+	if err != nil {
+		glog.Errorf("error trying to connect to event socket")
+		time.Sleep(connectionRetryInterval)
+	}
+	return c, err
+}
+
 // CmdRun starts the PMC monitoring process.
-func (pmc *PMCProcess) CmdRun(stdToSocket bool) {
+func (pmc *PMCProcess) CmdRun() {
 	isStopped := pmc.getAndSetStopped(false)
 	if isStopped {
 		return
@@ -160,13 +171,12 @@ func (pmc *PMCProcess) CmdRun(stdToSocket bool) {
 				return
 			}
 
-			var c net.Conn
-			if stdToSocket {
-				cAttempt, dialErr := dialSocket()
-				for dialErr != nil {
-					cAttempt, dialErr = dialSocket()
+			c, dialErr := pmc.dialSocket()
+			for dialErr != nil {
+				if pmc.Stopped() {
+					return
 				}
-				c = cAttempt
+				c, dialErr = pmc.dialSocket()
 			}
 			monitorErr := pmc.Monitor(c)
 			if monitorErr == nil && pmc.Stopped() {

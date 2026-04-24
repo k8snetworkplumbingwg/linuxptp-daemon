@@ -129,7 +129,6 @@ func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
 	dn := New(
 		"test-node-name",
 		"openshift-ptp",
-		false,
 		nil,
 		nil,
 		&LinuxPTPConfUpdate{
@@ -216,7 +215,6 @@ func Test_applyProfile_TBC(t *testing.T) {
 	dn := New(
 		"test-node-name",
 		"openshift-ptp",
-		false,
 		nil,
 		nil,
 		&LinuxPTPConfUpdate{
@@ -1794,7 +1792,7 @@ func TestEmitClockClassLogs_EmitsWithNilParentDS(t *testing.T) {
 	// tests already cover the socket write path via EmitClockClass).
 	eventChannel := make(chan event.EventChannel)
 	closeCh := make(chan bool, 1)
-	handler := event.Init("testnode", false, "", eventChannel, closeCh, nil, nil, nil)
+	handler := event.Init("testnode", "", eventChannel, closeCh, nil, nil, nil)
 
 	// Create a PMC process with parentDS = nil (the bug condition).
 	// Before the fix, EmitClockClassLogs skipped the call when parentDS was nil.

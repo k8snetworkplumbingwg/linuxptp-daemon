@@ -12,7 +12,7 @@ type process interface {
 	CmdStop()
 	CmdInit()
 	ProcessStatus(c net.Conn, status int64)
-	CmdRun(stdToSocket bool)
+	CmdRun()
 	MonitorProcess(p config.ProcessConfig)
 	ExitCh() chan struct{}
 }

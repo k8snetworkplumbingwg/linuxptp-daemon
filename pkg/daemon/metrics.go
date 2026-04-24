@@ -701,10 +701,9 @@ func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
 	return
 }
 
-func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf, stdoutToSocket bool) {
+func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf) {
 	switch process {
 	case "ptp4l":
-		// If output doesn't exist we add it for the prometheus exporter
 		if configOpts != nil {
 			if !strings.Contains(*configOpts, "-m") {
 				glog.Info("adding -m to print messages to stdout for ptp4l to use prometheus exporter")
@@ -719,24 +718,17 @@ func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf, std
 			}
 		}
 	case "phc2sys":
-		// If output doesn't exist we add it for the prometheus exporter
 		if configOpts != nil && *configOpts != "" {
 			if !strings.Contains(*configOpts, "-m") {
 				glog.Info("adding -m to print messages to stdout for phc2sys to use prometheus exporter")
 				*configOpts = fmt.Sprintf("%s -m", *configOpts)
 			}
-			// stdoutToSocket is for sidecar to consume events, -u  will not generate logs with offset and clock state.
-			// disable -u for  events
-			if stdoutToSocket && strings.Contains(*configOpts, "-u") {
-				glog.Error("-u option will not generate clock state events,  remove -u option")
-			} else if !stdoutToSocket && !strings.Contains(*configOpts, "-u") {
-				glog.Info("adding -u 1 to print summary messages to stdout for phc2sys to use prometheus exporter")
-				*configOpts = fmt.Sprintf("%s -u 1", *configOpts)
+			if strings.Contains(*configOpts, "-u") {
+				glog.Error("-u option will not generate clock state events, remove -u option")
 			}
 		}
 	case "ts2phc":
 	}
-
 }
 
 // StartMetricsServer runs the prometheus listner so that metrics can be collected

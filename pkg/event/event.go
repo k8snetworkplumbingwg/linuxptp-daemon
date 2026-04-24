@@ -173,7 +173,6 @@ type EventHandler struct {
 	sync.Mutex
 	nodeName           string
 	stdoutSocket       string
-	stdoutToSocket     bool
 	processChannel     <-chan EventChannel
 	closeCh            chan bool
 	conn               net.Conn   // event socket connection, guarded by connMu
@@ -241,12 +240,11 @@ func (e *EventHandler) MockEnable() {
 }
 
 // Init ... initialize event manager
-func Init(nodeName string, stdOutToSocket bool, socketName string, processChannel chan EventChannel, closeCh chan bool,
+func Init(nodeName string, socketName string, processChannel chan EventChannel, closeCh chan bool,
 	offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec, clockClassMetric *prometheus.GaugeVec) *EventHandler {
 	ptpEvent := &EventHandler{
 		nodeName:           nodeName,
 		stdoutSocket:       socketName,
-		stdoutToSocket:     stdOutToSocket,
 		closeCh:            closeCh,
 		processChannel:     processChannel,
 		data:               map[string][]*Data{},
@@ -650,17 +648,11 @@ func (e *EventHandler) storeClockClassLocked(cfgName string, clockClass fbprotoc
 	e.clkSyncState[cfgName].clockAccuracy = clockAcc
 }
 
-// emitClockClass writes the clock class to the socket and updates the metric.
+// emitClockClass writes the clock class to the socket.
 // Must NOT be called while holding e.Lock().
 func (e *EventHandler) emitClockClass(clockClass fbprotocol.ClockClass, cfgName string) {
-	if e.stdoutToSocket {
-		logMsg := utils.GetClockClassLogMessage(PTP4lProcessName, cfgName, clockClass)
-		e.writeLogToSocket(logMsg)
-	}
-	if !e.stdoutToSocket && e.clockClassMetric != nil {
-		e.clockClassMetric.With(prometheus.Labels{
-			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
-	}
+	logMsg := utils.GetClockClassLogMessage(PTP4lProcessName, cfgName, clockClass)
+	e.writeLogToSocket(logMsg)
 }
 
 // reconnectEventSocket closes the current connection and dials a new one using
@@ -759,25 +751,19 @@ func (e *EventHandler) ProcessEvents() {
 	redialClockClass := true
 
 	defer func() {
-		if e.stdoutToSocket {
-			e.setConn(nil) // closes the connection if present
-		}
+		e.setConn(nil) // closes the connection if present
 	}()
 	var lastClockState PTPState
 
 	// Establish initial connection to the event socket using exponential backoff.
 	// Retries indefinitely until connected or the handler is shutting down.
-	if e.stdoutToSocket {
-		for !e.reconnectEventSocket() {
-			// reconnectEventSocket returns false on shutdown or exhausted retries;
-			// check for shutdown before retrying
-			select {
-			case <-e.closeCh:
-				return
-			default:
-				glog.Warning("Initial connection to event socket failed, retrying in 1 second...")
-				time.Sleep(1 * time.Second)
-			}
+	for !e.reconnectEventSocket() {
+		select {
+		case <-e.closeCh:
+			return
+		default:
+			glog.Warning("Initial connection to event socket failed, retrying in 1 second...")
+			time.Sleep(1 * time.Second)
 		}
 	}
 
@@ -897,13 +883,9 @@ func (e *EventHandler) ProcessEvents() {
 			var logOut []string
 			logDataValues := ""
 			if event.ProcessName == SYNCE {
-				// Update the metrics
 				logDataValues = event.GetLogData()
 				if event.WriteToLog && logDataValues != "" {
 					logOut = append(logOut, logDataValues)
-				}
-				if !e.stdoutToSocket {
-					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), event.IFace)
 				}
 			} else {
 
@@ -961,17 +943,6 @@ func (e *EventHandler) ProcessEvents() {
 					logOut = append(logOut, clockState.clkLog)
 				}
 
-				// Update the metrics
-				if !e.stdoutToSocket { // if events not enabled
-					e.UpdateClockStateMetrics(event.State, string(event.ProcessName), alias.GetAlias(event.IFace))
-					//  update all metric that was sent to events
-					e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
-
-					e.updateMetrics(event.CfgName, event.ProcessName, event.Values, dataDetails)
-					if clockState.leadingIFace != LEADING_INTERFACE_UNKNOWN { // race condition ;
-						e.UpdateClockStateMetrics(clockState.state, string(event.ClockType), alias.GetAlias(clockState.leadingIFace))
-					}
-				}
 				if event.ClockType == GM {
 					// Default Assignment: The clockAccuracy of clockState is initially set to the clockAccuracy of the event
 					//This serves as a default value.
@@ -1024,21 +995,18 @@ func (e *EventHandler) ProcessEvents() {
 			} // Not SYNC-E
 
 			if len(logOut) > 0 {
-				// Always print all logs to stdout regardless of socket state
 				for _, l := range logOut {
 					fmt.Printf("%s", l)
 				}
-				if e.stdoutToSocket {
-					if e.getConn() == nil {
-						glog.Error("No connection available, attempting reconnect")
-						if !e.reconnectEventSocket() {
-							glog.Warning("Reconnect failed, skipping socket writes; will retry on next event")
-						}
+				if e.getConn() == nil {
+					glog.Error("No connection available, attempting reconnect")
+					if !e.reconnectEventSocket() {
+						glog.Warning("Reconnect failed, skipping socket writes; will retry on next event")
 					}
-					for _, l := range logOut {
-						if !e.writeLogToSocket(l) {
-							break
-						}
+				}
+				for _, l := range logOut {
+					if !e.writeLogToSocket(l) {
+						break
 					}
 				}
 			}
@@ -1126,10 +1094,10 @@ func (e *EventHandler) GetPTPState(source EventSource, cfgName string) PTPState 
 
 // UpdateClockStateMetrics ...
 func (e *EventHandler) UpdateClockStateMetrics(state PTPState, process, iFace string) {
-	if !utils.CheckMetricSanity("ClockState", process, iFace) {
+	if e.clockMetric == nil {
 		return
 	}
-	if e.stdoutToSocket {
+	if !utils.CheckMetricSanity("ClockState", process, iFace) {
 		return
 	}
 	labels := prometheus.Labels{
@@ -1146,6 +1114,9 @@ func (e *EventHandler) UpdateClockStateMetrics(state PTPState, process, iFace st
 }
 
 func (e *EventHandler) updateMetrics(cfgName string, process EventSource, processData map[ValueType]interface{}, d *DataDetails) {
+	if e.offsetMetric == nil {
+		return
+	}
 	iface := alias.GetAlias(d.IFace)
 
 	for dataType, value := range processData { // update process with metrics
@@ -1226,9 +1197,6 @@ func registerMetrics(m *prometheus.GaugeVec) {
 }
 
 func (e *EventHandler) unregisterMetrics(configName string, processName string) {
-	if e.stdoutToSocket {
-		return // no need to unregister metrics if events are going to socket
-	}
 	if data, ok := e.data[configName]; ok {
 		for _, v := range data {
 			if string(v.ProcessName) == processName || processName == "" {
@@ -1290,12 +1258,7 @@ func (e *EventHandler) UpdateClockClass(clk ClockClassRequest) {
 		e.storeClockClassLocked(clk.cfgName, clockClass, clockAccuracy)
 		e.Unlock()
 		clockClassOut := utils.GetClockClassLogMessage(PTP4lProcessName, clk.cfgName, clockClass)
-		if e.stdoutToSocket {
-			e.writeLogToSocket(clockClassOut)
-		} else if e.clockClassMetric != nil {
-			e.clockClassMetric.With(prometheus.Labels{
-				"process": PTP4lProcessName, "config": clk.cfgName, "node": e.nodeName}).Set(float64(clockClass))
-		}
+		e.writeLogToSocket(clockClassOut)
 		fmt.Printf("%s", clockClassOut)
 	}
 }

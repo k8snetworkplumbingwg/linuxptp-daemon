@@ -104,10 +104,10 @@ func waitFor(t *testing.T, timeout time.Duration, desc string, cond func() bool)
 
 func TestMonitorExitsViaCmdStop(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
-	pmc := daemon.NewTestPMCProcess("test.config", "T-BC", mock.getMonitor, mock.poll)
+	pmc := daemon.NewTestPMCProcess(t, "test.config", "T-BC", mock.getMonitor, mock.poll)
 	mock.pmc = pmc
 
-	pmc.CmdRun(false)
+	pmc.CmdRun()
 
 	waitFor(t, 5*time.Second, "poll called at least once", func() bool {
 		return mock.pollCount.Load() > 0
@@ -122,10 +122,10 @@ func TestMonitorExitsViaCmdStop(t *testing.T) {
 
 func TestMonitorNoOrphanAfterProcessDeath(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
-	pmc := daemon.NewTestPMCProcess("test.config", "T-BC", mock.getMonitor, mock.poll)
+	pmc := daemon.NewTestPMCProcess(t, "test.config", "T-BC", mock.getMonitor, mock.poll)
 	mock.pmc = pmc
 
-	pmc.CmdRun(false)
+	pmc.CmdRun()
 
 	waitFor(t, 5*time.Second, "poll called at least once", func() bool {
 		return mock.pollCount.Load() > 0
@@ -158,10 +158,10 @@ func TestMonitorNoOrphanAfterProcessDeath(t *testing.T) {
 
 func TestCmdStopIdempotent(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
-	pmc := daemon.NewTestPMCProcess("test.config", "T-BC", mock.getMonitor, mock.poll)
+	pmc := daemon.NewTestPMCProcess(t, "test.config", "T-BC", mock.getMonitor, mock.poll)
 	mock.pmc = pmc
 
-	pmc.CmdRun(false)
+	pmc.CmdRun()
 
 	waitFor(t, 5*time.Second, "poll called at least once", func() bool {
 		return mock.pollCount.Load() > 0
@@ -178,7 +178,7 @@ func TestCmdStopIdempotent(t *testing.T) {
 
 func TestCmdStopBeforeCmdRun(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
-	pmc := daemon.NewTestPMCProcess("test.config", "T-BC", mock.getMonitor, mock.poll)
+	pmc := daemon.NewTestPMCProcess(t, "test.config", "T-BC", mock.getMonitor, mock.poll)
 	mock.pmc = pmc
 
 	pmc.CmdStop()
@@ -188,7 +188,7 @@ func TestCmdStopBeforeCmdRun(t *testing.T) {
 	}
 
 	// CmdRun after CmdStop should return early without starting monitoring
-	pmc.CmdRun(false)
+	pmc.CmdRun()
 
 	time.Sleep(500 * time.Millisecond)
 

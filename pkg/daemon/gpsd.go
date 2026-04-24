@@ -172,7 +172,7 @@ func (g *GPSD) ProcessStatus(c net.Conn, status int64) {
 }
 
 // CmdRun ... run GPSD
-func (g *GPSD) CmdRun(stdoutToSocket bool) {
+func (g *GPSD) CmdRun() {
 	defer func() {
 		if g.subscriber != nil {
 			g.unRegisterSubscriber()
