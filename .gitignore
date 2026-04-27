@@ -20,3 +20,6 @@ bin/
 
 # Personal environment overrides
 .env
+# SDLC related files
+.cursor/
+.specify/
