@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ptp4lconf"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 
 	"github.com/golang/glog"
@@ -701,7 +702,7 @@ func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
 	return
 }
 
-func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf, stdoutToSocket bool) {
+func addFlagsForMonitor(process string, configOpts *string, conf *ProfileConfig, stdoutToSocket bool) {
 	switch process {
 	case "ptp4l":
 		// If output doesn't exist we add it for the prometheus exporter
@@ -712,9 +713,9 @@ func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf, std
 			}
 
 			if !strings.Contains(*configOpts, "--summary_interval") {
-				_, exist := conf.getPtp4lConfOptionOrEmptyString(GlobalSectionName, "summary_interval")
+				_, exist := conf.GetOption(ptp4lconf.GlobalSectionName, "summary_interval")
 				if !exist {
-					conf.setPtp4lConfOption(GlobalSectionName, "summary_interval", "1", true)
+					conf.SetOption(ptp4lconf.GlobalSectionName, "summary_interval", "1", true)
 				}
 			}
 		}
