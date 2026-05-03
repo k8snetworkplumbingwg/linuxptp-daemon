@@ -78,6 +78,18 @@ type ProfileConfig struct {
 	gnssSerialPort string
 }
 
+// deriveClockType infers the PTP clock type from parsed port role counts.
+func deriveClockType(roles ptp4lconf.PortRoleSummary) event.ClockType {
+	hasSlaveConfig := roles.SlaveOnlyTrue > 0 || roles.MasterOnlyFalse > 0
+	if !hasSlaveConfig {
+		return event.GM
+	}
+	if roles.TotalPorts > 1 {
+		return event.BC
+	}
+	return event.OC
+}
+
 func NewLinuxPTPConfUpdate() (*LinuxPTPConfUpdate, error) {
 	if _, err := os.Stat(PTP4L_CONF_FILE_PATH); err != nil {
 		if os.IsNotExist(err) {

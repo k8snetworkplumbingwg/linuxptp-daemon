@@ -62,7 +62,7 @@ func extractUpstreamPortsFromPtpProfile(ptpProfile *ptpv1.PtpProfile) []string {
 	}
 
 	conf := &ptp4lconf.Conf{}
-	if err := conf.Populate(ptpProfile.Ptp4lConf, nil); err != nil {
+	if err := conf.Populate(ptpProfile.Ptp4lConf); err != nil {
 		glog.Errorf("failed to parse ptp4l config for upstream port extraction: %v", err)
 		return nil
 	}

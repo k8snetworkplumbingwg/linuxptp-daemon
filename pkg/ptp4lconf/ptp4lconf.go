@@ -2,10 +2,7 @@ package ptp4lconf
 
 import (
 	"errors"
-	"regexp"
 	"strings"
-
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 )
 
 // Predefined ptp4l config section names.
@@ -14,8 +11,6 @@ const (
 	NmeaSectionName    = "[nmea]"
 	UnicastSectionName = "[unicast_master_table]"
 )
-
-var cliArgsSlaveFlagsRegex = regexp.MustCompile(`--(slaveOnly|clientOnly)(\s+1|=1)(\s|$)`)
 
 // Option is a single key-value pair within a ptp4l config section.
 type Option struct {
@@ -29,10 +24,23 @@ type Section struct {
 	Options     []Option
 }
 
+// PortRoleSummary counts how many interface ports have explicit
+// master/server or slave/client role settings.
+// "Default" means the key was absent for that port.
+type PortRoleSummary struct {
+	MasterOnlyTrue    int // ports with masterOnly=1 or serverOnly=1
+	MasterOnlyFalse   int // ports with masterOnly=0 or serverOnly=0
+	MasterOnlyDefault int // ports with no masterOnly/serverOnly set
+	SlaveOnlyTrue     int // ports with slaveOnly=1 or clientOnly=1
+	SlaveOnlyFalse    int // ports with slaveOnly=0 or clientOnly=0
+	SlaveOnlyDefault  int // ports with no slaveOnly/clientOnly set
+	TotalPorts        int // total interface sections (excludes global, nmea, unicast)
+}
+
 // Conf represents a parsed ptp4l configuration (section-based, space-delimited key-value format).
 type Conf struct {
 	Sections  []Section
-	ClockType event.ClockType
+	PortRoles PortRoleSummary
 }
 
 // GetOption returns the value for a given key in the named section.
@@ -86,64 +94,80 @@ func (c *Conf) SetOption(sectionName, key, value string, overwrite bool) {
 	c.Sections[index] = updatedSection
 }
 
-// Populate parses a ptp4l config string and optional CLI args into sections/options
-// and infers the clock type.
-func (c *Conf) Populate(config *string, cliArgs *string) error {
+// Populate parses a ptp4l config string into sections/options
+// and collects per-port role summary counts.
+func (c *Conf) Populate(config *string) error {
 	var currentSectionName string
 	c.Sections = make([]Section, 0)
-	hasSlaveConfigDefined := false
+	c.PortRoles = PortRoleSummary{}
 
-	if cliArgs != nil {
-		args := *cliArgs
-		for _, arg := range strings.Fields(args) {
-			if arg == "-s" {
-				hasSlaveConfigDefined = true
-				break
-			}
-		}
-		if cliArgsSlaveFlagsRegex.MatchString(args) {
-			hasSlaveConfigDefined = true
-		}
+	if config == nil {
+		return nil
 	}
 
-	ifaceCount := 0
-	if config != nil {
-		for _, line := range strings.Split(*config, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			} else if strings.HasPrefix(line, "[") {
-				if !strings.HasSuffix(line, "]") {
-					return errors.New("Section missing closing ']': " + line)
-				}
-				currentSectionName = line
-				if currentSectionName != GlobalSectionName && currentSectionName != NmeaSectionName && currentSectionName != UnicastSectionName {
-					ifaceCount++
-				}
-				c.SetOption(currentSectionName, "", "", false)
-			} else {
-				split := strings.IndexAny(line, " \t")
-				if split > 0 {
-					key := line[:split]
-					value := strings.TrimSpace(line[split:])
-					c.SetOption(currentSectionName, key, value, false)
-					if (key == "masterOnly" && value == "0" && currentSectionName != GlobalSectionName) ||
-						(key == "serverOnly" && value == "0") ||
-						(key == "slaveOnly" && value == "1") ||
-						(key == "clientOnly" && value == "1") {
-						hasSlaveConfigDefined = true
+	type portFlags struct {
+		hasMaster bool
+		hasSlave  bool
+	}
+	portFlagMap := make(map[string]*portFlags)
+
+	for _, line := range strings.Split(*config, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		} else if strings.HasPrefix(line, "[") {
+			if !strings.HasSuffix(line, "]") {
+				return errors.New("Section missing closing ']': " + line)
+			}
+			currentSectionName = line
+			if currentSectionName != GlobalSectionName && currentSectionName != NmeaSectionName && currentSectionName != UnicastSectionName {
+				c.PortRoles.TotalPorts++
+				portFlagMap[currentSectionName] = &portFlags{}
+			}
+			c.SetOption(currentSectionName, "", "", false)
+		} else {
+			split := strings.IndexAny(line, " \t")
+			if split > 0 {
+				key := line[:split]
+				value := strings.TrimSpace(line[split:])
+				c.SetOption(currentSectionName, key, value, false)
+
+				pf, isPort := portFlagMap[currentSectionName]
+				if !isPort {
+					// global-level slaveOnly/clientOnly still counts
+					if currentSectionName == GlobalSectionName {
+						if (key == "slaveOnly" && value == "1") || (key == "clientOnly" && value == "1") {
+							c.PortRoles.SlaveOnlyTrue++
+						}
 					}
+					continue
+				}
+
+				switch {
+				case (key == "masterOnly" || key == "serverOnly") && value == "1":
+					c.PortRoles.MasterOnlyTrue++
+					pf.hasMaster = true
+				case (key == "masterOnly" || key == "serverOnly") && value == "0":
+					c.PortRoles.MasterOnlyFalse++
+					pf.hasMaster = true
+				case (key == "slaveOnly" || key == "clientOnly") && value == "1":
+					c.PortRoles.SlaveOnlyTrue++
+					pf.hasSlave = true
+				case (key == "slaveOnly" || key == "clientOnly") && value == "0":
+					c.PortRoles.SlaveOnlyFalse++
+					pf.hasSlave = true
 				}
 			}
 		}
 	}
 
-	if !hasSlaveConfigDefined {
-		c.ClockType = event.GM
-	} else if ifaceCount > 1 {
-		c.ClockType = event.BC
-	} else {
-		c.ClockType = event.OC
+	for _, pf := range portFlagMap {
+		if !pf.hasMaster {
+			c.PortRoles.MasterOnlyDefault++
+		}
+		if !pf.hasSlave {
+			c.PortRoles.SlaveOnlyDefault++
+		}
 	}
 
 	return nil

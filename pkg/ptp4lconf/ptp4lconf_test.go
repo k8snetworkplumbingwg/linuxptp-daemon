@@ -3,123 +3,117 @@ package ptp4lconf
 import (
 	"testing"
 
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/stretchr/testify/assert"
-	"k8s.io/utils/ptr"
 )
 
-func TestConf_Populate_ClockType(t *testing.T) {
+func TestConf_Populate_PortRoleSummary(t *testing.T) {
 	tests := []struct {
-		name              string
-		config            string
-		cliArgs           *string
-		expectedClockType event.ClockType
+		name          string
+		config        string
+		expectedRoles PortRoleSummary
 	}{
 		{
-			name:              "OC with -s flag",
-			config:            "[global]\n",
-			cliArgs:           ptr.To("-s -f /etc/ptp4l.conf"),
-			expectedClockType: event.OC,
+			name:   "global slaveOnly 1",
+			config: "[global]\nslaveOnly 1\n",
+			expectedRoles: PortRoleSummary{
+				SlaveOnlyTrue: 1,
+			},
 		},
 		{
-			name:              "OC with -s and single interface",
-			config:            "[global]\n[ens1f0]\n",
-			cliArgs:           ptr.To("-s"),
-			expectedClockType: event.OC,
+			name:   "global clientOnly 1",
+			config: "[global]\nclientOnly 1\n",
+			expectedRoles: PortRoleSummary{
+				SlaveOnlyTrue: 1,
+			},
 		},
 		{
-			name:              "BC with -s and multiple interfaces",
-			config:            "[global]\n[ens1f0]\nmasterOnly 0\n[ens1f1]\nmasterOnly 1",
-			cliArgs:           ptr.To("-s"),
-			expectedClockType: event.BC,
+			name:   "single port with masterOnly 1",
+			config: "[global]\n[ens1f0]\nmasterOnly 1\n",
+			expectedRoles: PortRoleSummary{
+				MasterOnlyTrue:   1,
+				SlaveOnlyDefault: 1,
+				TotalPorts:       1,
+			},
 		},
 		{
-			name:              "GM with masterOnly interfaces",
-			config:            "[global]\n[ens1f0]\nmasterOnly 1\n[ens1f1]\nmasterOnly 1",
-			cliArgs:           ptr.To("-f /etc/ptp4l.conf"),
-			expectedClockType: event.GM,
+			name:   "single port with masterOnly 0",
+			config: "[global]\n[ens1f0]\nmasterOnly 0\n",
+			expectedRoles: PortRoleSummary{
+				MasterOnlyFalse:  1,
+				SlaveOnlyDefault: 1,
+				TotalPorts:       1,
+			},
 		},
 		{
-			name:              "OC with slaveOnly config",
-			config:            "[global]\nslaveOnly 1\n",
-			cliArgs:           nil,
-			expectedClockType: event.OC,
+			name:   "single port with clientOnly 1",
+			config: "[global]\n[ens1f0]\nclientOnly 1\n",
+			expectedRoles: PortRoleSummary{
+				SlaveOnlyTrue:     1,
+				MasterOnlyDefault: 1,
+				TotalPorts:        1,
+			},
 		},
 		{
-			name:              "GM with masterOnly config",
-			config:            "[global]\n[ens1f0]\nmasterOnly 1\n",
-			cliArgs:           nil,
-			expectedClockType: event.GM,
+			name:   "two ports all masterOnly 1",
+			config: "[global]\n[ens1f0]\nmasterOnly 1\n[ens1f1]\nmasterOnly 1",
+			expectedRoles: PortRoleSummary{
+				MasterOnlyTrue:   2,
+				SlaveOnlyDefault: 2,
+				TotalPorts:       2,
+			},
 		},
 		{
-			name:              "BC with serverOnly 0",
-			config:            "[global]\n[ens1f0]\nserverOnly 0\n[ens1f1]\nmasterOnly 1\n",
-			cliArgs:           nil,
-			expectedClockType: event.BC,
+			name:   "two ports mixed masterOnly",
+			config: "[global]\n[ens1f0]\nmasterOnly 0\n[ens1f1]\nmasterOnly 1",
+			expectedRoles: PortRoleSummary{
+				MasterOnlyTrue:   1,
+				MasterOnlyFalse:  1,
+				SlaveOnlyDefault: 2,
+				TotalPorts:       2,
+			},
 		},
 		{
-			name:              "OC with clientOnly 1",
-			config:            "[global]\n[ens1f0]\nclientOnly 1\n",
-			cliArgs:           nil,
-			expectedClockType: event.OC,
+			name:   "serverOnly 0 and masterOnly 1",
+			config: "[global]\n[ens1f0]\nserverOnly 0\n[ens1f1]\nmasterOnly 1\n",
+			expectedRoles: PortRoleSummary{
+				MasterOnlyTrue:   1,
+				MasterOnlyFalse:  1,
+				SlaveOnlyDefault: 2,
+				TotalPorts:       2,
+			},
 		},
 		{
-			name:              "OC with --slaveOnly 1",
-			config:            "[global]\n",
-			cliArgs:           ptr.To("--slaveOnly 1 -f /etc/ptp4l.conf"),
-			expectedClockType: event.OC,
+			name:   "two ports no role settings",
+			config: "[global]\n[ens1f0]\n[ens1f1]\n",
+			expectedRoles: PortRoleSummary{
+				MasterOnlyDefault: 2,
+				SlaveOnlyDefault:  2,
+				TotalPorts:        2,
+			},
 		},
 		{
-			name:              "OC with --slaveOnly=1",
-			config:            "[global]\n",
-			cliArgs:           ptr.To("--slaveOnly=1 -f /etc/ptp4l.conf"),
-			expectedClockType: event.OC,
+			name:          "no ports",
+			config:        "[global]\ndomainNumber 24\n",
+			expectedRoles: PortRoleSummary{},
 		},
 		{
-			name:              "GM with --slaveOnly 0",
-			config:            "[global]\n[ens1f0]\n",
-			cliArgs:           ptr.To("--slaveOnly 0 -f /etc/ptp4l.conf"),
-			expectedClockType: event.GM,
-		},
-		{
-			name:              "OC with --clientOnly 1",
-			config:            "[global]\n",
-			cliArgs:           ptr.To("--clientOnly 1 -f /etc/ptp4l.conf"),
-			expectedClockType: event.OC,
-		},
-		{
-			name:              "OC with --clientOnly=1",
-			config:            "[global]\n",
-			cliArgs:           ptr.To("--clientOnly=1 -f /etc/ptp4l.conf"),
-			expectedClockType: event.OC,
-		},
-		{
-			name:              "GM with --clientOnly 0",
-			config:            "[global]\n[ens1f0]\n",
-			cliArgs:           ptr.To("--clientOnly 0 -f /etc/ptp4l.conf"),
-			expectedClockType: event.GM,
-		},
-		{
-			name:              "GM with no slave configuration",
-			config:            "[global]\n[ens1f0]\n[ens1f1]\n",
-			cliArgs:           ptr.To("-f /etc/ptp4l.conf -m"),
-			expectedClockType: event.GM,
-		},
-		{
-			name:              "OC with -s at end of args",
-			config:            "[global]\n",
-			cliArgs:           ptr.To("-f /etc/ptp4l.conf -s"),
-			expectedClockType: event.OC,
+			name:   "port with slaveOnly 0",
+			config: "[global]\n[ens1f0]\nslaveOnly 0\n",
+			expectedRoles: PortRoleSummary{
+				SlaveOnlyFalse:    1,
+				MasterOnlyDefault: 1,
+				TotalPorts:        1,
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			conf := &Conf{}
-			err := conf.Populate(&tt.config, tt.cliArgs)
+			err := conf.Populate(&tt.config)
 			assert.NoError(t, err)
-			assert.Equal(t, tt.expectedClockType, conf.ClockType,
-				"Clock type mismatch: expected %v, got %v", tt.expectedClockType, conf.ClockType)
+			assert.Equal(t, tt.expectedRoles, conf.PortRoles,
+				"PortRoleSummary mismatch")
 		})
 	}
 }
@@ -127,7 +121,7 @@ func TestConf_Populate_ClockType(t *testing.T) {
 func TestConf_Populate_Parsing(t *testing.T) {
 	config := "[global]\ndomainNumber 24\n[ens1f0]\nmasterOnly 1\n[ens1f1]\nmasterOnly 0"
 	conf := &Conf{}
-	err := conf.Populate(&config, nil)
+	err := conf.Populate(&config)
 	assert.NoError(t, err)
 	assert.Len(t, conf.Sections, 3)
 
@@ -179,22 +173,22 @@ func TestConf_GetOption_NotFound(t *testing.T) {
 func TestConf_Populate_Error(t *testing.T) {
 	badConfig := "[global\ndomainNumber 24"
 	conf := &Conf{}
-	err := conf.Populate(&badConfig, nil)
+	err := conf.Populate(&badConfig)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Section missing closing ']'")
 }
 
 func TestConf_Populate_NilConfig(t *testing.T) {
 	conf := &Conf{}
-	err := conf.Populate(nil, nil)
+	err := conf.Populate(nil)
 	assert.NoError(t, err)
-	assert.Equal(t, event.GM, conf.ClockType)
+	assert.Equal(t, PortRoleSummary{}, conf.PortRoles)
 }
 
 func TestConf_Populate_SkipsComments(t *testing.T) {
 	config := "[global]\n# this is a comment\ndomainNumber 24"
 	conf := &Conf{}
-	err := conf.Populate(&config, nil)
+	err := conf.Populate(&config)
 	assert.NoError(t, err)
 
 	val, ok := conf.GetOption("[global]", "domainNumber")

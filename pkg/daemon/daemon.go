@@ -896,15 +896,12 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	// If unset default to clock type inferred from ptp4l
 	if clockType == event.ClockUnset {
 		ptp4lOutput := &ProfileConfig{}
-		// Parsing ptp4l needs to be done here to get the fallback clock type.
-		// Needs to be done outside the loop as we need to guarantee clockType
-		// set before the ts2phcProcessName case where it is used.
-		err = ptp4lOutput.Populate(nodeProfile.Ptp4lConf, nodeProfile.Ptp4lOpts)
+		err = ptp4lOutput.Populate(nodeProfile.Ptp4lConf)
 		if err != nil {
 			printNodeProfile(nodeProfile)
 			return err
 		}
-		clockType = ptp4lOutput.ClockType
+		clockType = deriveClockType(ptp4lOutput.PortRoles)
 	}
 
 	for _, pProcess := range ptpProcesses {
@@ -986,7 +983,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		}
 
 		output := &ProfileConfig{}
-		err = output.Populate(configInput, nil) // cli args not needed as we already have clock type from ptp4l
+		err = output.Populate(configInput)
 		if err != nil {
 			printNodeProfile(nodeProfile)
 			return err
