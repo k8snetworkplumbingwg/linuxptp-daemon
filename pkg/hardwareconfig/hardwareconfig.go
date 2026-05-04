@@ -198,6 +198,8 @@ type enrichedHardwareConfig struct {
 	structureSysFSCommands []SysFSCommand
 	// Holdover parameters mapped by clock ID
 	holdoverParams map[uint64]*ptpv2alpha1.HoldoverParameters
+	// DPLL monitoring flags mapped by clock ID (from hardware vendor defaults)
+	dpllFlags map[uint64]dpllcfg.Flag
 }
 
 // HardwareConfigManager manages hardware configurations and their application
@@ -361,6 +363,13 @@ func (hcm *HardwareConfigManager) UpdateHardwareConfig(hwConfigs []ptpv2alpha1.H
 		prepared[i].holdoverParams = holdoverParams
 		if len(holdoverParams) > 0 {
 			glog.Infof("  holdover: extracted parameters for %d DPLLs", len(holdoverParams))
+		}
+
+		// Extract DPLL flags from hardware vendor defaults
+		dpllFlags := hcm.extractDPLLFlags(*resolvedConfig)
+		prepared[i].dpllFlags = dpllFlags
+		if len(dpllFlags) > 0 {
+			glog.Infof("  dpllFlags: extracted flags for %d DPLLs", len(dpllFlags))
 		}
 	}
 
@@ -2217,6 +2226,71 @@ func (hcm *HardwareConfigManager) GetHoldoverParameters(profileName string, cloc
 		if hwConfig.Spec.RelatedPtpProfileName == profileName {
 			if params, found := hwConfig.holdoverParams[clockID]; found {
 				return params
+			}
+		}
+	}
+
+	return nil
+}
+
+// extractDPLLFlags extracts DPLL monitoring flags from hardware vendor defaults for all subsystems.
+// Flags are intrinsic to the hardware model (e.g., E830 only reports phase status)
+// and are loaded from the embedded defaults.yaml for each subsystem's hardwareSpecificDefinitions.
+func (hcm *HardwareConfigManager) extractDPLLFlags(hwConfig ptpv2alpha1.HardwareConfig) map[uint64]dpllcfg.Flag {
+	flags := make(map[uint64]dpllcfg.Flag)
+
+	for _, subsystem := range hwConfig.Spec.Profile.ClockChain.Structure {
+		hwDefPath := strings.TrimSpace(subsystem.HardwareSpecificDefinitions)
+		if hwDefPath == "" {
+			continue
+		}
+
+		hwDefaults, err := hcm.getHardwareDefaults(hwDefPath)
+		if err != nil || hwDefaults == nil {
+			continue
+		}
+
+		dpllFlags, err := hwDefaults.ParseDPLLFlags()
+		if err != nil {
+			glog.Warningf("Subsystem %s: failed to parse DPLL flags from %s: %v", subsystem.Name, hwDefPath, err)
+			continue
+		}
+		if dpllFlags == 0 {
+			continue
+		}
+
+		networkInterface := subsystem.DPLL.NetworkInterface
+		if networkInterface == "" && len(subsystem.Ethernet) > 0 && len(subsystem.Ethernet[0].Ports) > 0 {
+			networkInterface = subsystem.Ethernet[0].Ports[0]
+		}
+		if networkInterface == "" {
+			glog.Warningf("Subsystem %s has DPLL flags but no network interface", subsystem.Name)
+			continue
+		}
+
+		clockID, err := hcm.getClockIDCached(networkInterface, hwDefPath)
+		if err != nil {
+			glog.Warningf("Subsystem %s: failed to resolve clock ID from interface %s: %v", subsystem.Name, networkInterface, err)
+			continue
+		}
+
+		flags[clockID] = dpllFlags
+		glog.Infof("  DPLL flags for clock %#x (subsystem %s, hw %s): %d", clockID, subsystem.Name, hwDefPath, dpllFlags)
+	}
+
+	return flags
+}
+
+// GetDPLLFlags returns DPLL monitoring flags for a specific clock ID from the given profile.
+// Returns nil if no DPLL flags are configured for the clock ID.
+func (hcm *HardwareConfigManager) GetDPLLFlags(profileName string, clockID uint64) *dpllcfg.Flag {
+	hcm.mu.RLock()
+	defer hcm.mu.RUnlock()
+
+	for _, hwConfig := range hcm.hardwareConfigs {
+		if hwConfig.Spec.RelatedPtpProfileName == profileName {
+			if f, found := hwConfig.dpllFlags[clockID]; found {
+				return &f
 			}
 		}
 	}

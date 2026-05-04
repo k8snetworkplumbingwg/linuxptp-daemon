@@ -402,6 +402,12 @@ func (dn *Daemon) getHoldoverParameters(profileName string, clockID uint64) *ptp
 	return dn.hardwareConfigManager.GetHoldoverParameters(profileName, clockID)
 }
 
+// getDPLLFlags retrieves DPLL monitoring flags from HardwareConfig for a specific clock ID.
+// Returns nil if no hardware config is available or no flags are configured for the clock.
+func (dn *Daemon) getDPLLFlags(profileName string, clockID uint64) *dpll.Flag {
+	return dn.hardwareConfigManager.GetDPLLFlags(profileName, clockID)
+}
+
 // getInterfacesFromHardwareConfig derives interfaces from hardwareconfig structure for T-BC mode.
 // It extracts the first interface from structure[*]->dpll->networkInterface.
 // Returns an empty slice if no hardwareconfig is available or no interfaces are found.
@@ -1254,6 +1260,14 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 						// Fall back to plugin/profile settings (backward compatibility)
 						glog.Infof("Using holdover parameters from profile/plugin for clock %#x: MaxInSpec=%dns, LocalMaxOffset=%dns, Timeout=%ds",
 							clockId, maxInSpecOffset, localMaxHoldoverOffSet, localHoldoverTimeout)
+					}
+
+					// Try to get DPLL flags from HardwareConfig (new system)
+					// This takes precedence over plugin-provided values
+					hwFlags := dn.getDPLLFlags(profileName, clockId)
+					if hwFlags != nil {
+						flags = *hwFlags
+						glog.Infof("Using DPLL flags from HardwareConfig for clock %#x: %d", clockId, flags)
 					}
 
 					eventSource = []event.EventSource{iface.Source}

@@ -429,3 +429,89 @@ func findConditionByName(conditions []ptpv2alpha1.Condition, name string) *ptpv2
 	}
 	return nil
 }
+
+// TestClockChainResolutionWithE830 verifies that ResolveClockChain succeeds for
+// a combined E825+E830 config: the leader (E825) gets full structure/behavior
+// derivation while E830 subsystems are skipped as unmanaged DPLLs.
+func TestClockChainResolutionWithE830(t *testing.T) {
+	hwConfig, err := loadHardwareConfigFromFile("testdata/gnrd-hwconfig-e830.yaml")
+	assert.NoError(t, err)
+	if hwConfig == nil {
+		t.Fatal("hwConfig is nil")
+	}
+
+	assert.Equal(t, "T-BC", *hwConfig.Spec.Profile.ClockType)
+	assert.GreaterOrEqual(t, len(hwConfig.Spec.Profile.ClockChain.Structure), 2)
+
+	// Capture original E830 subsystem state before resolution
+	type e830Snapshot struct {
+		name             string
+		networkInterface string
+	}
+	var e830Before []e830Snapshot
+	for _, sub := range hwConfig.Spec.Profile.ClockChain.Structure[1:] {
+		e830Before = append(e830Before, e830Snapshot{
+			name:             sub.Name,
+			networkInterface: sub.DPLL.NetworkInterface,
+		})
+	}
+
+	// Load ptpconfig
+	ptpConfig, err := loadPtpConfigFromFile("testdata/tbc-gnrd.yaml")
+	assert.NoError(t, err)
+	if ptpConfig == nil {
+		t.Fatal("ptpConfig is nil")
+	}
+
+	// Set up mock leading interface resolver for the leader subsystem
+	mockResolver := newMockLeadingInterfaceResolver()
+	mockResolver.phcIDs["eno2"] = "/dev/ptp0"
+	mockResolver.symlinks["/sys/class/ptp/ptp0/device"] = "../../../0000:13:00.0"
+	mockResolver.dirEntries["/sys/bus/pci/devices/0000:13:00.0/net"] = []os.DirEntry{
+		&mockDirEntry{name: "eno5", isDir: false},
+	}
+	SetLeadingInterfaceResolver(mockResolver)
+	defer ResetLeadingInterfaceResolver()
+
+	fakeClient := fake.NewSimpleClientset()
+	hcm := NewHardwareConfigManager(fakeClient, "default")
+
+	resolvedConfig, err := hcm.ResolveClockChain(hwConfig, ptpConfig)
+	assert.NoError(t, err, "ResolveClockChain should succeed with E830 subsystems")
+	if resolvedConfig == nil {
+		t.Fatal("resolvedConfig is nil")
+	}
+
+	// Verify leader (E825) was resolved normally
+	leader := resolvedConfig.Spec.Profile.ClockChain.Structure[0]
+	assert.Equal(t, "leader", leader.Name)
+	assert.Equal(t, "intel/e825", leader.HardwareSpecificDefinitions)
+	assert.Equal(t, "eno5", leader.DPLL.NetworkInterface,
+		"Leader NetworkInterface should be derived")
+	assert.NotEmpty(t, leader.DPLL.PhaseInputs,
+		"Leader should have derived PhaseInputs")
+	assert.NotEmpty(t, leader.Ethernet,
+		"Leader should have derived Ethernet ports")
+
+	// Verify behavior was derived (only for the leader, E830 skipped)
+	assert.NotNil(t, resolvedConfig.Spec.Profile.ClockChain.Behavior)
+	ptpSource := findSourceByName(resolvedConfig.Spec.Profile.ClockChain.Behavior.Sources, "PTP")
+	assert.NotNil(t, ptpSource, "PTP source should be present from leader behavior")
+
+	// Verify E830 subsystems were left untouched
+	for i, snap := range e830Before {
+		sub := resolvedConfig.Spec.Profile.ClockChain.Structure[1+i]
+		assert.Equal(t, snap.name, sub.Name)
+		assert.Equal(t, "intel/e830", sub.HardwareSpecificDefinitions)
+		assert.Equal(t, snap.networkInterface, sub.DPLL.NetworkInterface,
+			"E830 subsystem %s networkInterface should be preserved", sub.Name)
+		assert.Empty(t, sub.DPLL.PhaseInputs,
+			"E830 subsystem %s should have no PhaseInputs", sub.Name)
+		assert.Empty(t, sub.DPLL.PhaseOutputs,
+			"E830 subsystem %s should have no PhaseOutputs", sub.Name)
+		assert.Empty(t, sub.Ethernet,
+			"E830 subsystem %s should have no Ethernet ports", sub.Name)
+	}
+
+	t.Logf("ResolveClockChain succeeded: leader derived, %d E830 subsystems skipped", len(e830Before))
+}
