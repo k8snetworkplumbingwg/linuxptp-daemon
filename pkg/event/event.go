@@ -657,7 +657,7 @@ func (e *EventHandler) emitClockClass(clockClass fbprotocol.ClockClass, cfgName 
 		logMsg := utils.GetClockClassLogMessage(PTP4lProcessName, cfgName, clockClass)
 		e.writeLogToSocket(logMsg)
 	}
-	if !e.stdoutToSocket && e.clockClassMetric != nil {
+	if e.clockClassMetric != nil {
 		e.clockClassMetric.With(prometheus.Labels{
 			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
 	}
@@ -1292,7 +1292,8 @@ func (e *EventHandler) UpdateClockClass(clk ClockClassRequest) {
 		clockClassOut := utils.GetClockClassLogMessage(PTP4lProcessName, clk.cfgName, clockClass)
 		if e.stdoutToSocket {
 			e.writeLogToSocket(clockClassOut)
-		} else if e.clockClassMetric != nil {
+		}
+		if e.clockClassMetric != nil {
 			e.clockClassMetric.With(prometheus.Labels{
 				"process": PTP4lProcessName, "config": clk.cfgName, "node": e.nodeName}).Set(float64(clockClass))
 		}

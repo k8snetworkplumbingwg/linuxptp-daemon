@@ -13,6 +13,8 @@ import (
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -615,6 +617,43 @@ func TestEmitClockClass_NilConnectionNoWrite(_ *testing.T) {
 	e.closeCh <- true
 	// should not panic
 	e.emitClockClass(fbprotocol.ClockClass(6), "ptp4l.0.config")
+}
+
+func TestEmitClockClass_UpdatesPrometheusMetricWithSocket(t *testing.T) {
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	received := make(chan string, 10)
+	go acceptAndRead(listener, received)
+
+	e := newTestEventHandler(socketPath)
+	assert.True(t, e.stdoutToSocket, "stdoutToSocket must be true for this test")
+	assert.True(t, e.reconnectEventSocket())
+
+	metric := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "openshift",
+		Subsystem: "ptp",
+		Name:      "clock_class_test",
+		Help:      "test metric",
+	}, []string{"process", "config", "node"})
+	e.clockClassMetric = metric
+
+	e.emitClockClass(fbprotocol.ClockClass(248), "ptp4l.0.config")
+
+	select {
+	case got := <-received:
+		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 248", "socket should receive the clock class event")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for socket message")
+	}
+
+	g := metric.With(prometheus.Labels{"process": PTP4lProcessName, "config": "ptp4l.0.config", "node": e.nodeName})
+	assert.Equal(t, float64(248), testutil.ToFloat64(g),
+		"Prometheus metric must be updated even when stdoutToSocket is true")
+
+	e.setConn(nil)
 }
 
 func TestEmitClockClass_ReconnectsOnBrokenPipe(t *testing.T) {
