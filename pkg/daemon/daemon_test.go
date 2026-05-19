@@ -911,3 +911,31 @@ func TestDaemon_PopulateAndRenderPtp4lConf(t *testing.T) {
 		assert.Equal(t, tc.expectedOutput, actualOutput, fmt.Sprintf("Rendered output doesn't match expected: %s", tc.testName))
 	}
 }
+
+func TestDaemon_DisplayProfileName(t *testing.T) {
+	tests := []struct {
+		qualified string
+		expected  string
+	}{
+		{"crName_profileName", "profileName"},
+		{"my-config_my-profile", "my-profile"},
+		{"cr_profile_with_underscores", "profile_with_underscores"},
+		{"noprefix", "noprefix"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		result := daemon.DisplayProfileName(tt.qualified)
+		assert.Equal(t, tt.expected, result, "DisplayProfileName(%q)", tt.qualified)
+	}
+}
+
+func TestDaemon_RenderPtp4lConfStripsQualifiedProfileName(t *testing.T) {
+	conf := &daemon.Ptp4lConf{}
+	testConf := "[global]\nslaveOnly 1"
+	conf.PopulatePtp4lConf(&testConf, nil)
+	conf.AddInterfaceSection("ens2f0")
+	conf.ExtendGlobalSection("my-ptpconfig_OC", "tag", "/var/run/ptp4l.0.socket", "")
+	actualOutput, _ := conf.RenderPtp4lConf()
+	expected := "#profile: OC from ptpconfig my-ptpconfig\n\n[global]\nslaveOnly 1\nmessage_tag tag\nuds_address /var/run/ptp4l.0.socket\n[ens2f0]"
+	assert.Equal(t, expected, actualOutput, "Config header should show profile name and ptpconfig origin")
+}

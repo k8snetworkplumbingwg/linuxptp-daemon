@@ -407,6 +407,21 @@ func (r *HardwareConfigReconciler) recordUpdateFailure(ctx context.Context, conf
 	// For now, we rely on events for error reporting
 }
 
+// formatQualifiedProfiles formats qualified profile names (ptpconfig_profileName)
+// into human-readable strings: "profile 'X' (ptpconfig 'Y'), ..."
+func formatQualifiedProfiles(qualifiedNames []string) string {
+	parts := make([]string, 0, len(qualifiedNames))
+	for _, qn := range qualifiedNames {
+		crName, profileName := hc.SplitQualifiedName(qn)
+		if crName != "" {
+			parts = append(parts, fmt.Sprintf("profile '%s' (ptpconfig '%s')", profileName, crName))
+		} else {
+			parts = append(parts, fmt.Sprintf("profile '%s'", qn))
+		}
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
 // ptpProfileNameMatchesActive reports whether relatedProfile is considered active.
 func ptpProfileNameMatchesActive(relatedProfile string, activePTPProfiles map[string]bool) bool {
 	for activeProfile := range activePTPProfiles {
@@ -432,7 +447,7 @@ func (r *HardwareConfigReconciler) calculateNodeHardwareConfigs(_ context.Contex
 		for _, profile := range activeProfiles {
 			activePTPProfiles[profile] = true
 		}
-		glog.Infof("Filtering hardware configs by active PTP profiles: %v", activeProfiles)
+		glog.Infof("Filtering hardware configs by active PTP profiles: %s", formatQualifiedProfiles(activeProfiles))
 	} else {
 		// No active profiles - exclude all hardware configs
 		activePTPProfiles = make(map[string]bool) // Empty map to trigger filtering
@@ -503,7 +518,7 @@ func (r *HardwareConfigReconciler) checkIfChangedConfigsAffectActiveProfiles(dif
 		}
 	}
 
-	glog.V(2).Infof("Changed hardware configs are not associated with active PTP profiles %v", activePTPProfiles)
+	glog.V(2).Infof("Changed hardware configs are not associated with active PTP profiles %s", formatQualifiedProfiles(activePTPProfiles))
 	return false
 }
 

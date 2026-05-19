@@ -413,7 +413,7 @@ func (dn *Daemon) getInterfacesFromHardwareConfig(nodeProfile *ptpv1.PtpProfile)
 	// Get hardware configs for this profile
 	hwProfiles := dn.hardwareConfigManager.GetHardwareConfigsForProfile(nodeProfile)
 	if len(hwProfiles) == 0 {
-		glog.V(2).Infof("No hardware configs found for profile %s", *nodeProfile.Name)
+		glog.V(2).Infof("No hardware configs found for profile %s (%s)", DisplayProfileName(*nodeProfile.Name), *nodeProfile.Name)
 		return config.IFaces{}
 	}
 
@@ -718,37 +718,38 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// TODO: resolve clock IDs, clockType, leadingInterface and upstreamPort from hardware config
 	// (needed to keep code compatibility elsewhere and allow it to work both with hardware config and plugins)
 	for _, profile := range dn.ptpUpdate.NodeProfiles {
-		glog.Infof("Processing profile: %s", *profile.Name)
+		displayName := DisplayProfileName(*profile.Name)
+		glog.Infof("Processing profile: %s (%s)", displayName, *profile.Name)
 
 		// Log profile details for debugging
 		if profile.Interface != nil {
-			glog.Infof("Profile %s interface: %s", *profile.Name, *profile.Interface)
+			glog.Infof("Profile %s (%s) interface: %s", displayName, *profile.Name, *profile.Interface)
 		} else {
-			glog.Infof("Profile %s has no interface field (nil)", *profile.Name)
+			glog.Infof("Profile %s (%s) has no interface field (nil)", displayName, *profile.Name)
 		}
 		if profile.Ptp4lOpts != nil {
-			glog.Infof("Profile %s ptp4lOpts: %s", *profile.Name, *profile.Ptp4lOpts)
+			glog.Infof("Profile %s (%s) ptp4lOpts: %s", displayName, *profile.Name, *profile.Ptp4lOpts)
 		}
 		if profile.Phc2sysOpts != nil {
-			glog.Infof("Profile %s phc2sysOpts: %s", *profile.Name, *profile.Phc2sysOpts)
+			glog.Infof("Profile %s (%s) phc2sysOpts: %s", displayName, *profile.Name, *profile.Phc2sysOpts)
 		}
 		if profile.Ts2PhcOpts != nil {
-			glog.Infof("Profile %s ts2phcOpts: %s", *profile.Name, *profile.Ts2PhcOpts)
+			glog.Infof("Profile %s (%s) ts2phcOpts: %s", displayName, *profile.Name, *profile.Ts2PhcOpts)
 		}
 		if profile.ChronydOpts != nil {
-			glog.Infof("Profile %s chronydOpts: %s", *profile.Name, *profile.ChronydOpts)
+			glog.Infof("Profile %s (%s) chronydOpts: %s", displayName, *profile.Name, *profile.ChronydOpts)
 		}
 		if controlledID, ok := relations[*profile.Name]; ok {
 			profile.PtpSettings["controlledId"] = strconv.Itoa(controlledID)
 		}
 
-		glog.Infof("Calling applyNodePtpProfile for profile %s with runID %d", *profile.Name, runID)
+		glog.Infof("Calling applyNodePtpProfile for profile %s (%s) with runID %d", displayName, *profile.Name, runID)
 		err := dn.applyNodePtpProfile(runID, &profile)
 		if err != nil {
-			glog.Errorf("Failed to apply profile %s: %v", *profile.Name, err)
+			glog.Errorf("Failed to apply profile %s (%s): %v", displayName, *profile.Name, err)
 			return err
 		}
-		glog.Infof("Successfully applied profile: %s", *profile.Name)
+		glog.Infof("Successfully applied profile: %s (%s)", displayName, *profile.Name)
 		runID++
 	}
 
@@ -818,7 +819,9 @@ func reconcileRelatedProfiles(profiles []ptpv1.PtpProfile) map[string]int {
 
 func printNodeProfile(nodeProfile *ptpv1.PtpProfile) {
 	glog.Infof("------------------------------------")
-	printWhenNotNil(nodeProfile.Name, "Profile Name")
+	if nodeProfile.Name != nil {
+		glog.Infof("Profile Name: %s (%s)", DisplayProfileName(*nodeProfile.Name), *nodeProfile.Name)
+	}
 	printWhenNotNil(nodeProfile.Interface, "Interface")
 	printWhenNotNil(nodeProfile.Ptp4lOpts, "Ptp4lOpts")
 	printWhenNotNil(nodeProfile.Ptp4lConf, "Ptp4lConf")
@@ -858,18 +861,20 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		}
 	}
 
+	displayName := DisplayProfileName(*nodeProfile.Name)
+
 	// Check if hardware configs are available for this profile
 	// If hardware configs arrive later, reconciliation will re-apply the profile
 	if dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
-		glog.Infof("Using hardware configs for PTP profile %s instead of plugins", *nodeProfile.Name)
+		glog.Infof("Using hardware configs for PTP profile %s (%s) instead of plugins", displayName, *nodeProfile.Name)
 		if err := dn.hardwareConfigManager.ApplyHardwareConfigsForProfile(nodeProfile); err != nil {
-			glog.Errorf("Failed to apply hardware configs for profile %s: %v", *nodeProfile.Name, err)
+			glog.Errorf("Failed to apply hardware configs for profile %s (%s): %v", displayName, *nodeProfile.Name, err)
 			// Fall back to plugins
 			errs := dn.pluginManager.OnPTPConfigChange(nodeProfile)
 			pluginErrors = append(pluginErrors, errs...)
 		}
 	} else {
-		glog.Infof("No hardware configs found for PTP profile %s, using plugins", *nodeProfile.Name)
+		glog.Infof("No hardware configs found for PTP profile %s (%s), using plugins", displayName, *nodeProfile.Name)
 		errs := dn.pluginManager.OnPTPConfigChange(nodeProfile)
 		pluginErrors = append(pluginErrors, errs...)
 	}
@@ -1009,10 +1014,10 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		}
 
 		if configOpts == nil || *configOpts == "" {
-			glog.Infof("configOpts empty for profile %s, skipping process: %s", *nodeProfile.Name, pProcess)
+			glog.Infof("configOpts empty for profile %s (%s), skipping process: %s", displayName, *nodeProfile.Name, pProcess)
 			continue
 		}
-		glog.Infof("Processing %s for profile %s with opts: %s", pProcess, *nodeProfile.Name, *configOpts)
+		glog.Infof("Processing %s for profile %s (%s) with opts: %s", pProcess, displayName, *nodeProfile.Name, *configOpts)
 
 		if nodeProfile.Interface != nil && *nodeProfile.Interface != "" {
 			output.AddInterfaceSection(*nodeProfile.Interface)
@@ -1116,7 +1121,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			// Skip PMC creation for controlled profiles
 			if controllingProfile, isControlled := (*nodeProfile).PtpSettings["controllingProfile"]; isControlled && controllingProfile != "" {
 				// See DownstreamIWF
-				glog.Infof("Skipping PMC monitoring for controlled profile %s", *nodeProfile.Name)
+				glog.Infof("Skipping PMC monitoring for controlled profile %s (%s)", displayName, *nodeProfile.Name)
 			} else if clockType == event.GM {
 				glog.Infof("Skipping PMC monitoring for GM")
 			} else {
@@ -1201,9 +1206,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			if profileClockType == TBC && dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
 				interfacesToUse = dn.getInterfacesFromHardwareConfig(nodeProfile)
 				if len(interfacesToUse) > 0 {
-					glog.Infof("Using interfaces from hardwareconfig for T-BC profile %s: %v", *nodeProfile.Name, interfacesToUse)
+					glog.Infof("Using interfaces from hardwareconfig for T-BC profile %s (%s): %v", displayName, *nodeProfile.Name, interfacesToUse)
 				} else {
-					glog.Warningf("Failed to derive interfaces from hardwareconfig for T-BC profile %s, falling back to ts2phc config", *nodeProfile.Name)
+					glog.Warningf("Failed to derive interfaces from hardwareconfig for T-BC profile %s (%s), falling back to ts2phc config", displayName, *nodeProfile.Name)
 					interfacesToUse = dprocess.ifaces
 				}
 			} else {
@@ -1300,10 +1305,10 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		printNodeProfile(nodeProfile)
 		dn.processManager.process = append(dn.processManager.process, &dprocess)
 		dn.pluginManager.RegisterEnableCallback(dprocess.name, dprocess.cmdSetEnabled)
-		glog.Infof("Added %s process to process manager for profile %s", pProcess, *nodeProfile.Name)
+		glog.Infof("Added %s process to process manager for profile %s (%s)", pProcess, displayName, *nodeProfile.Name)
 
 	}
-	glog.Infof("Completed applyNodePtpProfile for profile %s, total processes in manager: %d", *nodeProfile.Name, len(dn.processManager.process))
+	glog.Infof("Completed applyNodePtpProfile for profile %s (%s), total processes in manager: %d", displayName, *nodeProfile.Name, len(dn.processManager.process))
 	return nil
 }
 
@@ -1936,10 +1941,10 @@ func (p *ptpProcess) announceHAFailOver(c net.Conn, output string) {
 			inActiveProfiles = append(inActiveProfiles, profile)
 		}
 	}
-	// log both active and inactive profiles
-	logString := []string{fmt.Sprintf("%s[%d]:[%s] ptp_ha_profile %s state %d\n", p.name, time.Now().Unix(), p.configName, currentProfile, activeState)}
+	// log both active and inactive profiles with display names and qualified names
+	logString := []string{fmt.Sprintf("%s[%d]:[%s] ptp_ha_profile %s (%s) state %d\n", p.name, time.Now().Unix(), p.configName, DisplayProfileName(currentProfile), currentProfile, activeState)}
 	for _, inActive := range inActiveProfiles {
-		logString = append(logString, fmt.Sprintf("%s[%d]:[%s] ptp_ha_profile %s state %d\n", p.name, time.Now().Unix(), p.configName, inActive, 0))
+		logString = append(logString, fmt.Sprintf("%s[%d]:[%s] ptp_ha_profile %s (%s) state %d\n", p.name, time.Now().Unix(), p.configName, DisplayProfileName(inActive), inActive, 0))
 	}
 	if c == nil {
 		for _, logProfile := range logString {

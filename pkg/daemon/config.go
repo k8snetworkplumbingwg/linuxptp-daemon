@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
+	hc "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 
@@ -62,6 +63,24 @@ func (l *LinuxPTPConfUpdate) TriggerRestartForHardwareChange() error {
 	}
 }
 
+// DisplayProfileName strips the PtpConfig CR name prefix from a qualified
+// profile name (crName_profileName) and returns the original user-facing name.
+// If the name does not contain the separator it is returned as-is.
+func DisplayProfileName(qualifiedName string) string {
+	_, profile := hc.SplitQualifiedName(qualifiedName)
+	return profile
+}
+
+// formatProfileHeader formats a qualified profile name for config file headers.
+// Returns "profileName from ptpconfig crName" when qualified, or just the name otherwise.
+func formatProfileHeader(qualifiedName string) string {
+	crName, profile := hc.SplitQualifiedName(qualifiedName)
+	if crName != "" {
+		return fmt.Sprintf("%s from ptpconfig %s", profile, crName)
+	}
+	return profile
+}
+
 // GetCurrentPTPProfiles implements HardwareConfigRestartTrigger interface
 // Returns the names of currently active PTP profiles
 func (l *LinuxPTPConfUpdate) GetCurrentPTPProfiles() []string {
@@ -76,7 +95,11 @@ func (l *LinuxPTPConfUpdate) GetCurrentPTPProfiles() []string {
 		}
 	}
 
-	glog.Infof("Current active PTP profiles: %v", profileNames)
+	displayNames := make([]string, 0, len(profileNames))
+	for _, n := range profileNames {
+		displayNames = append(displayNames, fmt.Sprintf("%s (%s)", DisplayProfileName(n), n))
+	}
+	glog.Infof("Current active PTP profiles: %v", displayNames)
 	return profileNames
 }
 
@@ -404,7 +427,7 @@ func (conf *Ptp4lConf) extractSynceRelations() *synce.Relations {
 
 // RenderSyncE4lConf outputs synce4l config as string
 func (conf *Ptp4lConf) RenderSyncE4lConf(ptpSettings map[string]string) (configOut string, relations *synce.Relations) {
-	configOut = fmt.Sprintf("#profile: %s\n", conf.profile_name)
+	configOut = fmt.Sprintf("#profile: %s\n", formatProfileHeader(conf.profile_name))
 	relations = conf.extractSynceRelations()
 	relations.AddClockIds(ptpSettings)
 	deviceIdx := 0
@@ -434,7 +457,7 @@ func getSectionName(name string) string {
 
 // RenderPtp4lConf outputs ptp4l config as string
 func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces) {
-	configOut = fmt.Sprintf("#profile: %s\n", conf.profile_name)
+	configOut = fmt.Sprintf("#profile: %s\n", formatProfileHeader(conf.profile_name))
 	var nmea_source event.EventSource
 
 	for _, section := range conf.sections {
