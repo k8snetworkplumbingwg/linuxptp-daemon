@@ -126,8 +126,10 @@ func dialSocket() (net.Conn, error) {
 // over a short-lived dedicated connection to the event socket. The sidecar will exec itself
 // for a clean restart, then re-read all configuration from disk (ConfigMap + ptp4l config files).
 //
-// This must be called after applyNodePTPProfiles() has written all config files and started
-// all PTP processes, so that the sidecar restarts into a consistent state.
+// This must be called early in applyNodePTPProfiles(), after stopping processes but before
+// writing config files or starting new processes. The sidecar exec's itself and re-reads all
+// configuration from disk on startup. Combined with a sleep(updateInterval/2), this ensures
+// the sidecar is listening before ptp4l emits its first log line (same guarantee as PR #29).
 func sendSidecarRestart() error {
 	c, err := net.Dial("unix", eventSocket)
 	if err != nil {
@@ -646,6 +648,16 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	glog.Infof("in applyNodePTPProfiles - starting to apply %d node profiles", len(dn.ptpUpdate.NodeProfiles))
 
 	dn.stopAllProcesses()
+
+	// Restart sidecar immediately after stopping processes. The sidecar
+	// exec's itself and re-reads config on startup. The sleep gives it time
+	// to bind the socket listener before ptp4l starts emitting logs.
+	// This mirrors the startup guarantee from PR #29 / OCPBUGS-54967.
+	if err := sendSidecarRestart(); err != nil {
+		glog.Warningf("sendSidecarRestart failed (sidecar may not be running): %v", err)
+	}
+	time.Sleep(1 * time.Second)
+
 	// All process should have been stopped,
 	// clear process in process manager.
 	// Assigning processManager.process to nil releases
@@ -769,7 +781,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
 	*dn.refreshNodePtpDevice = true
 	dn.readyTracker.setConfig(true)
-	return sendSidecarRestart()
+	return nil
 }
 
 func reconcileRelatedProfiles(profiles []ptpv1.PtpProfile) map[string]int {
