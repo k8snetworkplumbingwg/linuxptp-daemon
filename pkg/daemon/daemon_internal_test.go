@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -117,6 +118,7 @@ func clean(t *testing.T) {
 	err := os.RemoveAll("/tmp/test")
 	assert.NoError(t, err)
 }
+
 func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
 	stopCh := make(<-chan struct{})
 	assert.NoError(t, leap.MockLeapFile())
@@ -152,7 +154,6 @@ func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
 }
 
 func testRequirements(t *testing.T, profile *ptpv1.PtpProfile) {
-
 	cfg, err := configparser.NewConfigParserFromFile("/tmp/test/synce4l.0.config")
 	assert.NoError(t, err)
 	for _, sec := range cfg.Sections() {
@@ -169,6 +170,7 @@ func testRequirements(t *testing.T, profile *ptpv1.PtpProfile) {
 		}
 	}
 }
+
 func Test_applyProfile_synce(t *testing.T) {
 	defer clean(t)
 	testDataFiles := []string{
@@ -201,9 +203,18 @@ func Test_applyProfile_TBC(t *testing.T) {
 	}
 	defer hardwareconfig.TeardownMockDpllPinsForTests()
 
-	testDataFiles := []string{
-		"testdata/profile-tbc-tt.yaml",
-		"testdata/profile-tbc-tr.yaml",
+	tests := []struct {
+		dataFile          string
+		expectedProcesses []string
+	}{
+		{
+			dataFile:          "testdata/profile-tbc-tt.yaml",
+			expectedProcesses: []string{ptp4lProcessName},
+		},
+		{
+			dataFile:          "testdata/profile-tbc-tr.yaml",
+			expectedProcesses: []string{ptp4lProcessName, ptp4lProcessName, ts2phcProcessName, phc2sysProcessName},
+		},
 	}
 	stopCh := make(<-chan struct{})
 	assert.NoError(t, leap.MockLeapFile())
@@ -235,15 +246,89 @@ func Test_applyProfile_TBC(t *testing.T) {
 	// Signal that no hardware configs are expected for this test
 	_ = dn.hardwareConfigManager.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
 
-	for i := range len(testDataFiles) {
+	for _, test := range tests {
 		mkPath(t)
-		profile, err := loadProfile(testDataFiles[i])
+		profile, err := loadProfile(test.dataFile)
 		assert.NoError(t, err)
 		// Will assert inside in case of error:
 		err = dn.applyNodePtpProfile(0, profile)
 		assert.NoError(t, err)
+
+		// Ensure for T-BC that phc2sys is not selected for delayed-start
+		actualProcesses := []string{}
+		for _, p := range dn.processManager.process {
+			actualProcesses = append(actualProcesses, p.name)
+			if p.name == phc2sysProcessName {
+				assert.Empty(t, p.skipInitialStartup, "Ensure phc2sys is not startup-delayed for T-BC")
+			}
+		}
+		assert.ElementsMatch(t, test.expectedProcesses, actualProcesses, "Ensure T-BC has the required processes prepared (%s)", test.dataFile)
 		clean(t)
 	}
+}
+
+func Test_applyProfile_TGM(t *testing.T) {
+	defer clean(t)
+
+	// Set up mock DPLL pins for testing (load from hardwareconfig testdata)
+	if getter, err := createMockDpllPinsGetterFromFile("../hardwareconfig/testdata/pins.json"); err == nil {
+		hardwareconfig.SetDpllPinsGetter(getter)
+	} else {
+		t.Logf("Warning: Failed to setup mock DPLL pins from file: %v", err)
+		// Continue with test as DPLL pins are optional
+	}
+	defer hardwareconfig.TeardownMockDpllPinsForTests()
+
+	dataFile := "testdata/profile-tgm.yaml"
+	expectedProcesses := []string{ptp4lProcessName, ts2phcProcessName, phc2sysProcessName}
+
+	stopCh := make(<-chan struct{})
+	assert.NoError(t, leap.MockLeapFile())
+	defer func() {
+		close(leap.LeapMgr.Close)
+		// Sleep to allow context to switch
+		time.Sleep(100 * time.Millisecond)
+		assert.Nil(t, leap.LeapMgr)
+	}()
+	dn := New(
+		"test-node-name",
+		"openshift-ptp",
+		false,
+		nil,
+		nil,
+		&LinuxPTPConfUpdate{
+			UpdateCh:     make(chan bool),
+			NodeProfiles: []ptpv1.PtpProfile{},
+		},
+		stopCh,
+		[]string{"e810"},
+		&[]ptpv1.HwConfig{},
+		nil,
+		make(chan bool),
+		30,
+		&ReadyTracker{},
+	)
+	assert.NotNil(t, dn)
+	// Signal that no hardware configs are expected for this test
+	_ = dn.hardwareConfigManager.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{})
+
+	mkPath(t)
+	profile, err := loadProfile(dataFile)
+	assert.NoError(t, err)
+	// Will assert inside in case of error:
+	err = dn.applyNodePtpProfile(0, profile)
+	assert.NoError(t, err)
+
+	// Ensure for T-GM that phc2sys is selected for delayed-start
+	actualProcesses := []string{}
+	for _, p := range dn.processManager.process {
+		actualProcesses = append(actualProcesses, p.name)
+		if p.name == phc2sysProcessName {
+			assert.NotEmpty(t, p.skipInitialStartup, "Ensure phc2sys is startup-delayed for T-GM")
+		}
+	}
+	assert.ElementsMatch(t, expectedProcesses, actualProcesses, "Ensure T-GM has the required processes prepared")
+	clean(t)
 }
 
 func TestGetPTPClockId_ValidInput(t *testing.T) {
@@ -1818,4 +1903,76 @@ func TestEmitClockClassLogs_EmitsWithNilParentDS(t *testing.T) {
 	assert.NotPanics(t, func() {
 		pm.EmitClockClassLogs()
 	}, "EmitClockClassLogs should not panic with nil parentDS")
+}
+
+func TestDelayedPhc2sysStartup(t *testing.T) {
+	profileName := "test-profile"
+	nodeProfile := ptpv1.PtpProfile{
+		Name: &profileName,
+	}
+
+	pm := &ProcessManager{
+		process: []*ptpProcess{},
+	}
+
+	dn := &Daemon{
+		processManager: pm,
+	}
+
+	phc2sys := &ptpProcess{
+		name:               phc2sysProcessName,
+		skipInitialStartup: "delayed",
+		nodeProfile:        nodeProfile,
+		dn:                 dn,
+		execMutex:          sync.Mutex{},
+		stopped:            true, // Simulated stopped state
+	}
+
+	ts2phc := &ptpProcess{
+		name:        ts2phcProcessName,
+		nodeProfile: nodeProfile,
+		dn:          dn,
+		eventCh:     make(chan event.EventChannel, 10),
+		ptpClockThreshold: &ptpv1.PtpClockThreshold{
+			MaxOffsetThreshold: 1000,
+			MinOffsetThreshold: -1000,
+		},
+	}
+
+	pm.process = append(pm.process, phc2sys, ts2phc)
+
+	// 1. Simulate large offset (> 1s)
+	largeOffset := 37000000000.0 // 37s
+	ts2phc.ProcessTs2PhcEvents(largeOffset, ts2phcProcessName, "eth0", event.PTP_FREERUN, nil)
+
+	// Verify phc2sys is still delayed
+	assert.Equal(t, "delayed", phc2sys.skipInitialStartup)
+
+	// 2. Simulate sub-second offset (< 1s)
+	smallOffset := 500000000.0 // 0.5s
+	ts2phc.ProcessTs2PhcEvents(smallOffset, ts2phcProcessName, "eth0", event.PTP_LOCKED, nil)
+
+	// Verify phc2sys delay is cleared
+	assert.Equal(t, "", phc2sys.skipInitialStartup)
+}
+
+func TestFindProcessesByName(t *testing.T) {
+	pm := &ProcessManager{
+		process: []*ptpProcess{
+			{name: "ptp4l"},
+			{name: "phc2sys"},
+			{name: "ptp4l"},
+		},
+	}
+
+	procs := pm.findProcessesByName("ptp4l")
+	assert.Equal(t, 2, len(procs))
+	assert.Equal(t, "ptp4l", procs[0].name)
+	assert.Equal(t, "ptp4l", procs[1].name)
+
+	procs = pm.findProcessesByName("phc2sys")
+	assert.Equal(t, 1, len(procs))
+
+	procs = pm.findProcessesByName("nonexistent")
+	assert.Equal(t, 0, len(procs))
 }
