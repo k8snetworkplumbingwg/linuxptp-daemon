@@ -929,13 +929,13 @@ func TestDaemon_DisplayProfileName(t *testing.T) {
 	}
 }
 
-func TestDaemon_RenderPtp4lConfStripsQualifiedProfileName(t *testing.T) {
+func TestDaemon_RenderPtp4lConfProfileHeader(t *testing.T) {
 	conf := &daemon.Ptp4lConf{}
 	testConf := "[global]\nslaveOnly 1"
 	conf.PopulatePtp4lConf(&testConf, nil)
 	conf.AddInterfaceSection("ens2f0")
 	conf.ExtendGlobalSection("my-ptpconfig_OC", "tag", "/var/run/ptp4l.0.socket", "")
 	actualOutput, _ := conf.RenderPtp4lConf()
-	expected := "#profile: OC from ptpconfig my-ptpconfig\n\n[global]\nslaveOnly 1\nmessage_tag tag\nuds_address /var/run/ptp4l.0.socket\n[ens2f0]"
-	assert.Equal(t, expected, actualOutput, "Config header should show profile name and ptpconfig origin")
+	expected := "#profile: my-ptpconfig_OC, original profile name OC defined in ptpconfig my-ptpconfig\n\n[global]\nslaveOnly 1\nmessage_tag tag\nuds_address /var/run/ptp4l.0.socket\n[ens2f0]"
+	assert.Equal(t, expected, actualOutput, "Config header should contain qualified name and decomposed parts")
 }
