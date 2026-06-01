@@ -425,24 +425,23 @@ func (dn *Daemon) getInterfacesFromHardwareConfig(nodeProfile *ptpv1.PtpProfile)
 
 	var interfaces config.IFaces
 
-	// Iterate through hardware profiles and extract interfaces from structure
+	// Iterate through hardware profiles and extract interfaces from all subsystems.
+	// All subsystems (not just the first) are included so that unmanaged DPLL subsystems
+	// (e.g., Intel E830 CF1/CF2) enter the DPLL initialisation loop.
 	for _, hwProfile := range hwProfiles {
 		if hwProfile.ClockChain == nil || len(hwProfile.ClockChain.Structure) == 0 {
 			continue
 		}
 
-		// Get the first subsystem from structure and use GetSubsystemNetworkInterface
-		firstSubsystem := hwProfile.ClockChain.Structure[0]
-		networkInterface, err := hardwareconfig.GetSubsystemNetworkInterface(hwProfile.ClockChain, firstSubsystem.Name)
-		if err != nil {
-			glog.V(2).Infof("Failed to get network interface for first subsystem %s: %v", firstSubsystem.Name, err)
-			continue
-		}
-
-		if networkInterface != "" {
-			// Determine event source based on T-BC configuration
-			// For T-BC, the interface typically depends on PTP4l
-			eventSource := event.PTP4l
+		for _, subsystem := range hwProfile.ClockChain.Structure {
+			networkInterface, err := hardwareconfig.GetSubsystemNetworkInterface(hwProfile.ClockChain, subsystem.Name)
+			if err != nil {
+				glog.V(2).Infof("getInterfacesFromHardwareConfig: failed to get network interface for subsystem %s: %v", subsystem.Name, err)
+				continue
+			}
+			if networkInterface == "" {
+				continue
+			}
 
 			// Get PHC ID for the interface
 			phcID := ptpnetwork.GetPhcId(networkInterface)
@@ -457,9 +456,13 @@ func (dn *Daemon) getInterfacesFromHardwareConfig(nodeProfile *ptpv1.PtpProfile)
 				glog.Warningf("getInterfacesFromHardwareConfig: could not get PHC ID for iface %s, convergeConfig PHC fallback will not work", networkInterface)
 			}
 
+			// TODO: derive Source from subsystem role once the Subsystem API gains a
+			// source/dependsOn field.  For now every hardwareconfig subsystem is assumed
+			// to be driven by PTP4l (the only source type supported on the hardwareconfig
+			// path today).  convergeConfig may override this per-interface as needed.
 			interfaces = append(interfaces, config.Iface{
 				Name:     networkInterface,
-				Source:   eventSource,
+				Source:   event.PTP4l,
 				PhcId:    phcID,
 				IsMaster: false,
 			})

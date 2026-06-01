@@ -1843,7 +1843,7 @@ func TestParseDPLLFlags(t *testing.T) {
 			expected: dpllcfg.FlagOnlyPhaseStatus,
 		},
 		{
-			name:     "all flags",
+			name:     "all three pin flags",
 			hd:       &HardwareDefaults{DPLLFlags: []string{"noPhaseOffset", "noPhaseStatus", "noFrequencyStatus"}},
 			expected: dpllcfg.FlagNoPhaseOffset | dpllcfg.FlagNoPhaseStatus | dpllcfg.FlagNoFreqencyStatus,
 		},

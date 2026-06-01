@@ -25,6 +25,9 @@ func TestDpllFlags(t *testing.T) {
 		{"NoFrequencyStatus", FlagNoFreqencyStatus, true, false, true, []string{"NoFrequencyStatus"}, "100"},
 		{"NoPhaseOffset", FlagNoPhaseOffset, true, true, false, []string{"NoPhaseOffset"}, "UNKNOWN"},
 		{"OnlyPhaseStatus", FlagOnlyPhaseStatus, true, false, false, []string{"NoFrequencyStatus", "NoPhaseOffset"}, "UNKNOWN"},
+		{"E830_AllPinFlags", FlagNoPhaseOffset | FlagNoPhaseStatus | FlagNoFreqencyStatus,
+			false, false, false,
+			[]string{"NoFrequencyStatus", "NoPhaseStatus", "NoPhaseOffset"}, "UNKNOWN"},
 	}
 
 	for _, tt := range tests {
@@ -321,3 +324,4 @@ func TestDpllSubscriberNotifySkipsWhenCurrentStatePTP_UNKNOWN(t *testing.T) {
 	assert.Equal(t, event.PTP_UNKNOWN, st)
 	assert.False(t, d.sourceLost, "Notify must not run GNSS sourceLost logic when current state is PTP_UNKNOWN")
 }
+
