@@ -84,6 +84,7 @@ func (e *EventHandler) updateBCState(event EventChannel) (clockSyncState, bool) 
 	cfgName := event.CfgName
 	dpllState := PTP_NOTSET
 	ts2phcState := PTP_FREERUN
+	glog.Infof("Event: %+v", event)
 	// For internal data announces, only update the downstream data on class change
 	// For External GM data announces in the locked state, update whenever any of the
 	// information elements change
@@ -507,7 +508,9 @@ func (e *EventHandler) isSourceLostBC(cfgName string) bool {
 				}
 			}
 			if d.ProcessName == DPLL {
+				glog.Infof("isSourceLostBC[%s] DPLL entries (%d):", cfgName, len(d.Details))
 				for _, dd := range d.Details {
+					glog.Infof("  DPLL detail: iface=%s state=%s", dd.IFace, dd.State)
 					if dd.State != PTP_LOCKED {
 						dpllLost = true
 						dpllLostIface = dd.IFace
