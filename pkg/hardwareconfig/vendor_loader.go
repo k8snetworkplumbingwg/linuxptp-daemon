@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
+	dpllcfg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	"sigs.k8s.io/yaml"
 )
@@ -30,6 +31,34 @@ type HardwareDefaults struct {
 
 	// DelayCompensation defines the delay compensation model (components, connections, routes)
 	DelayCompensation *DelayCompensationModel `json:"delayCompensation,omitempty" yaml:"delayCompensation,omitempty"`
+
+	// DPLLFlags defines DPLL monitoring behavior flags intrinsic to this hardware.
+	// Valid values: "noPhaseOffset", "noPhaseStatus", "noFrequencyStatus"
+	DPLLFlags []string `json:"dpllFlags,omitempty" yaml:"dpllFlags,omitempty"`
+}
+
+// dpllFlagNames maps YAML flag names to dpll.Flag bitmask values
+var dpllFlagNames = map[string]dpllcfg.Flag{
+	"noPhaseOffset":     dpllcfg.FlagNoPhaseOffset,
+	"noPhaseStatus":     dpllcfg.FlagNoPhaseStatus,
+	"noFrequencyStatus": dpllcfg.FlagNoFreqencyStatus,
+}
+
+// ParseDPLLFlags converts the string-based DPLLFlags from YAML into a dpll.Flag bitmask.
+// Returns 0 if no flags are defined.
+func (hd *HardwareDefaults) ParseDPLLFlags() (dpllcfg.Flag, error) {
+	if hd == nil || len(hd.DPLLFlags) == 0 {
+		return 0, nil
+	}
+	var flags dpllcfg.Flag
+	for _, name := range hd.DPLLFlags {
+		flag, ok := dpllFlagNames[name]
+		if !ok {
+			return 0, fmt.Errorf("unknown DPLL flag: %q (valid: noPhaseOffset, noPhaseStatus, noFrequencyStatus)", name)
+		}
+		flags |= flag
+	}
+	return flags, nil
 }
 
 // ClockIDTransformation defines how to convert serial number to clock ID

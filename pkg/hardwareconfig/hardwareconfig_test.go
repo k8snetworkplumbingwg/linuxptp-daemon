@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	dpllcfg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
@@ -1807,4 +1808,247 @@ func TestBuildPhaseAdjustmentCommandsWithGranularity(t *testing.T) {
 				tt.boardLabel, tt.adjustment, *cmd.PhaseAdjust, pin.PhaseAdjustGran)
 		})
 	}
+}
+
+func TestParseDPLLFlags(t *testing.T) {
+	tests := []struct {
+		name     string
+		hd       *HardwareDefaults
+		expected dpllcfg.Flag
+		wantErr  bool
+	}{
+		{
+			name:     "nil HardwareDefaults",
+			hd:       nil,
+			expected: 0,
+		},
+		{
+			name:     "empty flags",
+			hd:       &HardwareDefaults{},
+			expected: 0,
+		},
+		{
+			name:     "noPhaseOffset only",
+			hd:       &HardwareDefaults{DPLLFlags: []string{"noPhaseOffset"}},
+			expected: dpllcfg.FlagNoPhaseOffset,
+		},
+		{
+			name:     "noFrequencyStatus only",
+			hd:       &HardwareDefaults{DPLLFlags: []string{"noFrequencyStatus"}},
+			expected: dpllcfg.FlagNoFreqencyStatus,
+		},
+		{
+			name:     "E830 flags - equivalent to FlagOnlyPhaseStatus",
+			hd:       &HardwareDefaults{DPLLFlags: []string{"noPhaseOffset", "noFrequencyStatus"}},
+			expected: dpllcfg.FlagOnlyPhaseStatus,
+		},
+		{
+			name:     "all flags",
+			hd:       &HardwareDefaults{DPLLFlags: []string{"noPhaseOffset", "noPhaseStatus", "noFrequencyStatus"}},
+			expected: dpllcfg.FlagNoPhaseOffset | dpllcfg.FlagNoPhaseStatus | dpllcfg.FlagNoFreqencyStatus,
+		},
+		{
+			name:    "unknown flag",
+			hd:      &HardwareDefaults{DPLLFlags: []string{"bogusFlag"}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flags, err := tt.hd.ParseDPLLFlags()
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expected, flags)
+		})
+	}
+}
+
+func TestLoadE830Defaults(t *testing.T) {
+	hd, err := LoadHardwareDefaults("intel/e830", nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, hd)
+
+	assert.NotNil(t, hd.ClockIDTransformation)
+	assert.Equal(t, "direct", hd.ClockIDTransformation.Method)
+
+	assert.Nil(t, hd.PinDefaults)
+	assert.Nil(t, hd.ConnectorCommands)
+	assert.Nil(t, hd.PinEsyncCommands)
+	assert.Nil(t, hd.InternalDelays)
+
+	flags, err := hd.ParseDPLLFlags()
+	assert.NoError(t, err)
+	expectedE830Flags := dpllcfg.FlagNoPhaseOffset | dpllcfg.FlagNoPhaseStatus | dpllcfg.FlagNoFreqencyStatus
+	assert.Equal(t, expectedE830Flags, flags, "E830 should have all monitoring flags disabled")
+}
+
+func TestDPLLFlagsExtraction(t *testing.T) {
+	mockCmd := NewMockCommandExecutor()
+	mockCmd.SetResponse("ethtool", []string{"-i", "eno5"}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation")
+	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
+	mockCmd.SetResponse("ethtool", []string{"-i", "enp108s0f0"}, "driver: ice\nbus-info: 0000:6c:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:6c:00.0"}, "6c:00.0 Ethernet controller: Intel Corporation")
+	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:6c:00.0"}, "serial_number 50-7c-6f-ff-ff-ab-cd-ef")
+	SetCommandExecutor(mockCmd)
+	defer ResetCommandExecutor()
+
+	clockIDE825 := uint64(0x507c6fffff5c4ae8) // eno5
+	clockIDE830 := uint64(0x507c6fffffabcdef) // enp108s0f0
+	expectedE830Flags := dpllcfg.FlagNoPhaseOffset | dpllcfg.FlagNoPhaseStatus | dpllcfg.FlagNoFreqencyStatus
+
+	hwConfig := ptpv2alpha1.HardwareConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-flags"},
+		Spec: ptpv2alpha1.HardwareConfigSpec{
+			RelatedPtpProfileName: "test-profile",
+			Profile: ptpv2alpha1.HardwareProfile{
+				ClockChain: &ptpv2alpha1.ClockChain{
+					Structure: []ptpv2alpha1.Subsystem{
+						{
+							Name:                        "leader",
+							HardwareSpecificDefinitions: "intel/e825",
+							DPLL: ptpv2alpha1.DPLL{
+								NetworkInterface: "eno5",
+							},
+						},
+						{
+							Name:                        "cf",
+							HardwareSpecificDefinitions: "intel/e830",
+							DPLL: ptpv2alpha1.DPLL{
+								NetworkInterface: "enp108s0f0",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	hcm := newHardwareConfigManagerForTests()
+
+	flags := hcm.extractDPLLFlags(hwConfig)
+
+	// E825 should not have DPLL flags (no dpllFlags in its defaults.yaml)
+	_, hasE825Flags := flags[clockIDE825]
+	assert.False(t, hasE825Flags, "E825 should not have DPLL flags")
+
+	// E830 should have all monitoring flags disabled
+	e830Flags, hasE830Flags := flags[clockIDE830]
+	assert.True(t, hasE830Flags, "E830 should have DPLL flags")
+	assert.Equal(t, expectedE830Flags, e830Flags, "E830 flags should disable all monitoring")
+
+	// Test GetDPLLFlags API
+	enriched := enrichedHardwareConfig{
+		HardwareConfig: hwConfig,
+		dpllFlags:      flags,
+	}
+	hcm.mu.Lock()
+	hcm.hardwareConfigs = []enrichedHardwareConfig{enriched}
+	hcm.ready = true
+	hcm.mu.Unlock()
+
+	retrieved := hcm.GetDPLLFlags("test-profile", clockIDE830)
+	assert.NotNil(t, retrieved, "Should retrieve DPLL flags for E830 clock")
+	assert.Equal(t, expectedE830Flags, *retrieved)
+
+	retrievedE825 := hcm.GetDPLLFlags("test-profile", clockIDE825)
+	assert.Nil(t, retrievedE825, "Should return nil for E825 (no flags)")
+
+	retrievedBad := hcm.GetDPLLFlags("non-existent", clockIDE830)
+	assert.Nil(t, retrievedBad, "Should return nil for non-existent profile")
+}
+
+// TestE830HardwareConfigFromTestdata loads the gnrd-hwconfig-e830.yaml testdata file
+// and validates the structure, DPLL flags extraction, and the full GetDPLLFlags flow.
+func TestE830HardwareConfigFromTestdata(t *testing.T) {
+	// Load testdata
+	hwConfig, err := loadHardwareConfigFromFile("testdata/gnrd-hwconfig-e830.yaml")
+	assert.NoError(t, err, "Failed to load gnrd-hwconfig-e830.yaml")
+	assert.NotNil(t, hwConfig)
+
+	// Validate top-level structure
+	assert.Equal(t, "t-bc-e830", hwConfig.Name)
+	assert.Equal(t, "01-tbc-tr", hwConfig.Spec.RelatedPtpProfileName)
+	assert.NotNil(t, hwConfig.Spec.Profile.ClockType)
+	assert.Equal(t, "T-BC", *hwConfig.Spec.Profile.ClockType)
+
+	// Validate clock chain has leader + E830 subsystems
+	chain := hwConfig.Spec.Profile.ClockChain
+	assert.NotNil(t, chain)
+	assert.GreaterOrEqual(t, len(chain.Structure), 2, "Should have at least leader + one CF subsystem")
+
+	// Validate leader subsystem (intel/e825)
+	leader := chain.Structure[0]
+	assert.Equal(t, "leader", leader.Name)
+	assert.Equal(t, "intel/e825", leader.HardwareSpecificDefinitions)
+	assert.NotNil(t, leader.DPLL.HoldoverParameters, "Leader should have holdover parameters")
+	assert.Equal(t, uint64(20), leader.DPLL.HoldoverParameters.MaxInSpecOffset)
+	assert.Equal(t, uint64(30), leader.DPLL.HoldoverParameters.LocalMaxHoldoverOffset)
+	assert.Equal(t, uint64(288), leader.DPLL.HoldoverParameters.LocalHoldoverTimeout)
+
+	// Validate E830 subsystems
+	for _, sub := range chain.Structure[1:] {
+		assert.Equal(t, "intel/e830", sub.HardwareSpecificDefinitions,
+			"Non-leader subsystem %s should use intel/e830", sub.Name)
+		assert.NotEmpty(t, sub.DPLL.NetworkInterface,
+			"E830 subsystem %s should have a network interface", sub.Name)
+		assert.Nil(t, sub.DPLL.HoldoverParameters,
+			"E830 subsystem %s should not have holdover parameters", sub.Name)
+		assert.Empty(t, sub.DPLL.PhaseInputs,
+			"E830 subsystem %s should not have phase inputs", sub.Name)
+		assert.Empty(t, sub.DPLL.PhaseOutputs,
+			"E830 subsystem %s should not have phase outputs", sub.Name)
+		assert.Empty(t, sub.Ethernet,
+			"E830 subsystem %s should not have ethernet ports", sub.Name)
+	}
+
+	// Validate that vendor defaults for both hardware types load correctly
+	e825Defaults, err := LoadHardwareDefaults("intel/e825", nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, e825Defaults)
+	e825Flags, err := e825Defaults.ParseDPLLFlags()
+	assert.NoError(t, err)
+	assert.Equal(t, dpllcfg.Flag(0), e825Flags, "E825 should have no DPLL flags")
+
+	expectedE830Flags := dpllcfg.FlagNoPhaseOffset | dpllcfg.FlagNoPhaseStatus | dpllcfg.FlagNoFreqencyStatus
+
+	e830Defaults, err := LoadHardwareDefaults("intel/e830", nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, e830Defaults)
+	e830Flags, err := e830Defaults.ParseDPLLFlags()
+	assert.NoError(t, err)
+	assert.Equal(t, expectedE830Flags, e830Flags, "E830 should have all monitoring flags disabled")
+
+	// Validate DPLL flags extraction with mock command executor
+	mockCmd := NewMockCommandExecutor()
+	for i, sub := range chain.Structure[1:] {
+		iface := sub.DPLL.NetworkInterface
+		busInfo := fmt.Sprintf("0000:%02x:00.0", 0x6c+i)
+		mockCmd.SetResponse("ethtool", []string{"-i", iface}, fmt.Sprintf("driver: ice\nbus-info: %s", busInfo))
+		mockCmd.SetResponse("lspci", []string{"-s", busInfo}, fmt.Sprintf("%s Ethernet controller: Intel Corporation", busInfo))
+		mockCmd.SetResponse("devlink", []string{"dev", "info", fmt.Sprintf("pci/%s", busInfo)},
+			fmt.Sprintf("serial_number 50-7c-6f-ff-ff-ab-cd-%02x", 0xe0+i))
+	}
+	SetCommandExecutor(mockCmd)
+	defer ResetCommandExecutor()
+
+	hcm := newHardwareConfigManagerForTests()
+	flags := hcm.extractDPLLFlags(*hwConfig)
+
+	// E830 subsystems should have flags extracted
+	e830Count := 0
+	for clockID, f := range flags {
+		assert.Equal(t, expectedE830Flags, f,
+			"Clock %#x should have all monitoring flags disabled", clockID)
+		e830Count++
+	}
+	assert.Equal(t, len(chain.Structure)-1, e830Count,
+		"Should extract DPLL flags for all E830 subsystems (not the leader)")
+
+	t.Logf("Loaded gnrd-hwconfig-e830.yaml: %d subsystems, %d with DPLL flags",
+		len(chain.Structure), e830Count)
 }
