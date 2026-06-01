@@ -508,9 +508,9 @@ func (e *EventHandler) isSourceLostBC(cfgName string) bool {
 				}
 			}
 			if d.ProcessName == DPLL {
-				glog.Infof("isSourceLostBC[%s] DPLL entries (%v):", cfgName, d)
+				glog.Infof("isSourceLostBC[%s]", cfgName)
 				for _, dd := range d.Details {
-					glog.Infof("  DPLL detail: iface=%s state=%s, data=%+v", dd.IFace, dd.State, dd)
+					glog.Infof("  DPLL detail: iface=%s state=%s signalSource=%s sourceLost=%t offset=%d time=%d metrics=%+v", dd.IFace, dd.State, dd.signalSource, dd.sourceLost, dd.Offset, dd.time, dd.Metrics)
 					if dd.State != PTP_LOCKED {
 						dpllLost = true
 						dpllLostIface = dd.IFace
