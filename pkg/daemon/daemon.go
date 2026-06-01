@@ -152,6 +152,17 @@ type ProcessManager struct {
 	ptpEventHandler *event.EventHandler
 }
 
+// findProcessesByName returns a list of processes with the given name
+func (p *ProcessManager) findProcessesByName(name string) []*ptpProcess {
+	var procs []*ptpProcess
+	for _, proc := range p.process {
+		if proc.name == name {
+			procs = append(procs, proc)
+		}
+	}
+	return procs
+}
+
 // NewProcessManager is used by unit tests
 func NewProcessManager() *ProcessManager {
 	processPTP := &ptpProcess{}
@@ -167,7 +178,8 @@ func NewProcessManager() *ProcessManager {
 
 // SetTestProfileProcess ...
 func (p *ProcessManager) SetTestProfileProcess(name string, ifaces config.IFaces, socketPath,
-	processConfigPath string, nodeProfile ptpv1.PtpProfile) {
+	processConfigPath string, nodeProfile ptpv1.PtpProfile,
+) {
 	p.process = append(p.process, &ptpProcess{
 		name:              name,
 		ifaces:            ifaces,
@@ -228,7 +240,6 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 		return
 	}
 	p.process[0].syncERelations = config
-
 }
 
 // EmitProcessStatusLogs emits process status logs using the EventHandler's
@@ -320,6 +331,7 @@ type ptpProcess struct {
 	cmdSetEnabledMutex    sync.Mutex
 	tbcStateDetector      *hardwareconfig.PTPStateDetector // Cached PTP state detector instance
 	offset                float64
+	skipInitialStartup    string
 }
 
 func (p *ptpProcess) Stopped() bool {
@@ -503,7 +515,7 @@ func New(
 		// Watch the known security mount folder from startup
 		if watchErr := saFileWatch.Add(PtpSecretMountDir); watchErr != nil {
 			glog.Warningf("Failed to watch %s (may not exist yet): %v", PtpSecretMountDir, watchErr)
-			//destroy and release the watcher
+			// destroy and release the watcher
 			saFileWatch.Close()
 			saFileWatch = nil
 		} else {
@@ -682,7 +694,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// compare nodeProfile with previous config,
 	// only apply when nodeProfile changes
 
-	//clear hwconfig before updating
+	// clear hwconfig before updating
 	*dn.hwconfigs = []ptpv1.HwConfig{}
 
 	glog.Infof("updating NodePTPProfiles to:")
@@ -690,7 +702,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	slices.SortFunc(dn.ptpUpdate.NodeProfiles, func(a, b ptpv1.PtpProfile) int {
 		aHasPhc2sysOpts := a.Phc2sysOpts != nil && *a.Phc2sysOpts != ""
 		bHasPhc2sysOpts := b.Phc2sysOpts != nil && *b.Phc2sysOpts != ""
-		//sorted in ascending order
+		// sorted in ascending order
 		// here having phc2sysOptions is considered a high number
 		if !aHasPhc2sysOpts && bHasPhc2sysOpts {
 			return -1 //  a<b return -1
@@ -757,33 +769,32 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	for _, p := range dn.processManager.process {
 		if p != nil {
 			p.eventCh = dn.processManager.eventChannel
-			// start ptp4l process early , it doesn't have
-			if p.depProcess == nil {
-				go p.cmdRun(dn.stdoutToSocket, &dn.pluginManager)
-			} else {
-				for _, d := range p.depProcess {
-					if d != nil {
-						time.Sleep(3 * time.Second)
-						glog.Infof("Starting %s", d.Name())
-						go d.CmdRun(false)
-						time.Sleep(3 * time.Second)
-						dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, d.Name())
-						d.MonitorProcess(config.ProcessConfig{
-							ClockType:    p.clockType,
-							ConfigName:   p.configName,
-							EventChannel: dn.processManager.eventChannel,
-							GMThreshold: config.Threshold{
-								Max:             p.ptpClockThreshold.MaxOffsetThreshold,
-								Min:             p.ptpClockThreshold.MinOffsetThreshold,
-								HoldOverTimeout: p.ptpClockThreshold.HoldOverTimeout,
-							},
-							InitialPTPState: event.PTP_FREERUN,
-						})
-						glog.Infof("enabling dep process %s with Max %d Min %d Holdover %d", d.Name(), p.ptpClockThreshold.MaxOffsetThreshold, p.ptpClockThreshold.MinOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
-					}
+			for _, d := range p.depProcess {
+				if d != nil {
+					time.Sleep(3 * time.Second)
+					glog.Infof("Starting %s", d.Name())
+					go d.CmdRun(false)
+					time.Sleep(3 * time.Second)
+					dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, d.Name())
+					d.MonitorProcess(config.ProcessConfig{
+						ClockType:    p.clockType,
+						ConfigName:   p.configName,
+						EventChannel: dn.processManager.eventChannel,
+						GMThreshold: config.Threshold{
+							Max:             p.ptpClockThreshold.MaxOffsetThreshold,
+							Min:             p.ptpClockThreshold.MinOffsetThreshold,
+							HoldOverTimeout: p.ptpClockThreshold.HoldOverTimeout,
+						},
+						InitialPTPState: event.PTP_FREERUN,
+					})
+					glog.Infof("enabling dep process %s with Max %d Min %d Holdover %d", d.Name(), p.ptpClockThreshold.MaxOffsetThreshold, p.ptpClockThreshold.MinOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
 				}
-				go p.cmdRun(dn.stdoutToSocket, &dn.pluginManager)
 			}
+			if p.skipInitialStartup != "" {
+				glog.Infof("Not starting %s yet: %s", p.name, p.skipInitialStartup)
+				continue
+			}
+			go p.cmdRun(dn.stdoutToSocket, &dn.pluginManager)
 			dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, p.name)
 		}
 	}
@@ -853,7 +864,8 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			if _, registered := dn.pluginManager.Plugins[pluginName]; !registered {
 				pluginErrors = append(pluginErrors, fmt.Errorf(
 					"unknown plugin '%s' in profile '%s' (possible typo in hardware plugin configuration)",
-					pluginName, *nodeProfile.Name))
+					pluginName, *nodeProfile.Name,
+				))
 			}
 		}
 	}
@@ -980,7 +992,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 							*configOpts += " --servo_offset_threshold " + strconv.FormatInt(min(maxInSpecOffset, maxHoldoverOffSet), 10)
 						}
 					}
-					if !strings.Contains(*configOpts, "--servo_num_offset_values") { //if consecutive smaller offsets (less than the threshold) are not observed, the system stays in S2
+					if !strings.Contains(*configOpts, "--servo_num_offset_values") { // if consecutive smaller offsets (less than the threshold) are not observed, the system stays in S2
 						*configOpts += " --servo_num_offset_values 10"
 					}
 				}
@@ -1028,7 +1040,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			output.profile_name = *nodeProfile.Name
 		}
 
-		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
+		// output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
 
 		// This adds the flags needed for monitor
 		addFlagsForMonitor(pProcess, configOpts, output, dn.stdoutToSocket)
@@ -1076,8 +1088,10 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			haProfile:         haProfile,
 			syncERelations:    relations,
 			logParser:         getParser(pProcess),
-			tBCAttributes: tBCProcessAttributes{ttPortsConfigFile: controlledConfigFile, trPortsConfigFile: configFile,
-				lastReportedState: event.PTP_NOTSET, lastAppliedState: event.PTP_NOTSET, offsetFilter: nil},
+			tBCAttributes: tBCProcessAttributes{
+				ttPortsConfigFile: controlledConfigFile, trPortsConfigFile: configFile,
+				lastReportedState: event.PTP_NOTSET, lastAppliedState: event.PTP_NOTSET, offsetFilter: nil,
+			},
 			handler: dn.processManager.ptpEventHandler,
 			dn:      dn,
 		}
@@ -1128,6 +1142,15 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				pmcProcess.CmdInit()
 				// TODO addScheduling
 				dprocess.depProcess = append(dprocess.depProcess, pmcProcess)
+			}
+		} else if pProcess == phc2sysProcessName {
+			glog.Infof("Setting up phc2sys (%s)", clockType)
+			if clockType == event.GM {
+				glog.Infof("Setting skipInitialStartup")
+				// For T-GM, we must delay phc2sys until ts2phc has warmed up the PHC
+				dprocess.skipInitialStartup = "Waiting for ts2phc to synchronize before adjusting system time"
+			} else {
+				glog.Infof("Not setting skipInitialStartup")
 			}
 		} else if pProcess == ts2phcProcessName { //& if the x plugin is enabled
 			if clockType == event.GM {
@@ -1291,7 +1314,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				}
 			}
 		}
-		err = os.WriteFile(configPath, []byte(configOutput), 0644)
+		err = os.WriteFile(configPath, []byte(configOutput), 0o644)
 		if err != nil {
 			printNodeProfile(nodeProfile)
 			return fmt.Errorf("failed to write the configuration file named %s: %v", configPath, err)
@@ -1716,7 +1739,7 @@ func (p *ptpProcess) processPTPMetrics(output string) {
 				}
 			}
 			// ts2phc has to be handled differently since it announce holdover state when gnss is lost
-			//TODO: verify how 1pps is handled when lost
+			// TODO: verify how 1pps is handled when lost
 			switch clockState {
 			case FREERUN:
 				state = event.PTP_FREERUN
@@ -1772,13 +1795,13 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 			_, _ = exec.Command("chronyc", "-h", ChronydSocketPath, "offline").Output()
 			processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
 		}
-	case "phc2sys":
+	default:
 		if enabled {
 			if p.Stopped() && p.cmd != nil {
 				cmd := p.cmd
 				newCmd := exec.Command(cmd.Args[0], cmd.Args[1:]...)
 				p.cmd = newCmd
-				go p.cmdRun(p.dn.stdoutToSocket, &(p.dn.pluginManager))
+				go p.cmdRun(p.dn.stdoutToSocket, &p.dn.pluginManager)
 			}
 		} else {
 			p.cmdStop()
@@ -1806,6 +1829,14 @@ func (p *ptpProcess) MonitorEvent(offset float64, clockState string) {
 	// not implemented
 }
 
+// findProcessesByName locates a peer process by name
+func (p *ptpProcess) findProcessesByName(name string) []*ptpProcess {
+	if p.dn != nil && p.dn.processManager != nil {
+		return p.dn.processManager.findProcessesByName(name)
+	}
+	return []*ptpProcess{}
+}
+
 func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface string, state event.PTPState, extraValue map[event.ValueType]interface{}) {
 	var ptpState event.PTPState
 	ptpState = state
@@ -1817,7 +1848,18 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 	}
 
 	if source == ts2phcProcessName { // for ts2phc send it to event to create metrics and events
-		var values = make(map[event.ValueType]interface{})
+		// ts2phc offset <1s -> Startup phc2sys if it was delayed
+		if math.Abs(ptpOffset) < 1000000000 {
+			for _, proc := range p.findProcessesByName(phc2sysProcessName) {
+				if proc.skipInitialStartup != "" && *proc.nodeProfile.Name == *p.nodeProfile.Name {
+					glog.Infof("ts2phc offset is %f (sub-second); enabling %s", ptpOffset, proc.name)
+					proc.skipInitialStartup = ""
+					proc.cmdSetEnabled(true)
+					p.dn.pluginManager.AfterRunPTPCommand(&proc.nodeProfile, proc.name)
+				}
+			}
+		}
+		values := make(map[event.ValueType]interface{})
 
 		values[event.OFFSET] = ptpOffsetInt64
 		for k, v := range extraValue {
@@ -2141,7 +2183,7 @@ func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
 					}
 
 					state = sDeviceConfig.LastClockState
-				} else if logEntry.QL != synce.QL_DEFAULT_SSM { //else we have only QL
+				} else if logEntry.QL != synce.QL_DEFAULT_SSM { // else we have only QL
 					lastQLState.SSM = logEntry.QL // wait for extTlv
 				}
 			}
@@ -2171,8 +2213,8 @@ func (p *ptpProcess) ProcessSynceEvents(logEntry synce.LogEntry) {
 		default:
 		}
 	}
-
 }
+
 func (p *ptpProcess) SyncEDeviceByInterface(iface string) *synce.Config {
 	if p.syncERelations != nil {
 		for _, sConfig := range p.syncERelations.Devices {
