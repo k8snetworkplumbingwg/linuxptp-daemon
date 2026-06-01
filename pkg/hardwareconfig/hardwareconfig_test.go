@@ -1984,7 +1984,7 @@ func TestE830HardwareConfigFromTestdata(t *testing.T) {
 	// Validate leader subsystem (intel/e825)
 	leader := chain.Structure[0]
 	assert.Equal(t, "leader", leader.Name)
-	assert.Equal(t, "intel/e825", leader.HardwareSpecificDefinitions)
+	assert.Equal(t, "dell/XR8720t", leader.HardwareSpecificDefinitions)
 	assert.NotNil(t, leader.DPLL.HoldoverParameters, "Leader should have holdover parameters")
 	assert.Equal(t, uint64(20), leader.DPLL.HoldoverParameters.MaxInSpecOffset)
 	assert.Equal(t, uint64(30), leader.DPLL.HoldoverParameters.LocalMaxHoldoverOffset)

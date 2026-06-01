@@ -528,7 +528,7 @@ func TestClockChainResolutionWithE830(t *testing.T) {
 	// Verify leader (E825) was resolved normally
 	leader := resolvedConfig.Spec.Profile.ClockChain.Structure[0]
 	assert.Equal(t, "leader", leader.Name)
-	assert.Equal(t, "intel/e825", leader.HardwareSpecificDefinitions)
+	assert.Equal(t, "dell/XR8720t", leader.HardwareSpecificDefinitions)
 	assert.Equal(t, "eno5", leader.DPLL.NetworkInterface,
 		"Leader NetworkInterface should be derived")
 	assert.NotEmpty(t, leader.DPLL.PhaseInputs,
