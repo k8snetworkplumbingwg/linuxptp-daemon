@@ -2288,11 +2288,13 @@ func (hcm *HardwareConfigManager) GetDPLLFlags(profileName string, clockID uint6
 	defer hcm.mu.RUnlock()
 
 	for _, hwConfig := range hcm.hardwareConfigs {
-		if hwConfig.Spec.RelatedPtpProfileName == profileName {
+		if ProfileNamesMatch(profileName, hwConfig.Spec.RelatedPtpProfileName) {
 			if f, found := hwConfig.dpllFlags[clockID]; found {
 				return &f
 			}
+			glog.Infof("No DPLL flags found for clock %#x (profile %s, hwConfig %s)", clockID, profileName, hwConfig.Name)
 		}
+		glog.Infof("No matching hardware config found for profile %s", profileName)
 	}
 
 	return nil

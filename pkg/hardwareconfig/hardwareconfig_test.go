@@ -1949,11 +1949,13 @@ func TestDPLLFlagsExtraction(t *testing.T) {
 	hcm.ready = true
 	hcm.mu.Unlock()
 
-	retrieved := hcm.GetDPLLFlags("test-profile", clockIDE830)
+	// GetDPLLFlags uses ProfileNamesMatch: caller passes the full node profile name
+	// (e.g. "t-bc_test-profile") which is matched against RelatedPtpProfileName ("test-profile")
+	retrieved := hcm.GetDPLLFlags("prefix_test-profile", clockIDE830)
 	assert.NotNil(t, retrieved, "Should retrieve DPLL flags for E830 clock")
 	assert.Equal(t, dpllcfg.FlagOnlyPhaseStatus, *retrieved)
 
-	retrievedE825 := hcm.GetDPLLFlags("test-profile", clockIDE825)
+	retrievedE825 := hcm.GetDPLLFlags("prefix_test-profile", clockIDE825)
 	assert.Nil(t, retrievedE825, "Should return nil for E825 (no flags)")
 
 	retrievedBad := hcm.GetDPLLFlags("non-existent", clockIDE830)
