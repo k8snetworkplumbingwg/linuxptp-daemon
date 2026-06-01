@@ -793,18 +793,26 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 						go d.CmdRun(false)
 						time.Sleep(3 * time.Second)
 						dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, d.Name())
-						d.MonitorProcess(config.ProcessConfig{
-							ClockType:    p.clockType,
-							ConfigName:   p.configName,
-							EventChannel: dn.processManager.eventChannel,
-							GMThreshold: config.Threshold{
-								Max:             p.ptpClockThreshold.MaxOffsetThreshold,
-								Min:             p.ptpClockThreshold.MinOffsetThreshold,
-								HoldOverTimeout: p.ptpClockThreshold.HoldOverTimeout,
-							},
-							InitialPTPState: event.PTP_FREERUN,
-						})
-						glog.Infof("enabling dep process %s with Max %d Min %d Holdover %d", d.Name(), p.ptpClockThreshold.MaxOffsetThreshold, p.ptpClockThreshold.MinOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
+					d.MonitorProcess(config.ProcessConfig{
+						ClockType:    p.clockType,
+						ConfigName:   p.configName,
+						EventChannel: dn.processManager.eventChannel,
+						GMThreshold: config.Threshold{
+							Max:             p.ptpClockThreshold.MaxOffsetThreshold,
+							Min:             p.ptpClockThreshold.MinOffsetThreshold,
+							HoldOverTimeout: p.ptpClockThreshold.HoldOverTimeout,
+						},
+						InitialPTPState: event.PTP_FREERUN,
+					})
+					// Pre-populate event state immediately after the EventChannel
+					// is set up so that hardware-slaved DPLLs (e.g. E830 CF) are
+					// present in the event data before the async monitoring goroutine
+					// completes its own initial dump.
+					type initialStateSyncer interface{ SyncInitialState() }
+					if syncer, ok := d.(initialStateSyncer); ok {
+						syncer.SyncInitialState()
+					}
+					glog.Infof("enabling dep process %s with Max %d Min %d Holdover %d", d.Name(), p.ptpClockThreshold.MaxOffsetThreshold, p.ptpClockThreshold.MinOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
 					}
 				}
 				go p.cmdRun(dn.stdoutToSocket, &dn.pluginManager)

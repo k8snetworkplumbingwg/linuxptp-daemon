@@ -19,6 +19,11 @@ import (
 const (
 	// LeadingSource is a key for passing the leading source
 	LeadingSource ValueType = "LeadingSource"
+	// PpsSignalSource marks a DPLL event as originating from a phase-only
+	// hardware-slaved interface (FlagOnlyPhaseStatus set, e.g. E830 CF).
+	// Details carrying this marker must not receive cross-device SourceLost
+	// propagation from independently-sourced DPLLs.
+	PpsSignalSource ValueType = "PpsSignalSource"
 	// InSyncConditionThreshold is a key for passing the in-sync condition threshold
 	InSyncConditionThreshold ValueType = "in-sync-th"
 	// InSyncConditionTimes is a key for passing the in-sync condition counter maximum
