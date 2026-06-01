@@ -433,13 +433,21 @@ func (dn *Daemon) getInterfacesFromHardwareConfig(nodeProfile *ptpv1.PtpProfile)
 			continue
 		}
 
+		profileName := "<unnamed>"
+		if hwProfile.Name != nil {
+			profileName = *hwProfile.Name
+		}
+		glog.Infof("getInterfacesFromHardwareConfig: iterating %d subsystems in profile %s",
+			len(hwProfile.ClockChain.Structure), profileName)
+
 		for _, subsystem := range hwProfile.ClockChain.Structure {
 			networkInterface, err := hardwareconfig.GetSubsystemNetworkInterface(hwProfile.ClockChain, subsystem.Name)
 			if err != nil {
-				glog.V(2).Infof("getInterfacesFromHardwareConfig: failed to get network interface for subsystem %s: %v", subsystem.Name, err)
+				glog.Infof("getInterfacesFromHardwareConfig: subsystem %s: no network interface: %v", subsystem.Name, err)
 				continue
 			}
 			if networkInterface == "" {
+				glog.Infof("getInterfacesFromHardwareConfig: subsystem %s: empty network interface, skipping", subsystem.Name)
 				continue
 			}
 
@@ -456,13 +464,21 @@ func (dn *Daemon) getInterfacesFromHardwareConfig(nodeProfile *ptpv1.PtpProfile)
 				glog.Warningf("getInterfacesFromHardwareConfig: could not get PHC ID for iface %s, convergeConfig PHC fallback will not work", networkInterface)
 			}
 
-			// TODO: derive Source from subsystem role once the Subsystem API gains a
-			// source/dependsOn field.  For now every hardwareconfig subsystem is assumed
-			// to be driven by PTP4l (the only source type supported on the hardwareconfig
-			// path today).  convergeConfig may override this per-interface as needed.
+			// Subsystems that have PhaseInputs configured are driven by ptp4l (they
+			// receive a PTP time-receiver pin and run a ptp4l process).  Subsystems
+			// without PhaseInputs are hardware-slaved (e.g., Intel E830 CF cards that
+			// receive timing through hardware SDP/esync signals from the leader card)
+			// and must not use PTP4l as their source: getDpllState() would otherwise
+			// always return phaseStatus which stays DPLL_INVALID because no pps device
+			// notification ever arrives for these cards.  PPS is the correct source for
+			// hardware-slaved unmanaged DPLLs.
+			source := event.PTP4l
+			if len(subsystem.DPLL.PhaseInputs) == 0 {
+				source = event.PPS
+			}
 			interfaces = append(interfaces, config.Iface{
 				Name:     networkInterface,
-				Source:   event.PTP4l,
+				Source:   source,
 				PhcId:    phcID,
 				IsMaster: false,
 			})
