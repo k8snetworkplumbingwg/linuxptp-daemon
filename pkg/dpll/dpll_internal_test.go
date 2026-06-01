@@ -25,7 +25,7 @@ func TestDpllFlags(t *testing.T) {
 		{"NoFrequencyStatus", FlagNoFreqencyStatus, true, false, true, []string{"NoFrequencyStatus"}, "100"},
 		{"NoPhaseOffset", FlagNoPhaseOffset, true, true, false, []string{"NoPhaseOffset"}, "UNKNOWN"},
 		{"OnlyPhaseStatus", FlagOnlyPhaseStatus, true, false, false, []string{"NoFrequencyStatus", "NoPhaseOffset"}, "UNKNOWN"},
-		{"E830_AllPinFlags", FlagNoPhaseOffset | FlagNoPhaseStatus | FlagNoFreqencyStatus,
+		{"AllPinFlags", FlagNoPhaseOffset | FlagNoPhaseStatus | FlagNoFreqencyStatus,
 			false, false, false,
 			[]string{"NoFrequencyStatus", "NoPhaseStatus", "NoPhaseOffset"}, "UNKNOWN"},
 	}
@@ -54,6 +54,8 @@ func TestDpllStateDecisionWithFlags(t *testing.T) {
 		{"NoFlags_WorstIsPhase", 0, DPLL_HOLDOVER, DPLL_LOCKED, DPLL_HOLDOVER},
 		{"NoPhaseStatus", FlagNoPhaseStatus, DPLL_LOCKED, DPLL_FREERUN, DPLL_FREERUN},
 		{"NoFrequencyStatus", FlagNoFreqencyStatus, DPLL_LOCKED, DPLL_FREERUN, DPLL_LOCKED},
+		// E830: only pps device exists; getDpllState must return phaseStatus (LOCKED), not frequencyStatus (FREERUN)
+		{"OnlyPhaseStatus_E830", FlagOnlyPhaseStatus, DPLL_LOCKED, DPLL_FREERUN, DPLL_LOCKED},
 	}
 
 	for _, tt := range tests {

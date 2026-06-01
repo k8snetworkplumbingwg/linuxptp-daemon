@@ -8,9 +8,8 @@ clockIdTransformation:
   method: direct
 
 # DPLL monitoring flags intrinsic to this hardware.
-# E830 CF DPLL only provides phase status (PPS lock/unlock).
-# Phase offset and frequency status are not available.
+# E830 CF DPLL only provides phase status (PPS lock/unlock) via the pps device.
+# Phase offset and frequency status (eec device) are not available.
 dpllFlags:
   - noPhaseOffset
   - noFrequencyStatus
-  - noPhaseStatus

@@ -1882,8 +1882,7 @@ func TestLoadE830Defaults(t *testing.T) {
 
 	flags, err := hd.ParseDPLLFlags()
 	assert.NoError(t, err)
-	expectedE830Flags := dpllcfg.FlagNoPhaseOffset | dpllcfg.FlagNoPhaseStatus | dpllcfg.FlagNoFreqencyStatus
-	assert.Equal(t, expectedE830Flags, flags, "E830 should have all monitoring flags disabled")
+	assert.Equal(t, dpllcfg.FlagOnlyPhaseStatus, flags, "E830 should only have phase status (pps) available")
 }
 
 func TestDPLLFlagsExtraction(t *testing.T) {
@@ -1899,7 +1898,6 @@ func TestDPLLFlagsExtraction(t *testing.T) {
 
 	clockIDE825 := uint64(0x507c6fffff5c4ae8) // eno5
 	clockIDE830 := uint64(0x507c6fffffabcdef) // enp108s0f0
-	expectedE830Flags := dpllcfg.FlagNoPhaseOffset | dpllcfg.FlagNoPhaseStatus | dpllcfg.FlagNoFreqencyStatus
 
 	hwConfig := ptpv2alpha1.HardwareConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-flags"},
@@ -1936,10 +1934,10 @@ func TestDPLLFlagsExtraction(t *testing.T) {
 	_, hasE825Flags := flags[clockIDE825]
 	assert.False(t, hasE825Flags, "E825 should not have DPLL flags")
 
-	// E830 should have all monitoring flags disabled
+	// E830 should only have phase status (pps) available
 	e830Flags, hasE830Flags := flags[clockIDE830]
 	assert.True(t, hasE830Flags, "E830 should have DPLL flags")
-	assert.Equal(t, expectedE830Flags, e830Flags, "E830 flags should disable all monitoring")
+	assert.Equal(t, dpllcfg.FlagOnlyPhaseStatus, e830Flags, "E830 should only have phase status (pps) available")
 
 	// Test GetDPLLFlags API
 	enriched := enrichedHardwareConfig{
@@ -1953,7 +1951,7 @@ func TestDPLLFlagsExtraction(t *testing.T) {
 
 	retrieved := hcm.GetDPLLFlags("test-profile", clockIDE830)
 	assert.NotNil(t, retrieved, "Should retrieve DPLL flags for E830 clock")
-	assert.Equal(t, expectedE830Flags, *retrieved)
+	assert.Equal(t, dpllcfg.FlagOnlyPhaseStatus, *retrieved)
 
 	retrievedE825 := hcm.GetDPLLFlags("test-profile", clockIDE825)
 	assert.Nil(t, retrievedE825, "Should return nil for E825 (no flags)")
@@ -2014,14 +2012,12 @@ func TestE830HardwareConfigFromTestdata(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, dpllcfg.Flag(0), e825Flags, "E825 should have no DPLL flags")
 
-	expectedE830Flags := dpllcfg.FlagNoPhaseOffset | dpllcfg.FlagNoPhaseStatus | dpllcfg.FlagNoFreqencyStatus
-
 	e830Defaults, err := LoadHardwareDefaults("intel/e830", nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, e830Defaults)
 	e830Flags, err := e830Defaults.ParseDPLLFlags()
 	assert.NoError(t, err)
-	assert.Equal(t, expectedE830Flags, e830Flags, "E830 should have all monitoring flags disabled")
+	assert.Equal(t, dpllcfg.FlagOnlyPhaseStatus, e830Flags, "E830 should only have phase status (pps) available")
 
 	// Validate DPLL flags extraction with mock command executor
 	mockCmd := NewMockCommandExecutor()
@@ -2042,8 +2038,8 @@ func TestE830HardwareConfigFromTestdata(t *testing.T) {
 	// E830 subsystems should have flags extracted
 	e830Count := 0
 	for clockID, f := range flags {
-		assert.Equal(t, expectedE830Flags, f,
-			"Clock %#x should have all monitoring flags disabled", clockID)
+		assert.Equal(t, dpllcfg.FlagOnlyPhaseStatus, f,
+			"Clock %#x should only have phase status (pps) available", clockID)
 		e830Count++
 	}
 	assert.Equal(t, len(chain.Structure)-1, e830Count,
