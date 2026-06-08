@@ -245,12 +245,17 @@ func (c *ClockChain) SetPinsControl(pins []PinControl) ([]dpll.PinParentDeviceCt
 // Returns nil when no clock IDs have been resolved yet (leading NIC is zero
 // and no other NICs), which tells the caller to skip filtering.
 func (c *ClockChain) configuredClockIDs() map[uint64]bool {
-	if c.LeadingNIC.DpllClockID == 0 && len(c.OtherNICs) == 0 {
-		return nil
+	ids := make(map[uint64]bool)
+	if c.LeadingNIC.DpllClockID != 0 {
+		ids[c.LeadingNIC.DpllClockID] = true
 	}
-	ids := map[uint64]bool{c.LeadingNIC.DpllClockID: true}
 	for _, nic := range c.OtherNICs {
-		ids[nic.DpllClockID] = true
+		if nic.DpllClockID != 0 {
+			ids[nic.DpllClockID] = true
+		}
+	}
+	if len(ids) == 0 {
+		return nil
 	}
 	return ids
 }

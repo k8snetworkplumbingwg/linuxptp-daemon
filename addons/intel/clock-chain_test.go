@@ -234,7 +234,7 @@ func Test_SetPinsControlForAllNICs_SkipsUnconfiguredNICs(t *testing.T) {
 	defer restorePinSet()
 
 	cc := &ClockChain{
-		LeadingNIC: CardInfo{Name: "ens4f0", DpllClockID: configuredClockID},
+		LeadingNIC: CardInfo{Name: "test-nic", DpllClockID: configuredClockID},
 		OtherNICs:  []CardInfo{},
 		DpllPins:   DpllPins,
 	}
