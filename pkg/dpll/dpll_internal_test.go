@@ -292,32 +292,117 @@ func TestActivePhaseOffsetPin(t *testing.T) {
 	}
 }
 
-// TestDpllSubscriberNotifySkipsWhenCurrentStatePTP_UNKNOWN covers dpll.go:284 — when the
-// depending process state is still PTP_UNKNOWN, Notify must not apply the new state (so loss
-// of GNSS does not incorrectly drive PTP_FREERUN into the map / sourceLost).
-func TestDpllSubscriberNotifySkipsWhenCurrentStatePTP_UNKNOWN(t *testing.T) {
-	d := &DpllConfig{
-		isMonitoring: true,
-		sourceLost:   false,
-		dependsOn:    []event.EventSource{event.GNSS},
+func TestHandleGNSSState(t *testing.T) {
+	tests := []struct {
+		name            string
+		gnssState       GNSSState
+		isMonitoring    bool
+		phaseStatus     int64
+		frequencyStatus int64
+		phaseOffset     int64
+		newGNSSLock     bool
+		wantGNSSState   GNSSState
+		wantState       event.PTPState
+		wantSourceLost  bool
+	}{
+		{
+			name:            "first GNSS notification from UNKNOWN sets state",
+			gnssState:       GNSSUnknown,
+			isMonitoring:    true,
+			newGNSSLock:     false,
+			phaseStatus:     DPLL_LOCKED,
+			frequencyStatus: DPLL_LOCKED,
+			phaseOffset:     5,
+			wantGNSSState:   GNSSUnlocked,
+			wantState:       event.PTP_LOCKED,
+			wantSourceLost:  false,
+		},
+		{
+			name:            "skips when not monitoring",
+			gnssState:       GNSSLocked,
+			isMonitoring:    false,
+			newGNSSLock:     false,
+			phaseStatus:     DPLL_LOCKED,
+			frequencyStatus: DPLL_LOCKED,
+			wantGNSSState:   GNSSLocked,
+			wantState:       event.PTP_FREERUN,
+			wantSourceLost:  false,
+		},
+		{
+			name:            "skips when state unchanged",
+			gnssState:       GNSSLocked,
+			isMonitoring:    true,
+			newGNSSLock:     true,
+			phaseStatus:     DPLL_LOCKED,
+			frequencyStatus: DPLL_LOCKED,
+			wantGNSSState:   GNSSLocked,
+			wantState:       event.PTP_FREERUN,
+			wantSourceLost:  false,
+		},
+		{
+			name:            "GNSS LOCKED to UNLOCKED: DPLL locked with good offset clears sourceLost",
+			gnssState:       GNSSLocked,
+			isMonitoring:    true,
+			newGNSSLock:     false,
+			phaseStatus:     DPLL_LOCKED,
+			frequencyStatus: DPLL_LOCKED,
+			phaseOffset:     5,
+			wantGNSSState:   GNSSUnlocked,
+			wantState:       event.PTP_LOCKED,
+			wantSourceLost:  false,
+		},
+		{
+			name:            "GNSS UNLOCKED to LOCKED: DPLL locked clears sourceLost",
+			gnssState:       GNSSUnlocked,
+			isMonitoring:    true,
+			newGNSSLock:     true,
+			phaseStatus:     DPLL_LOCKED,
+			frequencyStatus: DPLL_LOCKED,
+			phaseOffset:     5,
+			wantGNSSState:   GNSSLocked,
+			wantState:       event.PTP_LOCKED,
+			wantSourceLost:  false,
+		},
+		{
+			name:            "GNSS LOCKED to UNLOCKED: DPLL freerun gives FREERUN",
+			gnssState:       GNSSLocked,
+			isMonitoring:    true,
+			newGNSSLock:     false,
+			phaseStatus:     DPLL_FREERUN,
+			frequencyStatus: DPLL_FREERUN,
+			wantGNSSState:   GNSSUnlocked,
+			wantState:       event.PTP_FREERUN,
+			wantSourceLost:  true,
+		},
 	}
-	sub := DpllSubscriber{source: event.GNSS, dpll: d, id: "test-gnss"}
 
-	dependingProcessStateMap.Lock()
-	dependingProcessStateMap.states[event.GNSS] = event.PTP_UNKNOWN
-	dependingProcessStateMap.Unlock()
-	t.Cleanup(func() {
-		dependingProcessStateMap.Lock()
-		delete(dependingProcessStateMap.states, event.GNSS)
-		dependingProcessStateMap.Unlock()
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eventChannel := make(chan event.EventChannel, 10)
+			d := &DpllConfig{
+				isMonitoring:    tt.isMonitoring,
+				sourceLost:      false,
+				state:           event.PTP_FREERUN,
+				dependsOn:       []event.EventSource{event.GNSS},
+				gnssState:       tt.gnssState,
+				phaseStatus:     tt.phaseStatus,
+				frequencyStatus: tt.frequencyStatus,
+				phaseOffset:     tt.phaseOffset,
+				iface:           "ens01",
+				apiType:         MOCK,
+				processConfig: config.ProcessConfig{
+					EventChannel: eventChannel,
+					ConfigName:   "test",
+					ClockType:    "GM",
+					GMThreshold:  config.Threshold{Min: -100, Max: 100},
+				},
+			}
 
-	sub.Notify(event.GNSS, event.PTP_FREERUN)
+			d.handleGNSSState(tt.newGNSSLock)
 
-	dependingProcessStateMap.Lock()
-	st := dependingProcessStateMap.states[event.GNSS]
-	dependingProcessStateMap.Unlock()
-
-	assert.Equal(t, event.PTP_UNKNOWN, st)
-	assert.False(t, d.sourceLost, "Notify must not run GNSS sourceLost logic when current state is PTP_UNKNOWN")
+			assert.Equal(t, tt.wantGNSSState, d.gnssState)
+			assert.Equal(t, tt.wantState, d.state, "dpll state")
+			assert.Equal(t, tt.wantSourceLost, d.sourceLost, "sourceLost")
+		})
+	}
 }

@@ -93,11 +93,6 @@ func (d *Data) AddEvent(event EventChannel) {
 	for _, dd := range d.Details {
 		if dd.IFace == event.IFace {
 			if dd.time <= event.Time {
-				if dd.State != event.State {
-					if len(StateRegisterer.Subscribers) > 0 {
-						go StateRegisterer.notify(event.ProcessName, event.State)
-					}
-				}
 				dd.State = event.State
 				dd.sourceLost = event.SourceLost
 				dd.ClockType = event.ClockType
@@ -134,10 +129,6 @@ func (d *Data) AddEvent(event EventChannel) {
 	}
 	d.logData = details.logData
 	d.Details = append(d.Details, details)
-	if len(StateRegisterer.Subscribers) > 0 {
-		glog.Infof("notify state changed for %s", event.ProcessName)
-		go StateRegisterer.notify(event.ProcessName, event.State)
-	}
 }
 
 // ToString ... data
