@@ -430,6 +430,25 @@ func findConditionByName(conditions []ptpv2alpha1.Condition, name string) *ptpv2
 	return nil
 }
 
+func TestSplitQualifiedName(t *testing.T) {
+	tests := []struct {
+		input       string
+		wantCR      string
+		wantProfile string
+	}{
+		{"crName_profileName", "crName", "profileName"},
+		{"my-cr_my-profile", "my-cr", "my-profile"},
+		{"cr_profile_with_underscores", "cr", "profile_with_underscores"},
+		{"noprefix", "", "noprefix"},
+		{"", "", ""},
+	}
+	for _, tt := range tests {
+		cr, profile := SplitQualifiedName(tt.input)
+		assert.Equal(t, tt.wantCR, cr, "SplitQualifiedName(%q) crName", tt.input)
+		assert.Equal(t, tt.wantProfile, profile, "SplitQualifiedName(%q) profileName", tt.input)
+	}
+}
+
 func TestProfileNamesMatch(t *testing.T) {
 	tests := []struct {
 		stored    string

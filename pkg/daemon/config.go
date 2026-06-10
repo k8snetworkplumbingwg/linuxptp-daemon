@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
+	hc "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 
@@ -60,6 +61,24 @@ func (l *LinuxPTPConfUpdate) TriggerRestartForHardwareChange() error {
 		}()
 		return nil
 	}
+}
+
+// DisplayProfileName strips the PtpConfig CR name prefix from a qualified
+// profile name (crName_profileName) and returns the original user-facing name.
+// If the name does not contain the separator it is returned as-is.
+func DisplayProfileName(qualifiedName string) string {
+	_, profile := hc.SplitQualifiedName(qualifiedName)
+	return profile
+}
+
+// profileHeader returns the config file header string for a profile name.
+// For qualified names it appends the decomposed parts; unqualified names are returned as-is.
+func profileHeader(name string) string {
+	crName, profileName := hc.SplitQualifiedName(name)
+	if crName != "" {
+		return fmt.Sprintf("%s, original profile name %s defined in ptpconfig %s", name, profileName, crName)
+	}
+	return name
 }
 
 // GetCurrentPTPProfiles implements HardwareConfigRestartTrigger interface
@@ -404,7 +423,7 @@ func (conf *Ptp4lConf) extractSynceRelations() *synce.Relations {
 
 // RenderSyncE4lConf outputs synce4l config as string
 func (conf *Ptp4lConf) RenderSyncE4lConf(ptpSettings map[string]string) (configOut string, relations *synce.Relations) {
-	configOut = fmt.Sprintf("#profile: %s\n", conf.profile_name)
+	configOut = fmt.Sprintf("#profile: %s\n", profileHeader(conf.profile_name))
 	relations = conf.extractSynceRelations()
 	relations.AddClockIds(ptpSettings)
 	deviceIdx := 0
@@ -434,7 +453,7 @@ func getSectionName(name string) string {
 
 // RenderPtp4lConf outputs ptp4l config as string
 func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces) {
-	configOut = fmt.Sprintf("#profile: %s\n", conf.profile_name)
+	configOut = fmt.Sprintf("#profile: %s\n", profileHeader(conf.profile_name))
 	var nmea_source event.EventSource
 
 	for _, section := range conf.sections {

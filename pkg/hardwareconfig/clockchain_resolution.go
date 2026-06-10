@@ -157,17 +157,27 @@ func findLeadingInterfaceFromUpstreamPortWithResolver(upstreamPort string, resol
 	return leadingInterface, nil
 }
 
+// SplitQualifiedName decomposes a qualified profile name ("crName_profileName")
+// into its two parts. If the name has no prefix, crName is empty.
+func SplitQualifiedName(qualified string) (crName, profileName string) {
+	if parts := strings.SplitN(qualified, "_", 2); len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return "", qualified
+}
+
 // ProfileNamesMatch reports whether a PtpConfig profile name (stored) matches a
 // HardwareConfig's RelatedPtpProfileName (requested).
+// The stored name must be qualified (contain a "_" prefix); unqualified names never match.
 func ProfileNamesMatch(stored, requested string) bool {
 	if strings.TrimSpace(requested) == "" {
 		return false
 	}
-	parts := strings.SplitN(stored, "_", 2)
-	if len(parts) > 1 && parts[1] == requested {
-		return true
+	crName, profile := SplitQualifiedName(stored)
+	if crName == "" {
+		return false
 	}
-	return false
+	return profile == requested
 }
 
 // ResolveClockChain resolves a minimal hardwareconfig by deriving structure and behavior
