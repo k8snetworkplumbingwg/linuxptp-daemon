@@ -980,16 +980,13 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 	// If unset default to clock type inferred from ptp4l
 	if clockType == event.ClockUnset {
-		ptp4lOutput := &Ptp4lConf{}
-		// Parsing ptp4l needs to be done here to get the fallback clock type.
-		// Needs to be done outside the loop as we need to guarantee clockType
-		// set before the ts2phcProcessName case where it is used.
-		err = ptp4lOutput.PopulatePtp4lConf(nodeProfile.Ptp4lConf, nodeProfile.Ptp4lOpts)
+		ptp4lOutput := &ProfileConfig{}
+		err = ptp4lOutput.Populate(nodeProfile.Ptp4lConf)
 		if err != nil {
 			printNodeProfile(nodeProfile)
 			return err
 		}
-		clockType = ptp4lOutput.clock_type
+		clockType = deriveClockType(ptp4lOutput.PortRoles)
 	}
 
 	for _, pProcess := range ptpProcesses {
@@ -1070,8 +1067,8 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			messageTag = fmt.Sprintf("[chronyd.%d.config]", runID)
 		}
 
-		output := &Ptp4lConf{}
-		err = output.PopulatePtp4lConf(configInput, nil) // cli args not need as we already have clock type from ptp4l
+		output := &ProfileConfig{}
+		err = output.Populate(configInput)
 		if err != nil {
 			printNodeProfile(nodeProfile)
 			return err
@@ -1093,8 +1090,8 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		if pProcess != chronydProcessName {
 			output.ExtendGlobalSection(*nodeProfile.Name, messageTag, socketPath, pProcess)
 		} else {
-			output.setPtp4lConfOption("", "bindcmdaddress", ChronydSocketPath, true)
-			output.profile_name = *nodeProfile.Name
+			output.SetOption("", "bindcmdaddress", ChronydSocketPath, true)
+			output.profileName = *nodeProfile.Name
 		}
 
 		//output, messageTag, socketPath, GPSPIPE_SERIALPORT, update_leapfile, os.Getenv("NODE_NAME")
@@ -1200,8 +1197,8 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			}
 		} else if pProcess == ts2phcProcessName { //& if the x plugin is enabled
 			if clockType == event.GM {
-				if output.gnss_serial_port == "" {
-					output.gnss_serial_port = GPSPIPE_SERIALPORT
+				if output.gnssSerialPort == "" {
+					output.gnssSerialPort = GPSPIPE_SERIALPORT
 				}
 				// TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
 				gmInterface := dprocess.ifaces.GetLeadingInterface().Name
@@ -1210,7 +1207,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 					name:        GPSD_PROCESSNAME,
 					execMutex:   sync.Mutex{},
 					cmd:         nil,
-					serialPort:  output.gnss_serial_port,
+					serialPort:  output.gnssSerialPort,
 					exitCh:      make(chan struct{}),
 					gmInterface: gmInterface,
 					stopped:     false,

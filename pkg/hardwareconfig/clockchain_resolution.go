@@ -9,6 +9,7 @@ import (
 
 	"github.com/golang/glog"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ptp4lconf"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	"sigs.k8s.io/yaml"
@@ -60,33 +61,20 @@ func extractUpstreamPortsFromPtpProfile(ptpProfile *ptpv1.PtpProfile) []string {
 		return nil
 	}
 
+	conf := &ptp4lconf.Conf{}
+	if err := conf.Populate(ptpProfile.Ptp4lConf); err != nil {
+		glog.Errorf("failed to parse ptp4l config for upstream port extraction: %v", err)
+		return nil
+	}
+
 	var upstreamPorts []string
-	var currentSection string
-
-	for _, line := range strings.Split(*ptpProfile.Ptp4lConf, "\n") {
-		line = strings.TrimSpace(line)
-
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
+	for _, section := range conf.Sections {
+		name := section.SectionName
+		if name == ptp4lconf.GlobalSectionName || name == ptp4lconf.NmeaSectionName || name == ptp4lconf.UnicastSectionName {
 			continue
 		}
-
-		// Check for section header (e.g., [eno2] or [global])
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			currentSection = strings.Trim(line, "[]")
-			// Skip global and other non-interface sections
-			if currentSection == "global" || currentSection == "nmea" || currentSection == "unicast" {
-				currentSection = ""
-			}
-			continue
-		}
-
-		// Check for masterOnly=0 in current section
-		if currentSection != "" {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 && parts[0] == "masterOnly" && parts[1] == "0" {
-				upstreamPorts = append(upstreamPorts, currentSection)
-			}
+		if val, ok := conf.GetOption(name, "masterOnly"); ok && strings.TrimSpace(val) == "0" {
+			upstreamPorts = append(upstreamPorts, section.Name())
 		}
 	}
 

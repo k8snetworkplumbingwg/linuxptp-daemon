@@ -901,8 +901,8 @@ func initPopulateAndRenderPtp4lConfTestCase() []populateAndRenderPtp4lConfTestCa
 func TestDaemon_PopulateAndRenderPtp4lConf(t *testing.T) {
 	testCases := initPopulateAndRenderPtp4lConfTestCase()
 	for _, tc := range testCases {
-		conf := &daemon.Ptp4lConf{}
-		conf.PopulatePtp4lConf(&tc.testConf, nil)
+		conf := &daemon.ProfileConfig{}
+		conf.Populate(&tc.testConf)
 		if tc.iface != "" {
 			conf.AddInterfaceSection(tc.iface)
 		}
