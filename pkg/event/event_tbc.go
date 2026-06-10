@@ -19,6 +19,11 @@ import (
 const (
 	// LeadingSource is a key for passing the leading source
 	LeadingSource ValueType = "LeadingSource"
+	// PpsSignalSource marks a DPLL event as originating from a phase-only
+	// hardware-slaved interface (FlagOnlyPhaseStatus set, e.g. E830 CF).
+	// Details carrying this marker must not receive cross-device SourceLost
+	// propagation from independently-sourced DPLLs.
+	PpsSignalSource ValueType = "PpsSignalSource"
 	// InSyncConditionThreshold is a key for passing the in-sync condition threshold
 	InSyncConditionThreshold ValueType = "in-sync-th"
 	// InSyncConditionTimes is a key for passing the in-sync condition counter maximum
@@ -84,6 +89,7 @@ func (e *EventHandler) updateBCState(event EventChannel) (clockSyncState, bool) 
 	cfgName := event.CfgName
 	dpllState := PTP_NOTSET
 	ts2phcState := PTP_FREERUN
+	glog.Infof("Event: %+v", event)
 	// For internal data announces, only update the downstream data on class change
 	// For External GM data announces in the locked state, update whenever any of the
 	// information elements change
@@ -507,7 +513,9 @@ func (e *EventHandler) isSourceLostBC(cfgName string) bool {
 				}
 			}
 			if d.ProcessName == DPLL {
+				glog.Infof("isSourceLostBC[%s]", cfgName)
 				for _, dd := range d.Details {
+					glog.Infof("  DPLL detail: iface=%s state=%s signalSource=%s sourceLost=%t offset=%d time=%d metrics=%+v", dd.IFace, dd.State, dd.signalSource, dd.sourceLost, dd.Offset, dd.time, dd.Metrics)
 					if dd.State != PTP_LOCKED {
 						dpllLost = true
 						dpllLostIface = dd.IFace

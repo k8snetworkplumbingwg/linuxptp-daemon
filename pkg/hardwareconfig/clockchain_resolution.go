@@ -227,6 +227,26 @@ func (hcm *HardwareConfigManager) ResolveClockChain(hwConfig *ptpv2alpha1.Hardwa
 	for i := range resolvedConfig.Spec.Profile.ClockChain.Structure {
 		subsystem := &resolvedConfig.Spec.Profile.ClockChain.Structure[i]
 
+		// Load hardware defaults once per subsystem (result is cached by getHardwareDefaults).
+		// Use them here to detect unmanaged DPLLs (e.g., E830) so that extractDPLLFlags
+		// can reuse the cached entry later without a redundant load.
+		// Unmanaged DPLLs intentionally have no PhaseInputs/Ethernet or behavior templates.
+		hwDefPath := strings.TrimSpace(subsystem.HardwareSpecificDefinitions)
+		if hwDefPath != "" {
+			hwDefaults, err := hcm.getHardwareDefaults(hwDefPath)
+			if err != nil {
+				glog.Warningf("Subsystem %s: failed to load hardware defaults from %s: %v", subsystem.Name, hwDefPath, err)
+			} else if hwDefaults != nil {
+				dpllFlags, flagErr := hwDefaults.ParseDPLLFlags()
+				if flagErr != nil {
+					glog.Warningf("Subsystem %s: failed to parse DPLL flags from %s: %v", subsystem.Name, hwDefPath, flagErr)
+				} else if dpllFlags != 0 {
+					glog.Infof("Subsystem %s is an unmanaged DPLL (has dpllFlags), skipping structure derivation", subsystem.Name)
+					continue
+				}
+			}
+		}
+
 		// Derive structure from ptpconfig if not explicitly provided
 		if subsystem.DPLL.NetworkInterface == "" || len(subsystem.DPLL.PhaseInputs) == 0 || len(subsystem.Ethernet) == 0 {
 			if err := hcm.deriveSubsystemStructure(subsystem, ptpProfile, clockType); err != nil {

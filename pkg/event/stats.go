@@ -80,9 +80,17 @@ func (d *Data) AddEvent(event EventChannel) {
 	// show LOCKED. The active TR port may differ from ports that received
 	// earlier offset events, leaving stale LOCKED states on inactive details
 	// that would otherwise fool isSourceLostBC.
-	if event.SourceLost {
+	//
+	// Exception: phase-only hardware-slaved DPLLs (e.g. E830 CF cards,
+	// identified by PpsSignalSource=true) are independent hardware devices.
+	// Their lock state is derived solely from their own device notifications
+	// and must never be overwritten by another device's SourceLost event.
+	// A chained E810 that is PPS-sourced but has full monitoring capability
+	// does not carry PpsSignalSource, so propagation to it is preserved.
+	ppsSource, _ := event.Values[PpsSignalSource].(bool)
+	if event.SourceLost && !ppsSource {
 		for _, dd := range d.Details {
-			if dd.IFace != event.IFace && dd.State == PTP_LOCKED {
+			if dd.IFace != event.IFace && dd.State == PTP_LOCKED && dd.signalSource != PPS {
 				dd.State = event.State
 				dd.sourceLost = true
 				dd.time = event.Time
@@ -131,6 +139,9 @@ func (d *Data) AddEvent(event EventChannel) {
 	if found && leading.(bool) {
 		glog.Info(details.IFace, " is set as the leading source ")
 		details.signalSource = PTP4l
+	}
+	if ppsSource {
+		details.signalSource = PPS
 	}
 	d.logData = details.logData
 	d.Details = append(d.Details, details)

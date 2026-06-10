@@ -355,6 +355,38 @@ func (d *DpllConfig) CmdInit() {
 	glog.Infof("api type %v", d.apiType)
 }
 
+// SyncInitialState does a one-shot synchronous DPLL device dump and sends an
+// initial state event. It must be called after MonitorProcess has set up the
+// EventChannel. This closes the race window between profile application
+// (which sends a Reset that wipes all DPLL event data) and the asynchronous
+// MonitorDpllNetlink goroutine completing its own initial dump. Without this,
+// hardware-slaved DPLLs (e.g. E830 CF cards) may be absent from the event
+// data when the first SourceLost event from the leader DPLL arrives.
+func (d *DpllConfig) SyncInitialState() {
+	if d.apiType != NETLINK {
+		return
+	}
+	if d.processConfig.EventChannel == nil {
+		glog.Infof("SyncInitialState: EventChannel not set for %s, skipping", d.iface)
+		return
+	}
+	conn, err := nl.Dial(nil)
+	if err != nil {
+		glog.Infof("SyncInitialState: failed to dial netlink for %s: %v", d.iface, err)
+		return
+	}
+	defer conn.Close()
+	replies, err := conn.DumpDeviceGet()
+	if err != nil {
+		glog.Infof("SyncInitialState: failed to dump DPLL devices for %s: %v", d.iface, err)
+		return
+	}
+	glog.Infof("SyncInitialState: pre-populating DPLL state for %s (%d devices)", d.iface, len(replies))
+	if d.nlUpdateState(replies, nil) {
+		d.stateDecision()
+	}
+}
+
 // ProcessStatus ... process status
 func (d *DpllConfig) ProcessStatus(_ net.Conn, _ int64) {
 }
@@ -850,7 +882,14 @@ func (d *DpllConfig) sendDpllEvent() {
 				}
 				return 1
 			}(),
-			event.LeadingSource:            d.hasLeadingSource(),
+			event.LeadingSource: d.hasLeadingSource(),
+			// PpsSignalSource identifies phase-only hardware-slaved DPLLs
+			// (FlagOnlyPhaseStatus set, e.g. E830 CF cards). This is the
+			// discriminator used by AddEvent to prevent SourceLost
+			// propagation from crossing into independent hardware devices.
+			// A chained E810 that is also PPS-sourced does NOT have
+			// FlagOnlyPhaseStatus and therefore is not tagged here.
+			event.PpsSignalSource:          d.hasFlag(FlagOnlyPhaseStatus),
 			event.InSyncConditionThreshold: d.inSyncConditionThreshold,
 			event.InSyncConditionTimes:     d.inSyncConditionTimes,
 			event.ToFreeRunThreshold:       d.LocalMaxHoldoverOffSet,
