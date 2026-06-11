@@ -1199,6 +1199,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				dprocess.depProcess = append(dprocess.depProcess, pmcProcess)
 			}
 		} else if pProcess == ts2phcProcessName { //& if the x plugin is enabled
+			var gpsDaemon *GPSD
 			if clockType == event.GM {
 				if output.gnss_serial_port == "" {
 					output.gnss_serial_port = GPSPIPE_SERIALPORT
@@ -1206,7 +1207,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				// TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
 				gmInterface := dprocess.ifaces.GetLeadingInterface().Name
 
-				gpsDaemon := &GPSD{
+				gpsDaemon = &GPSD{
 					name:        GPSD_PROCESSNAME,
 					execMutex:   sync.Mutex{},
 					cmd:         nil,
@@ -1356,6 +1357,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 						return dn.hardwareConfigManager.ProcessDPLLDeviceNotifications(devices)
 					})
 					dpllDaemon.CmdInit()
+					if gpsDaemon != nil && iface.Source == event.GNSS {
+						gpsDaemon.gnssNotifyCh = dpllDaemon.GNSSNotifyCh()
+					}
 					dprocess.depProcess = append(dprocess.depProcess, dpllDaemon)
 				}
 			}

@@ -87,38 +87,15 @@ const (
 	NONE    dpllApiType = "none"
 )
 
-type DependingStates struct {
-	sync.Mutex
-	states       map[event.EventSource]event.PTPState
-	currentState event.PTPState
-}
+// GNSSState represents the GNSS receiver lock status as reported by GPSD.
+type GNSSState int
 
-// DpllSubscriber ... event subscriber
-type DpllSubscriber struct {
-	source event.EventSource
-	dpll   *DpllConfig
-	id     string
-}
-
-var dependingProcessStateMap = DependingStates{
-	states: make(map[event.EventSource]event.PTPState),
-}
-
-// GetCurrentState ... get current state
-func (d *DependingStates) GetCurrentState() event.PTPState {
-	return d.currentState
-}
-
-func (d *DependingStates) UpdateState(source event.EventSource) {
-	// do not lock here, since this function is called from other locks
-	lowestState := event.PTP_FREERUN
-	for _, state := range d.states {
-		if state < lowestState {
-			lowestState = state
-		}
-	}
-	d.currentState = lowestState
-}
+// GNSSState values representing GNSS receiver lock status.
+const (
+	GNSSUnknown GNSSState = iota
+	GNSSLocked
+	GNSSUnlocked
+)
 
 // DpllConfig ... DPLL configuration
 type DpllConfig struct {
@@ -156,7 +133,8 @@ type DpllConfig struct {
 	clockId uint64
 	sync.Mutex
 	isMonitoring             bool
-	subscriber               []*DpllSubscriber
+	gnssState                GNSSState
+	gnssNotifyCh             chan bool
 	phaseOffsetPinFilter     map[string]map[string]string
 	inSyncConditionThreshold uint64
 	inSyncConditionTimes     uint64
@@ -255,47 +233,28 @@ func (d *DpllConfig) PhaseStatus() int64 {
 	return d.phaseStatus
 }
 
-// Monitor ...
-func (s DpllSubscriber) Monitor() {
-	glog.Infof("Starting dpll monitoring %s", s.id)
-	s.dpll.MonitorDpll()
+// GNSSNotifyCh returns the channel that receives GNSS state updates.
+// The daemon wires GPSD to send on this channel directly.
+func (d *DpllConfig) GNSSNotifyCh() chan<- bool {
+	return d.gnssNotifyCh
 }
 
-// Topic ... event topic
-func (s DpllSubscriber) Topic() event.EventSource {
-	return s.source
-}
-
-func (s DpllSubscriber) ID() string {
-	return s.id
-}
-
-// Notify ... event notification
-func (s DpllSubscriber) Notify(source event.EventSource, state event.PTPState) {
-	if s.dpll == nil || !s.dpll.isMonitoring {
-		glog.Errorf("dpll subscriber %s is not initialized (monitoring state %t)", s.source, s.dpll.isMonitoring)
+func (d *DpllConfig) handleGNSSState(locked bool) {
+	if !d.isMonitoring {
 		return
 	}
-	dependingProcessStateMap.Lock()
-	defer dependingProcessStateMap.Unlock()
-	currentState := dependingProcessStateMap.states[source]
-	// If state changes, then set internal state to match.
-	// Skip if PTP_UNKNOWN so that loss of gnss doesn't incorrectly change to PTP_FREERUN
-	if currentState != state && currentState != event.PTP_UNKNOWN {
-		glog.Infof("%s notified on state change: from state %v to state %v", source, currentState, state)
-		dependingProcessStateMap.states[source] = state
-		if source == event.GNSS {
-			if state == event.PTP_LOCKED {
-				s.dpll.sourceLost = false
-			} else {
-				s.dpll.sourceLost = true
-			}
-			glog.Infof("sourceLost %v", s.dpll.sourceLost)
-		}
-		s.dpll.stateDecision()
-		glog.Infof("%s notified on state change: state %v", source, state)
-		dependingProcessStateMap.UpdateState(source)
+	state := GNSSUnlocked
+	if locked {
+		state = GNSSLocked
 	}
+	if d.gnssState == state {
+		return
+	}
+	glog.Infof("GNSS state change: from %v to %v", d.gnssState, state)
+	d.gnssState = state
+	d.sourceLost = !locked
+	glog.Infof("sourceLost %v", d.sourceLost)
+	d.stateDecision()
 }
 
 // Name ... name of the process
@@ -364,13 +323,6 @@ func (d *DpllConfig) CmdRun(stdToSocket bool) {
 	// noting to run, monitor() function takes care of dpll run
 }
 
-func (d *DpllConfig) unRegisterAll() {
-	// register to event notification from other processes
-	for _, s := range d.subscriber {
-		event.StateRegisterer.Unregister(s)
-	}
-}
-
 // NewDpll ... create new DPLL process
 func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxInSpecOffset uint64,
 	iface string, dependsOn []event.EventSource, apiType dpllApiType, phaseOffsetPinFilter map[string]map[string]string,
@@ -402,6 +354,14 @@ func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxIn
 		inSyncConditionThreshold: inSyncConditionTh,
 		inSyncConditionTimes:     inSyncConditionTimes,
 		flags:                    dpllFlags,
+	}
+
+	for _, dep := range dependsOn {
+		if dep == event.GNSS {
+			d.gnssState = GNSSUnknown
+			d.gnssNotifyCh = make(chan bool, 10)
+			break
+		}
 	}
 
 	if d.flags != 0 {
@@ -644,9 +604,6 @@ func (d *DpllConfig) MonitorDpllNetlink() {
 			default:
 				glog.Error("failed to send dpll event terminated event")
 			}
-			// unregister from event notification from other processes
-			d.unRegisterAllSubscriber()
-
 			d.stopDpll()
 			// Allow generated events some time to get processed
 			time.Sleep(time.Second)
@@ -691,36 +648,26 @@ func (d *DpllConfig) stopDpll() {
 	}
 }
 
-// MonitorProcess is initiating monitoring of DPLL associated with a process
+// MonitorProcess initiates monitoring of DPLL associated with a process.
 func (d *DpllConfig) MonitorProcess(processCfg config.ProcessConfig) {
 	d.processConfig = processCfg
-	// register to event notification from other processes
-	for _, dep := range d.dependsOn {
-		if dep == event.GNSS { // TODO: fow now no subscription for pps
-			dependingProcessStateMap.states[dep] = event.PTP_UNKNOWN
-			// register to event notification from other processes
-			d.subscriber = append(d.subscriber, &DpllSubscriber{source: dep, dpll: d, id: fmt.Sprintf("%s-%x", event.DPLL, d.clockId)})
+	if d.gnssNotifyCh != nil {
+		go d.consumeGNSSNotifications()
+	}
+	d.MonitorDpll()
+}
+
+func (d *DpllConfig) consumeGNSSNotifications() {
+	for {
+		select {
+		case locked, ok := <-d.gnssNotifyCh:
+			if !ok {
+				return
+			}
+			d.handleGNSSState(locked)
+		case <-d.exitCh:
+			return
 		}
-	}
-	// register monitoring process to be called by event
-	d.subscriber = append(d.subscriber, &DpllSubscriber{
-		source: event.MONITORING,
-		dpll:   d,
-		id:     fmt.Sprintf("%s-%x", event.DPLL, d.clockId),
-	})
-	d.registerAllSubscriber()
-}
-
-func (d *DpllConfig) unRegisterAllSubscriber() {
-	for _, s := range d.subscriber {
-		event.StateRegisterer.Unregister(s)
-	}
-	d.subscriber = []*DpllSubscriber{}
-}
-
-func (d *DpllConfig) registerAllSubscriber() {
-	for _, s := range d.subscriber {
-		event.StateRegisterer.Register(s)
 	}
 }
 
@@ -929,8 +876,6 @@ func (d *DpllConfig) sendDpllTerminationEvent() {
 		glog.Error("failed to send dpll terminated event")
 	}
 
-	// unregister from event notification from other processes
-	d.unRegisterAllSubscriber()
 }
 
 func (d *DpllConfig) getDpllState() int64 {

@@ -217,20 +217,10 @@ type EventChannel struct {
 	FrequencyTraceable bool // will be tru if synce is traceable
 }
 
-var (
-	mockTest        bool = false
-	StateRegisterer *StateNotifier
-)
-
-// MockEnable ...
-func (e *EventHandler) MockEnable() {
-	mockTest = true
-}
-
 // Init ... initialize event manager
 func Init(nodeName string, stdOutToSocket bool, socketName string, processChannel chan EventChannel, closeCh chan bool,
 	offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec, clockClassMetric *prometheus.GaugeVec) *EventHandler {
-	ptpEvent := &EventHandler{
+	return &EventHandler{
 		nodeName:           nodeName,
 		stdoutSocket:       socketName,
 		stdoutToSocket:     stdOutToSocket,
@@ -249,10 +239,6 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		LeadingClockData:   newLeadingClockParams(),
 		portRole:           map[string]map[string]*parser.PTPEvent{},
 	}
-
-	StateRegisterer = NewStateNotifier()
-	return ptpEvent
-
 }
 
 func (e *EventChannel) GetLogData() string {
@@ -736,11 +722,6 @@ func (e *EventHandler) writeLogToSocket(l string) bool {
 	return true
 }
 
-// ForceMonitoringTick ... force tick event for unit testing
-func (e *EventHandler) ForceMonitoringTick() {
-	StateRegisterer.monitor()
-}
-
 // ProcessEvents ... process events to generate new events
 func (e *EventHandler) ProcessEvents() {
 	redialClockClass := true
@@ -836,19 +817,6 @@ func (e *EventHandler) ProcessEvents() {
 		}()
 		redialClockClass = false
 	}
-	// call all monitoring candidates; verify every 5 secs for any new
-	ticker := time.NewTicker(5 * time.Second)
-	go func() {
-		for {
-			select {
-			case <-e.closeCh:
-				return
-			case <-ticker.C:
-				StateRegisterer.monitor()
-			}
-		}
-	}()
-
 	glog.Info("starting state monitoring...")
 	for {
 		select {

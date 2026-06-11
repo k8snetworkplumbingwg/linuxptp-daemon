@@ -652,7 +652,6 @@ func TestGetLargestOffset_PartiallyFilledWindowBlocksResult(t *testing.T) {
 }
 
 func TestAddEvent_SourceLostPropagation(t *testing.T) {
-	StateRegisterer = NewStateNotifier()
 	now := time.Now().UnixMilli()
 
 	tests := []struct {

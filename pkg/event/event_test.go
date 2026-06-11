@@ -305,7 +305,6 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 	closeChn := make(chan bool)
 	go listenToEvents(closeChn, logOut)
 	eventManager := event.Init("node", true, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
-	eventManager.MockEnable()
 	go eventManager.ProcessEvents()
 	assert.NoError(t, leap.MockLeapFile())
 	defer func() {
