@@ -33,6 +33,14 @@ import (
 
 const testPtp4lOffsetLine = "ptp4l[1.000]: [ptp4l.0.config] master offset 5 s2 freq -1000 path delay 100"
 
+// DUT NIC (T-BC) interface constants — PCI 0000:3f
+const (
+	testDUTLeadingIface = "ens2f0"
+	testDUTUpstream1    = "ens2f1"
+	testDUTUpstream2    = "ens2f3"
+	testDUTClockIDKey   = "clockId[ens2f0]"
+)
+
 // vendor defaults are embedded; no filesystem setup needed
 
 // NewDaemonForTests creates a Daemon instance for testing
@@ -1372,6 +1380,217 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 	})
 }
 
+func TestTBCLegacy_DualTR_SinglePortLoss_NoFreerun(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
+			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_LOCKED, testDUTUpstream2: event.PTP_NOTSET},
+			activePort:        testDUTUpstream1,
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_LOCKED,
+			lastAppliedState:  event.PTP_LOCKED,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": testDUTLeadingIface, testDUTClockIDKey: "123456789"},
+		},
+		eventCh:    make(chan event.EventChannel, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+		offset:     5.0,
+	}
+
+	// testDUTUpstream1 loses SLAVE — testDUTUpstream2 is not LOCKED, but we simulate it being LOCKED first
+	process.tBCAttributes.perPortState[testDUTUpstream2] = event.PTP_LOCKED
+
+	process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config] port 1 ("+testDUTUpstream1+"): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", pm)
+
+	// testDUTUpstream1 should be NOTSET (BMCA re-evaluation, not fault — port still available)
+	assert.Equal(t, event.PTP_NOTSET, process.tBCAttributes.perPortState[testDUTUpstream1])
+	// testDUTUpstream2 still LOCKED
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.perPortState[testDUTUpstream2])
+	// Aggregate state should NOT have dropped to FREERUN
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState,
+		"should stay LOCKED when another TR port is still active")
+	// Should NOT have entered holdover
+	assert.NotEqual(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState,
+		"should not enter holdover when backup port is still active")
+	// offsetFilter should NOT have been nulled
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastAppliedState)
+
+	// No holdover event should have been sent
+	select {
+	case ev := <-process.eventCh:
+		t.Errorf("unexpected event sent during single-port loss with backup available: %+v", ev)
+	default:
+	}
+}
+
+func TestTBCLegacy_DualTR_AllPortsLost_EntersHoldover(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
+			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_LOCKED, testDUTUpstream2: event.PTP_LOCKED},
+			activePort:        testDUTUpstream1,
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_LOCKED,
+			lastAppliedState:  event.PTP_LOCKED,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": testDUTLeadingIface, testDUTClockIDKey: "123456789"},
+		},
+		eventCh:    make(chan event.EventChannel, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+	}
+
+	// testDUTUpstream1 goes FAULTY (link down) — testDUTUpstream2 still LOCKED, no aggregate change
+	process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config] port 1 ("+testDUTUpstream1+"): SLAVE to FAULTY on FAULT_DETECTED (FT_UNSPECIFIED)", pm)
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.perPortState[testDUTUpstream1])
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+
+	// testDUTUpstream2 also goes FAULTY — now all ports lost → holdover
+	process.tBCTransitionCheck("ptp4l[200]: [test-config.0.config] port 2 ("+testDUTUpstream2+"): SLAVE to FAULTY on FAULT_DETECTED (FT_UNSPECIFIED)", pm)
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.perPortState[testDUTUpstream2])
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState)
+	assert.Equal(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState)
+	assert.Equal(t, "", process.tBCAttributes.activePort)
+	assert.Nil(t, process.tBCAttributes.offsetFilter)
+}
+
+func TestTBCLegacy_SingleTR_BackwardCompat(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{"ens4f0"},
+			perPortState:      map[string]event.PTPState{"ens4f0": event.PTP_LOCKED},
+			activePort:        "ens4f0",
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_LOCKED,
+			lastAppliedState:  event.PTP_LOCKED,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": "ens4f0", "clockId[ens4f0]": "123456789"},
+		},
+		eventCh:    make(chan event.EventChannel, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+	}
+
+	// Single-TR port loses SLAVE — should immediately enter holdover (old behavior)
+	process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config] port 1 (ens4f0): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", pm)
+
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState,
+		"single-TR config should enter FREERUN immediately")
+	assert.Equal(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState,
+		"single-TR config should enter holdover immediately")
+	assert.Nil(t, process.tBCAttributes.offsetFilter,
+		"single-TR config should null offsetFilter on loss")
+
+	// Verify event was sent
+	select {
+	case <-process.eventCh:
+		// Good, event sent
+	default:
+		t.Error("single-TR config should send holdover event on port loss")
+	}
+}
+
+func TestTBCLegacy_DualTR_RecoveryAfterSwitchover(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
+			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_LOCKED, testDUTUpstream2: event.PTP_NOTSET},
+			activePort:        testDUTUpstream1,
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_LOCKED,
+			lastAppliedState:  event.PTP_LOCKED,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": testDUTLeadingIface, testDUTClockIDKey: "123456789"},
+		},
+		eventCh:    make(chan event.EventChannel, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+		offset:     5.0,
+	}
+
+	// testDUTUpstream1 loses SLAVE via BMCA — testDUTUpstream2 is NOTSET (available) → stay in current state
+	process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config] port 1 ("+testDUTUpstream1+"): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", pm)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+	assert.Equal(t, event.PTP_NOTSET, process.tBCAttributes.perPortState[testDUTUpstream1],
+		"BMCA-driven loss should set NOTSET, not FREERUN")
+
+	// testDUTUpstream2 takes over as SLAVE
+	process.tBCTransitionCheck("ptp4l[200]: [test-config.0.config] port 2 ("+testDUTUpstream2+"): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.perPortState[testDUTUpstream2])
+	assert.Equal(t, testDUTUpstream2, process.tBCAttributes.activePort)
+	assert.NotNil(t, process.tBCAttributes.offsetFilter, "offset filter should be re-created on recovery")
+
+	// Fill offset filter to complete transition
+	for i := 0; i < 64; i++ {
+		process.tBCTransitionCheck("ptp4l[300]: [test-config.0.config] master offset 5 s2 freq 0 path delay 100", pm)
+	}
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastAppliedState)
+
+	// Now test the REVERSE switchover: testDUTUpstream1 comes back up, A-BMCA switches back
+	process.tBCTransitionCheck("ptp4l[400]: [test-config.0.config] port 1 ("+testDUTUpstream1+"): FAULTY to LISTENING on INIT_COMPLETE", pm)
+	assert.Equal(t, event.PTP_NOTSET, process.tBCAttributes.perPortState[testDUTUpstream1],
+		"LISTENING should reset stale FREERUN to NOTSET")
+
+	// Also verify RS_SLAVE resets stale FREERUN (quality degradation path)
+	process.tBCAttributes.perPortState[testDUTUpstream1] = event.PTP_FREERUN
+	process.tBCTransitionCheck("ptp4l[401]: [test-config.0.config] port 1 ("+testDUTUpstream1+"): MASTER to UNCALIBRATED on RS_SLAVE", pm)
+	assert.Equal(t, event.PTP_NOTSET, process.tBCAttributes.perPortState[testDUTUpstream1],
+		"RS_SLAVE should reset stale FREERUN to NOTSET")
+
+	// testDUTUpstream2 loses SLAVE (A-BMCA prefers testDUTUpstream1) — testDUTUpstream1 is NOTSET → not all lost
+	process.tBCTransitionCheck("ptp4l[500]: [test-config.0.config] port 2 ("+testDUTUpstream2+"): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", pm)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState,
+		"should stay LOCKED because testDUTUpstream1 is NOTSET (available)")
+
+	// testDUTUpstream1 becomes SLAVE
+	process.tBCTransitionCheck("ptp4l[600]: [test-config.0.config] port 1 ("+testDUTUpstream1+"): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.perPortState[testDUTUpstream1])
+	assert.Equal(t, testDUTUpstream1, process.tBCAttributes.activePort)
+}
+
 // setupDualUpstreamHardwareConfig sets up a hardware config with two PTP time receiver ports on the same subsystem
 func setupDualUpstreamHardwareConfig(hcm *hardwareconfig.HardwareConfigManager, profileName, port1, port2 string) error {
 	hardwareconfig.SetDpllPinsGetter(hardwareconfig.CreateMockDpllPinsGetter(nil, nil))
@@ -1631,6 +1850,33 @@ func TestTBCDualUpstream_AllPortsLost_Helper(t *testing.T) {
 	})
 }
 
+func TestTBCDualUpstream_HasAvailablePort_Helper(t *testing.T) {
+	t.Run("both NOTSET - available", func(t *testing.T) {
+		attrs := &tBCProcessAttributes{
+			perPortState: map[string]event.PTPState{"eno2": event.PTP_NOTSET, "eno3": event.PTP_NOTSET},
+		}
+		assert.True(t, attrs.hasAvailablePort())
+	})
+	t.Run("one FREERUN one NOTSET - available", func(t *testing.T) {
+		attrs := &tBCProcessAttributes{
+			perPortState: map[string]event.PTPState{"eno2": event.PTP_FREERUN, "eno3": event.PTP_NOTSET},
+		}
+		assert.True(t, attrs.hasAvailablePort())
+	})
+	t.Run("one LOCKED one FREERUN - available", func(t *testing.T) {
+		attrs := &tBCProcessAttributes{
+			perPortState: map[string]event.PTPState{"eno2": event.PTP_LOCKED, "eno3": event.PTP_FREERUN},
+		}
+		assert.True(t, attrs.hasAvailablePort())
+	})
+	t.Run("both FREERUN - not available", func(t *testing.T) {
+		attrs := &tBCProcessAttributes{
+			perPortState: map[string]event.PTPState{"eno2": event.PTP_FREERUN, "eno3": event.PTP_FREERUN},
+		}
+		assert.False(t, attrs.hasAvailablePort())
+	})
+}
+
 func TestTBCDualUpstream_ActiveTRPort_Helper(t *testing.T) {
 	t.Run("returns active port when set", func(t *testing.T) {
 		attrs := &tBCProcessAttributes{
@@ -1651,6 +1897,173 @@ func TestTBCDualUpstream_ActiveTRPort_Helper(t *testing.T) {
 		attrs := &tBCProcessAttributes{}
 		assert.Equal(t, "", attrs.activeTRPort())
 	})
+}
+
+func TestTBCLegacy_DualTR_ClockClassThreshold_EntersHoldover(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
+			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_LOCKED, testDUTUpstream2: event.PTP_LOCKED},
+			activePort:        testDUTUpstream1,
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_LOCKED,
+			lastAppliedState:  event.PTP_LOCKED,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": testDUTLeadingIface, testDUTClockIDKey: "123456789"},
+		},
+		eventCh:    make(chan event.EventChannel, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+		offset:     0.0,
+	}
+
+	// First port rejects master quality — other port still LOCKED, stay
+	process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config:3] port 1 ("+testDUTUpstream1+"): Master clock quality received is greater than configured, ignoring master!", pm)
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.perPortState[testDUTUpstream1])
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState,
+		"should stay LOCKED because "+testDUTUpstream2+" is still LOCKED")
+
+	// Second port also rejects — all ports lost, enter holdover
+	process.tBCTransitionCheck("ptp4l[200]: [test-config.0.config:3] port 2 ("+testDUTUpstream2+"): Master clock quality received is greater than configured, ignoring master!", pm)
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.perPortState[testDUTUpstream2])
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState,
+		"should enter holdover because all ports rejected master quality")
+	assert.Equal(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState)
+}
+
+func TestTBCLegacy_DualTR_ClockClassThreshold_MixedTransitions(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
+			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_LOCKED, testDUTUpstream2: event.PTP_LOCKED},
+			activePort:        testDUTUpstream2,
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_LOCKED,
+			lastAppliedState:  event.PTP_LOCKED,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": testDUTLeadingIface, testDUTClockIDKey: "123456789"},
+		},
+		eventCh:    make(chan event.EventChannel, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+		offset:     0.0,
+	}
+
+	// Active port (testDUTUpstream2) transitions via ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES → NOTSET
+	process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config:5] port 2 ("+testDUTUpstream2+"): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", pm)
+	assert.Equal(t, event.PTP_NOTSET, process.tBCAttributes.perPortState[testDUTUpstream2])
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState,
+		"should stay LOCKED because "+testDUTUpstream1+" is still LOCKED")
+
+	// testDUTUpstream1 also transitions via BMCA — both NOTSET, but hasAvailablePort still true
+	process.tBCTransitionCheck("ptp4l[150]: [test-config.0.config:5] port 1 ("+testDUTUpstream1+"): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", pm)
+	assert.Equal(t, event.PTP_NOTSET, process.tBCAttributes.perPortState[testDUTUpstream1])
+
+	// "ignoring master" fires for testDUTUpstream1 — sets FREERUN, but testDUTUpstream2 is NOTSET (available for BMCA)
+	process.tBCTransitionCheck("ptp4l[200]: [test-config.0.config:3] port 1 ("+testDUTUpstream1+"): Master clock quality received is greater than configured, ignoring master!", pm)
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.perPortState[testDUTUpstream1])
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState,
+		"should stay LOCKED: "+testDUTUpstream2+" is NOTSET (available for BMCA selection)")
+
+	// testDUTUpstream2 also rejects — now both ports truly unavailable → holdover
+	process.tBCTransitionCheck("ptp4l[250]: [test-config.0.config:3] port 2 ("+testDUTUpstream2+"): Master clock quality received is greater than configured, ignoring master!", pm)
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.perPortState[testDUTUpstream2])
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState,
+		"should enter holdover: all ports rejected master quality")
+	assert.Equal(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState)
+}
+
+func TestTBCLegacy_DualTR_ClockClassThreshold_BMCARace_NoHoldover(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{testDUTUpstream1, testDUTUpstream2},
+			perPortState:      map[string]event.PTPState{testDUTUpstream1: event.PTP_LOCKED, testDUTUpstream2: event.PTP_NOTSET},
+			activePort:        testDUTUpstream1,
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_LOCKED,
+			lastAppliedState:  event.PTP_LOCKED,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": testDUTLeadingIface, testDUTClockIDKey: "123456789"},
+		},
+		eventCh:    make(chan event.EventChannel, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+		offset:     0.0,
+	}
+
+	// testDUTUpstream1 rejects master quality — testDUTUpstream2 is NOTSET (MASTER state, available for BMCA)
+	// This simulates the race: quality rejection fires before BMCA promotes testDUTUpstream2 to SLAVE
+	process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config:3] port 1 ("+testDUTUpstream1+"): Master clock quality received is greater than configured, ignoring master!", pm)
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.perPortState[testDUTUpstream1])
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState,
+		"should NOT enter holdover: "+testDUTUpstream2+" is available for BMCA selection")
+	assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastAppliedState,
+		"lastAppliedState should remain LOCKED — no holdover entry")
+}
+
+func TestTBCLegacy_SingleTR_ClockClassThreshold_EntersHoldover(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	process := &ptpProcess{
+		tBCAttributes: tBCProcessAttributes{
+			trIfaceNames:      []string{"ens2f1"},
+			perPortState:      map[string]event.PTPState{"ens2f1": event.PTP_LOCKED},
+			activePort:        "ens2f1",
+			trPortsConfigFile: "test-config",
+			lastReportedState: event.PTP_LOCKED,
+			lastAppliedState:  event.PTP_LOCKED,
+			offsetThreshold:   10.0,
+		},
+		nodeProfile: ptpv1.PtpProfile{
+			Name:        stringPointer("test-profile"),
+			PtpSettings: map[string]string{"leadingInterface": "ens2f0", "clockId[ens2f0]": "123456789"},
+		},
+		eventCh:    make(chan event.EventChannel, 10),
+		configName: "test-config",
+		clockType:  event.BC,
+		offset:     0.0,
+	}
+
+	// Single TR port rejects master quality — enter holdover immediately
+	process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config:3] port 1 (ens2f1): Master clock quality received is greater than configured, ignoring master!", pm)
+	assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState,
+		"single TR port rejecting master should enter holdover")
+	assert.Equal(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState)
 }
 
 // TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs tests clock_type detection with cliArgs parameter

@@ -298,6 +298,20 @@ func (t *tBCProcessAttributes) allPortsLost() bool {
 	return true
 }
 
+// hasAvailablePort returns true if any TR port is either LOCKED or NOTSET (available for BMCA selection).
+// Used by the legacy path where NOTSET means "port is available but not yet selected" —
+// the legacy path actively manages this via LISTENING/UNCALIBRATED→NOTSET resets.
+// The HardwareConfig path should use allPortsLost() instead, where NOTSET means
+// "never heard from" and should not block holdover entry.
+func (t *tBCProcessAttributes) hasAvailablePort() bool {
+	for _, state := range t.perPortState {
+		if state == event.PTP_LOCKED || state == event.PTP_NOTSET {
+			return true
+		}
+	}
+	return false
+}
+
 type ptpProcess struct {
 	name                  string
 	ifaces                config.IFaces
@@ -1578,7 +1592,9 @@ func (p *ptpProcess) processTBCTransitionHardwareConfig(output string) {
 	})
 }
 
-// processTBCTransitionLegacy is the original implementation as ultimate fallback
+// processTBCTransitionLegacy is the original implementation as ultimate fallback.
+// For dual-TR configurations (len(trIfaceNames) > 1), it uses per-port state tracking
+// to avoid false FREERUN during switchover: only enters holdover when ALL TR ports are lost.
 func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.PluginManager) {
 	portMatched := false
 	for _, iface := range p.tBCAttributes.trIfaceNames {
@@ -1588,11 +1604,72 @@ func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.Plugin
 		}
 	}
 	if portMatched {
+		if strings.Contains(output, "Master clock quality received is greater than configured, ignoring master") {
+			portName := parser.ExtractPortName(output)
+			if portName != "" && len(p.tBCAttributes.trIfaceNames) > 1 {
+				p.tBCAttributes.perPortState[portName] = event.PTP_FREERUN
+				glog.Infof("T-BC port %s rejecting master due to clock class threshold (legacy)", portName)
+				if !p.tBCAttributes.hasAvailablePort() {
+					p.tBCAttributes.activePort = ""
+					pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-entry")
+					p.tBCAttributes.lastReportedState = event.PTP_FREERUN
+					glog.Info("T-BC no locked port remaining after quality rejection, MOVE TO HOLDOVER")
+					p.sendPtp4lEvent()
+					p.tBCAttributes.lastAppliedState = event.PTP_HOLDOVER
+					p.tBCAttributes.offsetFilter = nil
+				} else {
+					glog.Infof("T-BC port %s rejected but another TR port still available, staying in current state", portName)
+				}
+			} else if len(p.tBCAttributes.trIfaceNames) <= 1 {
+				pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-entry")
+				p.tBCAttributes.lastReportedState = event.PTP_FREERUN
+				glog.Info("T-BC master quality rejected, MOVE TO HOLDOVER")
+				p.sendPtp4lEvent()
+				p.tBCAttributes.lastAppliedState = event.PTP_HOLDOVER
+				p.tBCAttributes.offsetFilter = nil
+			}
+			return
+		}
+		if len(p.tBCAttributes.trIfaceNames) > 1 &&
+			(strings.Contains(output, "to LISTENING on INIT_COMPLETE") ||
+				strings.Contains(output, "UNCALIBRATED on RS_SLAVE")) {
+			portName := parser.ExtractPortName(output)
+			if portName != "" && p.tBCAttributes.perPortState[portName] == event.PTP_FREERUN {
+				p.tBCAttributes.perPortState[portName] = event.PTP_NOTSET
+				glog.Infof("T-BC port %s becoming available, resetting state (legacy)", portName)
+			}
+			return
+		}
 		if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
+			portName := parser.ExtractPortName(output)
+			if portName != "" && len(p.tBCAttributes.trIfaceNames) > 1 {
+				p.tBCAttributes.perPortState[portName] = event.PTP_LOCKED
+				p.tBCAttributes.activePort = portName
+			}
 			p.tBCAttributes.lastReportedState = event.PTP_LOCKED
 			p.tBCAttributes.offsetFilter = utils.NewWindow(offsetFilterSize)
 		} else if strings.Contains(output, "to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES") ||
 			strings.Contains(output, "SLAVE to") {
+			if len(p.tBCAttributes.trIfaceNames) > 1 {
+				portName := parser.ExtractPortName(output)
+				if portName != "" {
+					if strings.Contains(output, "FAULT_DETECTED") {
+						p.tBCAttributes.perPortState[portName] = event.PTP_FREERUN
+						glog.Infof("T-BC port %s FAULTY (legacy)", portName)
+					} else {
+						p.tBCAttributes.perPortState[portName] = event.PTP_NOTSET
+						glog.Infof("T-BC port %s lost SLAVE via BMCA, still available (legacy)", portName)
+					}
+				}
+				if p.tBCAttributes.hasAvailablePort() {
+					if p.tBCAttributes.activePort == portName {
+						p.tBCAttributes.activePort = ""
+					}
+					glog.Infof("T-BC port %s lost but another TR port still available, staying in current state (legacy)", portName)
+					return
+				}
+				p.tBCAttributes.activePort = ""
+			}
 			pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-entry")
 			p.tBCAttributes.lastReportedState = event.PTP_FREERUN
 			glog.Info("T-BC MOVE TO HOLDOVER")
