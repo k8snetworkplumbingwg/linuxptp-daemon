@@ -32,7 +32,7 @@ type Iface struct {
 // GetLeadingInterface ... get leading clock interface
 func (i *IFaces) GetLeadingInterface() Iface {
 	for _, iface := range *i {
-		if iface.Source == event.GNSS || iface.Source == event.PTP4l {
+		if iface.Source == event.GNSS || iface.Source == event.PTP4l || iface.Source == event.PPS {
 			return iface
 		}
 	}
