@@ -3,6 +3,7 @@ package daemon
 import (
 	"bufio"
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -2078,13 +2079,33 @@ func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
 			MaxOffsetThreshold: nodeProfile.PtpClockThreshold.MaxOffsetThreshold,
 			MinOffsetThreshold: nodeProfile.PtpClockThreshold.MinOffsetThreshold,
 		}
-	} else {
+	}
+	if isNtpFailoverEnabled(nodeProfile) {
 		return &ptpv1.PtpClockThreshold{
 			HoldOverTimeout:    5,
-			MaxOffsetThreshold: 100,
-			MinOffsetThreshold: -100,
+			MaxOffsetThreshold: 1000,
+			MinOffsetThreshold: -1000,
 		}
 	}
+	return &ptpv1.PtpClockThreshold{
+		HoldOverTimeout:    5,
+		MaxOffsetThreshold: 100,
+		MinOffsetThreshold: -100,
+	}
+}
+
+func isNtpFailoverEnabled(nodeProfile *ptpv1.PtpProfile) bool {
+	pluginOpts, ok := nodeProfile.Plugins["ntpfailover"]
+	if !ok || pluginOpts == nil {
+		return false
+	}
+	var opts struct {
+		GnssFailover bool `json:"gnssFailover"`
+	}
+	if err := json.Unmarshal(pluginOpts.Raw, &opts); err != nil {
+		return false
+	}
+	return opts.GnssFailover
 }
 
 func (p *ptpProcess) MonitorEvent(offset float64, clockState string) {

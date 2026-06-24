@@ -30,6 +30,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/yaml"
@@ -3766,6 +3767,78 @@ func TestUpdateClockStateMetrics(t *testing.T) {
 			actual := testutil.ToFloat64(gauge)
 			assert.Equal(t, tt.expected, actual,
 				"clock_state for %s should be %v", tt.state, tt.expected)
+		})
+	}
+}
+
+func TestGetPTPThreshold(t *testing.T) {
+	profileName := "test-profile"
+
+	tests := []struct {
+		name             string
+		profile          ptpv1.PtpProfile
+		expectedMax      int64
+		expectedMin      int64
+		expectedHoldover int64
+	}{
+		{
+			name: "default threshold without ntpfailover",
+			profile: ptpv1.PtpProfile{
+				Name: &profileName,
+			},
+			expectedMax:      100,
+			expectedMin:      -100,
+			expectedHoldover: 5,
+		},
+		{
+			name: "ntpfailover with gnssFailover enabled uses looser threshold",
+			profile: ptpv1.PtpProfile{
+				Name: &profileName,
+				Plugins: map[string]*apiextensions.JSON{
+					"ntpfailover": {Raw: []byte(`{"gnssFailover": true}`)},
+				},
+			},
+			expectedMax:      1000,
+			expectedMin:      -1000,
+			expectedHoldover: 5,
+		},
+		{
+			name: "ntpfailover with gnssFailover disabled uses standard threshold",
+			profile: ptpv1.PtpProfile{
+				Name: &profileName,
+				Plugins: map[string]*apiextensions.JSON{
+					"ntpfailover": {Raw: []byte(`{"gnssFailover": false}`)},
+				},
+			},
+			expectedMax:      100,
+			expectedMin:      -100,
+			expectedHoldover: 5,
+		},
+		{
+			name: "explicit PtpClockThreshold takes precedence over ntpfailover",
+			profile: ptpv1.PtpProfile{
+				Name: &profileName,
+				PtpClockThreshold: &ptpv1.PtpClockThreshold{
+					HoldOverTimeout:    10,
+					MaxOffsetThreshold: 500,
+					MinOffsetThreshold: -500,
+				},
+				Plugins: map[string]*apiextensions.JSON{
+					"ntpfailover": {Raw: []byte(`{"gnssFailover": true}`)},
+				},
+			},
+			expectedMax:      500,
+			expectedMin:      -500,
+			expectedHoldover: 10,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getPTPThreshold(&tt.profile)
+			assert.Equal(t, tt.expectedMax, result.MaxOffsetThreshold)
+			assert.Equal(t, tt.expectedMin, result.MinOffsetThreshold)
+			assert.Equal(t, tt.expectedHoldover, result.HoldOverTimeout)
 		})
 	}
 }
