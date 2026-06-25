@@ -784,7 +784,8 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// TODO: resolve clock IDs, clockType, leadingInterface and upstreamPort from hardware config
 	// (needed to keep code compatibility elsewhere and allow it to work both with hardware config and plugins)
 	for _, profile := range dn.ptpUpdate.NodeProfiles {
-		glog.Infof("Processing profile: %s", *profile.Name)
+		crName, profileName := hardwareconfig.SplitQualifiedName(*profile.Name)
+		glog.Infof("Processing profile: %s, original profile name %s defined in ptpconfig %s", *profile.Name, profileName, crName)
 
 		// Log profile details for debugging
 		if profile.Interface != nil {
@@ -808,7 +809,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 			profile.PtpSettings["controlledId"] = strconv.Itoa(controlledID)
 		}
 
-		glog.Infof("Calling applyNodePtpProfile for profile %s with runID %d", *profile.Name, runID)
+		glog.Infof("Calling applyNodePtpProfile for profile %s with runID %d, original profile name %s defined in ptpconfig %s", *profile.Name, runID, profileName, crName)
 		err := dn.applyNodePtpProfile(runID, &profile)
 		if err != nil {
 			glog.Errorf("Failed to apply profile %s: %v", *profile.Name, err)
@@ -927,10 +928,12 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		}
 	}
 
+	crName, profileName := hardwareconfig.SplitQualifiedName(*nodeProfile.Name)
+
 	// Check if hardware configs are available for this profile
 	// If hardware configs arrive later, reconciliation will re-apply the profile
 	if dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
-		glog.Infof("Using hardware configs for PTP profile %s instead of plugins", *nodeProfile.Name)
+		glog.Infof("Using hardware configs for PTP profile %s instead of plugins, original profile name %s defined in ptpconfig %s", *nodeProfile.Name, profileName, crName)
 		if err := dn.hardwareConfigManager.ApplyHardwareConfigsForProfile(nodeProfile); err != nil {
 			glog.Errorf("Failed to apply hardware configs for profile %s: %v", *nodeProfile.Name, err)
 			// Fall back to plugins
@@ -1372,7 +1375,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		glog.Infof("Added %s process to process manager for profile %s", pProcess, *nodeProfile.Name)
 
 	}
-	glog.Infof("Completed applyNodePtpProfile for profile %s, total processes in manager: %d", *nodeProfile.Name, len(dn.processManager.process))
+	glog.Infof("Completed applyNodePtpProfile for profile %s, total processes in manager: %d, original profile name %s defined in ptpconfig %s", *nodeProfile.Name, len(dn.processManager.process), profileName, crName)
 	return nil
 }
 
