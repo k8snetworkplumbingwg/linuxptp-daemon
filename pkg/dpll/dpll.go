@@ -135,6 +135,10 @@ type DpllConfig struct {
 
 	// devices holds the cache of DPLL device replies
 	devices []*nl.DoDeviceGetReply
+
+	// OnSourceLostChanged is called when sourceLost transitions between true and false.
+	// sourceLost=true means DPLL lost lock; sourceLost=false means DPLL acquired lock.
+	OnSourceLostChanged func(iface string, sourceLost bool)
 }
 
 func (d *DpllConfig) InSpec() bool {
@@ -630,6 +634,7 @@ func (d *DpllConfig) MonitorDpll() {
 // stateDecision
 func (d *DpllConfig) stateDecision() {
 	dpllStatus := d.getDpllState()
+	prevSourceLost := d.sourceLost
 
 	switch dpllStatus {
 	case DPLL_FREERUN, DPLL_INVALID, DPLL_UNKNOWN:
@@ -698,6 +703,9 @@ func (d *DpllConfig) stateDecision() {
 			default:
 			}
 		}
+	}
+	if d.sourceLost != prevSourceLost && d.OnSourceLostChanged != nil {
+		d.OnSourceLostChanged(d.iface, d.sourceLost)
 	}
 	d.sendDpllEvent()
 }

@@ -29,6 +29,7 @@ type (
 		EnterHoldoverTBC() error
 		SetPinDefaults() error
 		GetLeadingNIC() CardInfo
+		DumpPinStates(reason string)
 	}
 
 	// CardInfo represents an individual card in the clock chain
@@ -445,6 +446,38 @@ func (c *ClockChain) InitPinsTBC() error {
 	return errors.Join(err, fetchErr)
 }
 
+// DumpPinStates logs the current state of all DPLL input and output pins
+// for the leading NIC. Intended for diagnostics on holdover entry/exit transitions.
+func (c *ClockChain) DumpPinStates(reason string) {
+	clockID := c.LeadingNIC.DpllClockID
+	if err := c.DpllPins.FetchPins(); err != nil {
+		glog.Errorf("DumpPinStates: failed to fetch pins: %v", err)
+		return
+	}
+
+	glog.Infof("=== DPLL pin dump (%s) clockID=0x%x ===", reason, clockID)
+	labels := []string{gnss, sma1Input, sma2Input, sdp20, sdp22, sdp21, sdp23, c8270Rclka, c8270Rclkb}
+	for _, label := range labels {
+		pin := c.DpllPins.GetByLabel(label, clockID)
+		if pin == nil {
+			continue
+		}
+		for _, pd := range pin.ParentDevice {
+			prioStr := "n/a"
+			if pd.Prio != nil {
+				prioStr = fmt.Sprintf("%d", *pd.Prio)
+			}
+			glog.Infof("  pin %d %-14s parentID=%d dir=%-6s prio=%-4s state=%-12s operstate=%s",
+				pin.ID, pin.BoardLabel, pd.ParentID,
+				dpll.GetPinDirection(pd.Direction),
+				prioStr,
+				dpll.GetPinState(pd.State),
+				dpll.GetPinOperstate(pd.Operstate))
+		}
+	}
+	glog.Infof("=== end DPLL pin dump ===")
+}
+
 // EnterHoldoverTBC configures the leading card DPLL pins for T-BC holdover
 func (c *ClockChain) EnterHoldoverTBC() error {
 	// Disable DPLL inputs from e810 (SDP22)
@@ -471,6 +504,7 @@ func (c *ClockChain) EnterHoldoverTBC() error {
 	err = BatchPinSet(commands)
 	// event if there was an error we still need to refresh the pin state.
 	fetchErr := c.DpllPins.FetchPins()
+	c.DumpPinStates("entering holdover")
 	return errors.Join(err, fetchErr)
 }
 
@@ -597,6 +631,7 @@ func (c *ClockChain) SetPinDefaults() error {
 	err = BatchPinSet(commands)
 	// event if there was an error we still need to refresh the pin state.
 	fetchErr := c.DpllPins.FetchPins()
+	c.DumpPinStates("pin defaults applied")
 	return errors.Join(err, fetchErr)
 }
 
