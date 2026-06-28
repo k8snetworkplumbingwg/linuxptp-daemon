@@ -1,0 +1,188 @@
+package dpll_netlink
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+const (
+	testPinREF0P = "REF0P"
+	testPinREF0N = "REF0N"
+)
+
+func prio(v uint32) *uint32 { return &v }
+
+func TestIsLockedState(t *testing.T) {
+	assert.False(t, isLockedState(DpllLockStatusUnlocked))
+	assert.False(t, isLockedState(DpllLockStatusHoldover))
+	assert.True(t, isLockedState(DpllLockStatusLocked))
+	assert.True(t, isLockedState(DpllLockStatusLockedHoldoverAcquired))
+}
+
+func TestIsEnabledParent(t *testing.T) {
+	assert.True(t, isEnabledParent(&PinParentDevice{State: PinStateSelectable}))
+	assert.True(t, isEnabledParent(&PinParentDevice{State: PinStateConnected}))
+	assert.False(t, isEnabledParent(&PinParentDevice{State: PinStateDisconnected}))
+}
+
+func TestIsActiveParent(t *testing.T) {
+	// Newer stacks: admin state stays "selectable", operstate reports "active".
+	assert.True(t, isActiveParent(&PinParentDevice{State: PinStateSelectable, Operstate: PinOperstateActive}))
+	// Legacy stacks: admin state goes to "connected", operstate may be unreported/unknown.
+	assert.True(t, isActiveParent(&PinParentDevice{State: PinStateConnected, Operstate: 0}))
+	// Neither signal present: not active.
+	assert.False(t, isActiveParent(&PinParentDevice{State: PinStateSelectable, Operstate: PinOperstateStandby}))
+	assert.False(t, isActiveParent(&PinParentDevice{State: PinStateDisconnected, Operstate: 0}))
+}
+
+func TestBuildPinRows_FiltersByClockIDAndDevice(t *testing.T) {
+	pins := []*PinInfo{
+		{
+			ID: 16, ClockID: 0xAA, BoardLabel: testPinREF0P,
+			ParentDevice: []PinParentDevice{
+				{ParentID: 1, Direction: PinDirectionInput, State: PinStateSelectable, Operstate: PinOperstateActive, Prio: prio(6)},
+				{ParentID: 2, Direction: PinDirectionInput, State: PinStateDisconnected, Operstate: PinOperstateStandby, Prio: prio(14)},
+			},
+		},
+		{
+			// Different clock ID entirely: must be excluded.
+			ID: 17, ClockID: 0xBB, BoardLabel: "OTHERCHIP",
+			ParentDevice: []PinParentDevice{
+				{ParentID: 1, Direction: PinDirectionInput, State: PinStateSelectable, Operstate: PinOperstateActive, Prio: prio(1)},
+			},
+		},
+	}
+
+	// Unlocked: pin is enabled for device 1, should be included.
+	rows := buildPinRows(pins, 0xAA, 1, DpllLockStatusUnlocked)
+	assert.Len(t, rows, 1)
+	assert.Equal(t, uint32(16), rows[0].id)
+	assert.Equal(t, testPinREF0P, rows[0].boardLabel)
+	assert.Equal(t, "6", rows[0].prio)
+
+	// Device 2's parent entry for the same pin is disconnected, so nothing shows for it.
+	rows = buildPinRows(pins, 0xAA, 2, DpllLockStatusUnlocked)
+	assert.Empty(t, rows)
+}
+
+func TestBuildPinRows_SkipsOutputPins(t *testing.T) {
+	pins := []*PinInfo{
+		{
+			ID: 25, ClockID: 0xAA, BoardLabel: "OUT3",
+			ParentDevice: []PinParentDevice{
+				{ParentID: 1, Direction: PinDirectionOutput, State: PinStateConnected, Operstate: PinOperstateActive},
+			},
+		},
+	}
+	rows := buildPinRows(pins, 0xAA, 1, DpllLockStatusLocked)
+	assert.Empty(t, rows, "output pins must never be included")
+}
+
+func TestBuildPinRows_LockedShowsOnlyActive(t *testing.T) {
+	pins := []*PinInfo{
+		{
+			ID: 16, ClockID: 0xAA, BoardLabel: testPinREF0P,
+			ParentDevice: []PinParentDevice{
+				{ParentID: 1, Direction: PinDirectionInput, State: PinStateSelectable, Operstate: PinOperstateActive, Prio: prio(6)},
+			},
+		},
+		{
+			ID: 17, ClockID: 0xAA, BoardLabel: testPinREF0N,
+			ParentDevice: []PinParentDevice{
+				{ParentID: 1, Direction: PinDirectionInput, State: PinStateSelectable, Operstate: PinOperstateStandby, Prio: prio(7)},
+			},
+		},
+	}
+
+	rows := buildPinRows(pins, 0xAA, 1, DpllLockStatusLocked)
+	assert.Len(t, rows, 1, "locked state should only show the active input")
+	assert.Equal(t, uint32(16), rows[0].id)
+
+	rows = buildPinRows(pins, 0xAA, 1, DpllLockStatusLockedHoldoverAcquired)
+	assert.Len(t, rows, 1, "locked-ho-acq state should only show the active input")
+	assert.Equal(t, uint32(16), rows[0].id)
+}
+
+// TestBuildPinRows_LockedFallsBackToLegacyConnectedState covers hardware/drivers
+// that never report Operstate as active (it stays "unknown"), but do report the
+// legacy admin state "connected" for the pin actually in use. Without this
+// fallback the table would always print "no relevant pins" once locked.
+func TestBuildPinRows_LockedFallsBackToLegacyConnectedState(t *testing.T) {
+	pins := []*PinInfo{
+		{
+			ID: 16, ClockID: 0xAA, BoardLabel: testPinREF0P,
+			ParentDevice: []PinParentDevice{
+				{ParentID: 1, Direction: PinDirectionInput, State: PinStateConnected, Operstate: 0, Prio: prio(6)},
+			},
+		},
+		{
+			ID: 17, ClockID: 0xAA, BoardLabel: testPinREF0N,
+			ParentDevice: []PinParentDevice{
+				{ParentID: 1, Direction: PinDirectionInput, State: PinStateSelectable, Operstate: 0, Prio: prio(7)},
+			},
+		},
+	}
+
+	rows := buildPinRows(pins, 0xAA, 1, DpllLockStatusLocked)
+	assert.Len(t, rows, 1, "the legacy 'connected' admin state should count as active even with an unreported operstate")
+	assert.Equal(t, uint32(16), rows[0].id)
+}
+
+func TestBuildPinRows_UnlockedShowsAllEnabled(t *testing.T) {
+	pins := []*PinInfo{
+		{
+			ID: 16, ClockID: 0xAA, BoardLabel: testPinREF0P,
+			ParentDevice: []PinParentDevice{
+				{ParentID: 1, Direction: PinDirectionInput, State: PinStateSelectable, Operstate: PinOperstateStandby, Prio: prio(6)},
+			},
+		},
+		{
+			ID: 17, ClockID: 0xAA, BoardLabel: testPinREF0N,
+			ParentDevice: []PinParentDevice{
+				{ParentID: 1, Direction: PinDirectionInput, State: PinStateDisconnected, Operstate: PinOperstateNoSignal, Prio: prio(7)},
+			},
+		},
+	}
+
+	rows := buildPinRows(pins, 0xAA, 1, DpllLockStatusUnlocked)
+	assert.Len(t, rows, 1, "only the enabled (selectable/connected) input should show")
+	assert.Equal(t, uint32(16), rows[0].id)
+
+	rows = buildPinRows(pins, 0xAA, 1, DpllLockStatusHoldover)
+	assert.Len(t, rows, 1, "holdover behaves the same as unlocked")
+	assert.Equal(t, uint32(16), rows[0].id)
+}
+
+func TestBuildPinRows_PrioNil(t *testing.T) {
+	pins := []*PinInfo{
+		{
+			ID: 5, ClockID: 0xBB, BoardLabel: "IN0",
+			ParentDevice: []PinParentDevice{
+				{ParentID: 0, Direction: PinDirectionInput, State: PinStateConnected, Operstate: PinOperstateActive, Prio: nil},
+			},
+		},
+	}
+	rows := buildPinRows(pins, 0xBB, 0, DpllLockStatusLocked)
+	assert.Len(t, rows, 1)
+	assert.Equal(t, "n/a", rows[0].prio)
+}
+
+func TestBuildPinRows_Empty(t *testing.T) {
+	assert.Empty(t, buildPinRows(nil, 0xAA, 0, DpllLockStatusUnlocked))
+}
+
+func TestBuildPinRows_WithPackageLabel(t *testing.T) {
+	pins := []*PinInfo{
+		{
+			ID: 5, ClockID: 0xDD, BoardLabel: "SDP0", PackageLabel: "U1901",
+			ParentDevice: []PinParentDevice{
+				{ParentID: 0, Direction: PinDirectionInput, State: PinStateSelectable, Operstate: PinOperstateStandby, Prio: prio(3)},
+			},
+		},
+	}
+	rows := buildPinRows(pins, 0xDD, 0, DpllLockStatusUnlocked)
+	assert.Len(t, rows, 1)
+	assert.Equal(t, "SDP0", rows[0].boardLabel)
+	assert.Equal(t, "U1901", rows[0].packageLabel)
+}

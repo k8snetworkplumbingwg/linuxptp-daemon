@@ -3,7 +3,6 @@ package intel
 import (
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/golang/glog"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
@@ -621,17 +620,14 @@ func batchPinSet(commands []dpll.PinParentDeviceCtl) error {
 			glog.Error("failed to send pin command: ", err)
 			return err
 		}
-		info, err := conn.DoPinGet(dpll.DoPinGetRequest{ID: command.ID})
+		// Read back the pin purely to confirm the command was applied; the actual
+		// pin state is logged elsewhere (LogPinTable) when a DPLL notification
+		// reports a lock-state change, so we don't log it again here.
+		_, err = conn.DoPinGet(dpll.DoPinGetRequest{ID: command.ID})
 		if err != nil {
 			glog.Error("failed to get pin: ", err)
 			return err
 		}
-		reply, err := dpll.GetPinInfoHR(info, time.Now())
-		if err != nil {
-			glog.Error("failed to convert pin reply to human readable: ", err)
-			return err
-		}
-		glog.Info("pin reply: ", string(reply))
 	}
 	return nil
 }

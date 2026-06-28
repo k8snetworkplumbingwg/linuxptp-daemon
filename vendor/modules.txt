@@ -212,6 +212,9 @@ github.com/redhat-cne/sdk-go/pkg/event/ptp
 github.com/redhat-cne/sdk-go/pkg/event/redfish
 github.com/redhat-cne/sdk-go/pkg/pubsub
 github.com/redhat-cne/sdk-go/pkg/types
+# github.com/rodaine/table v1.3.1
+## explicit; go 1.21
+github.com/rodaine/table
 # github.com/sirupsen/logrus v1.9.3
 ## explicit; go 1.13
 github.com/sirupsen/logrus
