@@ -1402,10 +1402,11 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 					dpllDaemon.OnSourceLostChanged = func(iface string, sourceLost bool) {
 						if sourceLost {
 							glog.Infof("DPLL %s source lost: requesting pin dump", iface)
+							dn.pluginManager.AfterRunPTPCommand(np, "dpll-pin-dump:source-lost")
 						} else {
 							glog.Infof("DPLL %s source acquired: requesting pin dump", iface)
+							dn.pluginManager.AfterRunPTPCommand(np, "dpll-pin-dump:source-acquired")
 						}
-						dn.pluginManager.AfterRunPTPCommand(np, "dpll-pin-dump")
 					}
 					dpllDaemon.CmdInit()
 					dprocess.depProcess = append(dprocess.depProcess, dpllDaemon)
