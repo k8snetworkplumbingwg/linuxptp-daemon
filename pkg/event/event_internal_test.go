@@ -673,7 +673,7 @@ func TestAddEvent_SourceLostPropagation(t *testing.T) {
 		expectedSrcLost map[string]bool
 	}{
 		{
-			name: "source-lost propagates to stale LOCKED detail on different iface",
+			name: "source-lost does not propagate to other iface (no cross-hardware bleeding)",
 			initialDetails: []*DataDetails{
 				{IFace: "eno8903", State: PTP_LOCKED, sourceLost: false, time: now - 5000},
 				{IFace: "eno8703", State: PTP_LOCKED, sourceLost: false, time: now - 3000},
@@ -685,11 +685,11 @@ func TestAddEvent_SourceLostPropagation(t *testing.T) {
 				Data:   &PTPData{State: PTP_FREERUN, SourceLost: true},
 			},
 			expectedStates: map[string]PTPState{
-				"eno8903": PTP_FREERUN,
+				"eno8903": PTP_LOCKED,
 				"eno8703": PTP_FREERUN,
 			},
 			expectedSrcLost: map[string]bool{
-				"eno8903": true,
+				"eno8903": false,
 				"eno8703": true,
 			},
 		},
@@ -755,7 +755,7 @@ func TestAddEvent_SourceLostPropagation(t *testing.T) {
 func TestIsSourceLostBC_StaleDetailFixed(t *testing.T) {
 	now := time.Now().UnixMilli()
 
-	t.Run("stale LOCKED detail no longer fools isSourceLostBC after source-lost propagation", func(t *testing.T) {
+	t.Run("stale LOCKED detail on other iface keeps isSourceLostBC false (no cross-hardware bleeding)", func(t *testing.T) {
 		ptp4lData := &Data{
 			ProcessName: PTP4l,
 			Details: []*DataDetails{
@@ -776,10 +776,8 @@ func TestIsSourceLostBC_StaleDetailFixed(t *testing.T) {
 			},
 		}
 
-		// Before source-lost event: PTP source should NOT be lost
 		assert.False(t, e.isSourceLostBC("cfg"), "before source-lost event, ptpLost should be false")
 
-		// Simulate source-lost event on eno8703 (active port fallback)
 		ptp4lData.AddEvent(Event{
 			Source: PTP4l,
 			IFace:  "eno8703",
@@ -787,8 +785,10 @@ func TestIsSourceLostBC_StaleDetailFixed(t *testing.T) {
 			Data:   &PTPData{State: PTP_FREERUN, SourceLost: true},
 		})
 
-		// After source-lost propagation: PTP source should be lost
-		assert.True(t, e.isSourceLostBC("cfg"), "after source-lost propagation, ptpLost should be true")
+		// Without cross-hardware propagation, the stale LOCKED detail on
+		// eno8903 is not overwritten, so isSourceLostBC still sees a LOCKED
+		// port and returns false.
+		assert.False(t, e.isSourceLostBC("cfg"), "stale LOCKED detail on other iface prevents ptpLost")
 	})
 
 	t.Run("single LOCKED detail keeps source as not lost", func(t *testing.T) {
