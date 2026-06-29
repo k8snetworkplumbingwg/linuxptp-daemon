@@ -54,6 +54,9 @@ func main() {
 	}
 	proxy := cep.NewCloudEventProxy(cache, ps)
 
+	if err := os.MkdirAll(filepath.Dir(socket), 0755); err != nil {
+		glog.Fatalf("failed to create socket directory: %v", err)
+	}
 	os.Remove(socket)
 	ln, err := net.Listen("unix", socket)
 	if err != nil {

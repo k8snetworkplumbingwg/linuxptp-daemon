@@ -124,7 +124,8 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 
 // StateValue carries a PTP or OS clock synchronization state.
 type StateValue struct {
-	State string `json:"state"`
+	State  string `json:"state"`
+	Offset int64  `json:"offset,omitempty"`
 }
 
 // Value implements Value.

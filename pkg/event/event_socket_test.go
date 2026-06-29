@@ -22,7 +22,7 @@ func newTestEventHandler(socketPath string) *EventHandler {
 		stdoutSocket:   socketPath,
 		stdoutToSocket: true,
 		closeCh:        make(chan bool, 1),
-		clkSyncState:   map[string]*clockSyncState{},
+		clocks:         map[string]Clock{},
 	}
 }
 
@@ -540,13 +540,21 @@ func TestEmitClockSyncLogs_WritesWithNewline(t *testing.T) {
 	e := newTestEventHandler(socketPath)
 	assert.True(t, e.reconnectEventSocket())
 
-	// Set clock sync state with logs that already have trailing newlines (as GetLogData produces)
+	// Register clock objects with syncState.clkLog populated
 	e.Lock()
-	e.clkSyncState["ptp4l.0.config"] = &clockSyncState{
-		clkLog: "GM[1710000000]:[ptp4l.0.config] ens3f2 T-GM-STATUS s2\n",
+	e.clocks["ptp4l.0.config"] = &GMClock{
+		cfgName: "ptp4l.0.config",
+		io:      &noopClockIO{},
+		syncState: clockSyncState{
+			clkLog: "GM[1710000000]:[ptp4l.0.config] ens3f2 T-GM-STATUS s2\n",
+		},
 	}
-	e.clkSyncState["ptp4l.1.config"] = &clockSyncState{
-		clkLog: "GM[1710000001]:[ptp4l.1.config] ens2f0 T-GM-STATUS s2\n",
+	e.clocks["ptp4l.1.config"] = &GMClock{
+		cfgName: "ptp4l.1.config",
+		io:      &noopClockIO{},
+		syncState: clockSyncState{
+			clkLog: "GM[1710000001]:[ptp4l.1.config] ens2f0 T-GM-STATUS s2\n",
+		},
 	}
 	e.Unlock()
 
@@ -648,9 +656,9 @@ func TestEmitClockClass_ReconnectsOnBrokenPipe(t *testing.T) {
 	e.setConn(nil) // cleanup
 }
 
-// --- EmitClockClass (exported, via clkSyncState) ---
+// --- EmitClockClass (exported, via clock objects) ---
 
-func TestEmitClockClassExported_SkipsWhenNoClkSyncState(t *testing.T) {
+func TestEmitClockClassExported_EmitsDefaultState(t *testing.T) {
 	socketPath := shortSocketPath(t)
 	listener, err := net.Listen("unix", socketPath)
 	assert.NoError(t, err)
@@ -662,15 +670,13 @@ func TestEmitClockClassExported_SkipsWhenNoClkSyncState(t *testing.T) {
 	e := NewEventHandlerForTests(socketPath)
 	assert.True(t, e.reconnectEventSocket())
 
-	// No clkSyncState entry for this config; EmitClockClass should return early
+	// No stored clock class — EmitClockClass should be a no-op
 	e.EmitClockClass("ptp4l.99.config")
 
-	// Verify nothing was sent
 	select {
-	case got := <-received:
-		t.Fatalf("expected no message but got: %q", got)
+	case <-received:
+		t.Fatal("expected no message when no clock class is stored")
 	case <-time.After(200 * time.Millisecond):
-		// expected: no data sent
 	}
 
 	e.setConn(nil) // cleanup
@@ -688,11 +694,8 @@ func TestEmitClockClassExported_EmitsStoredClockClass(t *testing.T) {
 	e := NewEventHandlerForTests(socketPath)
 	assert.True(t, e.reconnectEventSocket())
 
-	// Populate clkSyncState via test helper
+	// Set and emit for config 0
 	e.SetClockClass("ptp4l.0.config", 6)
-	e.SetClockClass("ptp4l.1.config", 255)
-
-	// Emit for config 0
 	e.EmitClockClass("ptp4l.0.config")
 
 	select {
@@ -703,7 +706,8 @@ func TestEmitClockClassExported_EmitsStoredClockClass(t *testing.T) {
 		t.Fatal("timed out waiting for clock class message")
 	}
 
-	// Emit for config 1
+	// Set and emit for config 1
+	e.SetClockClass("ptp4l.1.config", 255)
 	e.EmitClockClass("ptp4l.1.config")
 
 	select {
@@ -712,125 +716,6 @@ func TestEmitClockClassExported_EmitsStoredClockClass(t *testing.T) {
 		assert.Contains(t, got, "ptp4l.1.config")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for clock class message for config 1")
-	}
-
-	e.setConn(nil) // cleanup
-}
-
-// --- storeClockClassLocked ---
-
-func TestStoreClockClassLocked_CreatesNewEntry(t *testing.T) {
-	e := newTestEventHandler("")
-	e.Lock()
-	e.storeClockClassLocked("ptp4l.0.config", fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21))
-	state, ok := e.clkSyncState["ptp4l.0.config"]
-	e.Unlock()
-
-	assert.True(t, ok)
-	assert.Equal(t, fbprotocol.ClockClass(6), state.clockClass)
-	assert.Equal(t, fbprotocol.ClockAccuracy(0x21), state.clockAccuracy)
-}
-
-func TestStoreClockClassLocked_UpdatesExistingEntry(t *testing.T) {
-	e := newTestEventHandler("")
-
-	// Pre-populate with other fields
-	e.clkSyncState["ptp4l.0.config"] = &clockSyncState{
-		state:      PTP_LOCKED,
-		clockClass: fbprotocol.ClockClass(248),
-	}
-
-	e.Lock()
-	e.storeClockClassLocked("ptp4l.0.config", fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21))
-	state := e.clkSyncState["ptp4l.0.config"]
-	e.Unlock()
-
-	assert.Equal(t, fbprotocol.ClockClass(6), state.clockClass)
-	assert.Equal(t, fbprotocol.ClockAccuracy(0x21), state.clockAccuracy)
-	// Existing field preserved
-	assert.Equal(t, PTP_LOCKED, state.state)
-}
-
-func TestStoreClockClassLocked_MakesEmitClockClassWork(t *testing.T) {
-	socketPath := shortSocketPath(t)
-	listener, err := net.Listen("unix", socketPath)
-	assert.NoError(t, err)
-	defer listener.Close()
-
-	received := make(chan string, 10)
-	go acceptAndRead(listener, received)
-
-	e := newTestEventHandler(socketPath)
-	assert.True(t, e.reconnectEventSocket())
-
-	// Simulate what clockClassRequestCh handler does
-	e.Lock()
-	e.storeClockClassLocked("ptp4l.0.config", fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21))
-	e.storeClockClassLocked("ptp4l.1.config", fbprotocol.ClockClass(255), fbprotocol.ClockAccuracy(0xFE))
-	e.Unlock()
-
-	// EmitClockClass should now find and emit the stored values
-	e.EmitClockClass("ptp4l.0.config")
-
-	select {
-	case got := <-received:
-		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 6")
-		assert.Contains(t, got, "ptp4l.0.config")
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for clock class message")
-	}
-
-	e.EmitClockClass("ptp4l.1.config")
-
-	select {
-	case got := <-received:
-		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 255")
-		assert.Contains(t, got, "ptp4l.1.config")
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for clock class message")
-	}
-
-	e.setConn(nil) // cleanup
-}
-
-// --- announceClockClass stores in clkSyncState ---
-
-func TestAnnounceClockClass_PopulatesClkSyncState(t *testing.T) {
-	socketPath := shortSocketPath(t)
-	listener, err := net.Listen("unix", socketPath)
-	assert.NoError(t, err)
-	defer listener.Close()
-
-	received := make(chan string, 10)
-	go acceptAndRead(listener, received)
-
-	e := newTestEventHandler(socketPath)
-	assert.True(t, e.reconnectEventSocket())
-
-	// clkSyncState should be empty initially
-	e.Lock()
-	_, ok := e.clkSyncState["ptp4l.1.config"]
-	e.Unlock()
-	assert.False(t, ok, "clkSyncState should be empty before announceClockClass")
-
-	// announceClockClass should populate clkSyncState AND emit to socket
-	e.announceClockClass(fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21), "ptp4l.1.config")
-
-	// Verify clkSyncState was populated
-	e.Lock()
-	state, ok := e.clkSyncState["ptp4l.1.config"]
-	e.Unlock()
-	assert.True(t, ok, "clkSyncState should have ptp4l.1.config after announceClockClass")
-	assert.Equal(t, fbprotocol.ClockClass(6), state.clockClass)
-	assert.Equal(t, fbprotocol.ClockAccuracy(0x21), state.clockAccuracy)
-
-	// Verify it was written to socket
-	select {
-	case got := <-received:
-		assert.Contains(t, got, "CLOCK_CLASS_CHANGE 6")
-		assert.Contains(t, got, "ptp4l.1.config")
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for clock class message on socket")
 	}
 
 	e.setConn(nil) // cleanup
