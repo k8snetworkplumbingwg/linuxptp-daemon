@@ -173,12 +173,11 @@ type EventHandler struct {
 	clockClass         fbprotocol.ClockClass
 	clockAccuracy      fbprotocol.ClockAccuracy
 	clkSyncState       map[string]*clockSyncState
-	downstreamCancel   map[string]context.CancelFunc // cancels in-flight downstream update goroutines per config
-	outOfSpec          bool                          // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
-	frequencyTraceable bool                          // will be tru if synce is traceable
-	ReduceLog          bool                          // reduce logs for every announce
-	LeadingClockData   *LeadingClockParams
+	outOfSpec          bool // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
+	frequencyTraceable bool // will be tru if synce is traceable
+	ReduceLog          bool // reduce logs for every announce
 	portRole           map[string]map[string]*parser.PTPEvent
+	clocks             map[string]Clock // cfgName → Clock
 }
 
 // getConn returns the current event socket connection under lock.
@@ -252,13 +251,83 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		clockClassMetric:   clockClassMetric,
 		clockClass:         protocol.ClockClassUninitialized,
 		clkSyncState:       map[string]*clockSyncState{},
-		downstreamCancel:   map[string]context.CancelFunc{},
 		outOfSpec:          false,
 		frequencyTraceable: false,
 		ReduceLog:          true,
-		LeadingClockData:   newLeadingClockParams(),
 		portRole:           map[string]map[string]*parser.PTPEvent{},
+		clocks:             map[string]Clock{},
 	}
+}
+
+// AddClock creates a Clock for the given config and registers it.
+// If a clock is already registered for cfgName it is replaced.
+func (e *EventHandler) AddClock(cfgName string, clockType ClockType) (Clock, error) {
+	clk, err := newClock(cfgName, clockType, e)
+	if err != nil {
+		return nil, err
+	}
+	e.Lock()
+	defer e.Unlock()
+	if prev, exists := e.clocks[cfgName]; exists {
+		glog.Warningf("AddClock: replacing existing %s clock for config %s", prev.ClockType(), cfgName)
+	}
+	e.clocks[cfgName] = clk
+	// BC/OC events may arrive with ts2phc.{runID}.config as cfgName,
+	// so register under that key too.
+	if clockType == BC || clockType == OC {
+		ts2phcName := strings.Replace(cfgName, "ptp4l.", "ts2phc.", 1)
+		e.clocks[ts2phcName] = clk
+	}
+	glog.Infof("AddClock: registered %s clock for config %s", clockType, cfgName)
+	return clk, nil
+}
+
+// RemoveAllClocks tears down all registered clocks and cleans up associated state.
+func (e *EventHandler) RemoveAllClocks() {
+	e.Lock()
+	// Cancel in-flight downstream PMC goroutines on BC clocks.
+	for _, clk := range e.clocks {
+		if bc, ok := clk.(*BCClock); ok {
+			if bc.downstreamCancel != nil {
+				bc.downstreamCancel()
+				bc.downstreamCancel = nil
+			}
+			bc.leadingClockData = newLeadingClockParams()
+			bc.syncState = clockSyncState{}
+			bc.data = nil
+		}
+	}
+	for cfgName := range e.clocks {
+		delete(e.clkSyncState, cfgName)
+		delete(e.portRole, cfgName)
+	}
+	e.clockClass = protocol.ClockClassUninitialized
+	e.clockAccuracy = fbprotocol.ClockAccuracyUnknown
+	e.outOfSpec = false
+	e.frequencyTraceable = false
+	e.Unlock()
+
+	// unregisterMetrics takes its own lock, so call outside ours.
+	for _, clk := range e.clocks {
+		e.unregisterMetrics(clk.ConfigName(), "")
+	}
+
+	e.Lock()
+	for cfgName := range e.clocks {
+		delete(e.data, cfgName)
+	}
+	e.clocks = map[string]Clock{}
+	e.Unlock()
+
+	debug.ClearState()
+	glog.Info("RemoveAllClocks: all clocks removed and state cleaned up")
+}
+
+// GetClock returns the Clock registered for the given config name, or nil.
+func (e *EventHandler) GetClock(cfgName string) Clock {
+	e.Lock()
+	defer e.Unlock()
+	return e.clocks[cfgName]
 }
 
 // GetLogData returns a formatted log line for the event.
@@ -692,6 +761,25 @@ func (e *EventHandler) storeClockClassLocked(cfgName string, clockClass fbprotoc
 	e.clkSyncState[cfgName].clockAccuracy = clockAcc
 }
 
+func (e *EventHandler) getStoredClockClass(cfgName string) (fbprotocol.ClockClass, bool) {
+	e.Lock()
+	defer e.Unlock()
+	state, ok := e.clkSyncState[cfgName]
+	if !ok {
+		return 0, false
+	}
+	return state.clockClass, true
+}
+
+// EmitClockClass re-emits the stored clock class for any clock type.
+func (e *EventHandler) EmitClockClass(cfgName string) {
+	clockClass, ok := e.getStoredClockClass(cfgName)
+	if !ok {
+		return
+	}
+	e.emitClockClass(clockClass, cfgName)
+}
+
 // emitClockClass writes the clock class to the socket and updates the metric.
 // Must NOT be called while holding e.Lock().
 func (e *EventHandler) emitClockClass(clockClass fbprotocol.ClockClass, cfgName string) {
@@ -703,6 +791,10 @@ func (e *EventHandler) emitClockClass(clockClass fbprotocol.ClockClass, cfgName 
 		e.clockClassMetric.With(prometheus.Labels{
 			"process": PTP4lProcessName, "config": cfgName, "node": e.nodeName}).Set(float64(clockClass))
 	}
+}
+
+func (e *EventHandler) updateDownstreamData(bc *BCClock, cfgName string) {
+	bc.updateDownstreamData(cfgName)
 }
 
 // reconnectEventSocket closes the current connection and dials a new one using
@@ -831,7 +923,6 @@ func (e *EventHandler) ProcessEvents() {
 				select {
 				case clk := <-clockClassRequestCh:
 					cfgName = clk.cfgName
-					// TODO: UpdateClockClass produces the wrong value for BC, investigate and fix.
 					if clk.clockType != BC {
 						e.UpdateClockClass(clk)
 					} else {
@@ -840,6 +931,7 @@ func (e *EventHandler) ProcessEvents() {
 						e.clockAccuracy = clk.clockAccuracy
 						e.storeClockClassLocked(clk.cfgName, clk.clockClass, clk.clockAccuracy)
 						e.Unlock()
+						e.emitClockClass(clk.clockClass, clk.cfgName)
 					}
 
 				case <-e.closeCh:
@@ -890,11 +982,19 @@ func (e *EventHandler) ProcessEvents() {
 	for {
 		select {
 		case event := <-e.processChannel: // for non GM this thread will be in sleep forever
+			glog.V(2).Infof("ProcessEvents: received event source=%s iface=%s cfg=%s clockType=%s reset=%v",
+				event.Source, event.IFace, event.CfgName, event.ClockType, event.Reset)
 			// ts2phc[123455]:[ts2phc.0.config] 12345 s0 offset/gps
 			// replace ts2phc logs here
 			if event.Reset { // clean up
 				debug.ClearState() // clear any state data used for debug
-				e.LeadingClockData = newLeadingClockParams()
+				if clk := e.GetClock(event.CfgName); clk != nil {
+					if bc, bcOk := clk.(*BCClock); bcOk {
+						bc.leadingClockData = newLeadingClockParams()
+						bc.syncState = clockSyncState{}
+						bc.data = nil
+					}
+				}
 				if event.Source == TS2PHC {
 					e.unregisterMetrics(event.CfgName, "")
 					delete(e.data, event.CfgName) // this will delete all index
@@ -949,18 +1049,12 @@ func (e *EventHandler) ProcessEvents() {
 						}
 					}
 				} else { // T-BC or T-TSC
-					e.Lock()
-					event = e.convergeConfig(event)
-					dataDetails = e.addEvent(event)
-					var needsTTSCAnnounce, needsDownstreamUpdate bool
-					clockState, needsTTSCAnnounce, needsDownstreamUpdate = e.updateBCState(event)
-					e.Unlock()
-					// Perform I/O after releasing the lock
-					if needsTTSCAnnounce {
-						e.emitClockClass(clockState.clockClass, event.CfgName)
-					}
-					if needsDownstreamUpdate {
-						go e.updateDownstreamData(event.CfgName)
+					if clk := e.GetClock(event.CfgName); clk != nil {
+						if bc, bcOk := clk.(*BCClock); bcOk {
+							var result BCProcessResult
+							event, result, dataDetails = bc.addEvent(event)
+							clockState = result.ClockState
+						}
 					}
 				}
 				logDataValues = dataDetails.logData

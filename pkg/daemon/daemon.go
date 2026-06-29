@@ -752,6 +752,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	glog.Infof("in applyNodePTPProfiles - starting to apply %d node profiles", len(dn.ptpUpdate.NodeProfiles))
 
 	dn.stopAllProcesses()
+	dn.processManager.ptpEventHandler.RemoveAllClocks()
 	// All process should have been stopped,
 	// clear process in process manager.
 	// Assigning processManager.process to nil releases
@@ -1024,6 +1025,11 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			return err
 		}
 		clockType = ptp4lOutput.clock_type
+	}
+
+	clockCfgName := fmt.Sprintf("ptp4l.%d.config", runID)
+	if _, err = dn.processManager.ptpEventHandler.AddClock(clockCfgName, clockType); err != nil {
+		return fmt.Errorf("failed to register clock for profile %s: %v", *nodeProfile.Name, err)
 	}
 
 	for _, pProcess := range ptpProcesses {
