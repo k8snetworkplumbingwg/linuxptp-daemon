@@ -201,7 +201,7 @@ func validateGNRDStructureCommands(t *testing.T, hcm *HardwareConfigManager, clo
 	t.Logf("Structure commands: %d", len(structureCommands))
 
 	// Load e825 defaults for validation
-	hwSpec, err := LoadHardwareDefaults("intel/e825", nil)
+	hwSpec, err := LoadHardwareDefaults(HwDefIntelE825, nil)
 	if !assert.NoError(t, err, "Failed to load e825 defaults") {
 		return
 	}
@@ -329,7 +329,7 @@ func validateGNRDInitCommands(t *testing.T, dpllCommands []dpll.PinParentDeviceC
 func validateGNRDVendorDefaults(t *testing.T) {
 	t.Logf("\n=== Validating Vendor Defaults (intel/e825) ===")
 
-	hwSpec, err := LoadHardwareDefaults("intel/e825", nil)
+	hwSpec, err := LoadHardwareDefaults(HwDefIntelE825, nil)
 	if !assert.NoError(t, err, "Failed to load e825 defaults") {
 		return
 	}
@@ -732,7 +732,7 @@ func TestLoadBehaviorProfile_MultiVendor(t *testing.T) {
 		expectedGnssInput string
 	}{
 		{
-			hwDefPath:         "intel/e825",
+			hwDefPath:         HwDefIntelE825,
 			clockType:         "T-BC",
 			expectedPtpInput:  "GNR-D_SDP0",
 			expectedGnssInput: "GNSS_1PPS_IN",
@@ -788,7 +788,7 @@ func TestLoadHardwareDefaults_MultiVendor(t *testing.T) {
 		expectedPinDefs int  // minimum number of pin defaults (0 means unchecked)
 	}{
 		{
-			hwDefPath:       "intel/e825",
+			hwDefPath:       HwDefIntelE825,
 			expectDefaults:  true,
 			expectDelays:    true,
 			expectedPinDefs: 1,
@@ -872,7 +872,7 @@ func TestClockIDResolution(t *testing.T) {
 	defer ResetCommandExecutor()
 
 	// Resolve clock ID
-	clockID, err := GetClockIDFromInterface("eno5", "intel/e825")
+	clockID, err := GetClockIDFromInterface("eno5", HwDefIntelE825)
 	if !assert.NoError(t, err, "Failed to resolve clock ID") {
 		return
 	}

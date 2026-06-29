@@ -108,20 +108,6 @@ func (d *Data) AddEvent(event Event) {
 		}
 	}
 
-	// When a source-lost event arrives, propagate to all details that still
-	// show LOCKED. The active TR port may differ from ports that received
-	// earlier offset events, leaving stale LOCKED states on inactive details
-	// that would otherwise fool isSourceLostBC.
-	if sourceLost {
-		for _, dd := range d.Details {
-			if dd.IFace != event.IFace && dd.State == PTP_LOCKED {
-				dd.State = state
-				dd.sourceLost = true
-				dd.time = event.Time
-			}
-		}
-	}
-
 	for _, dd := range d.Details {
 		if dd.IFace == event.IFace {
 			if dd.time <= event.Time {
@@ -159,17 +145,6 @@ func (d *Data) AddEvent(event Event) {
 	}
 	d.logData = details.logData
 	d.Details = append(d.Details, details)
-}
-
-// ToString ... data
-func (d *Data) toString() string {
-	out := strings.Builder{}
-	out.WriteString("  logData : " + d.logData)
-	out.WriteString("  state: " + string(d.State))
-	out.WriteString("   process name: " + string(d.ProcessName))
-	out.WriteString("  Data Details: " + d.Details.toString())
-	out.WriteString("-----\r\n")
-	return out.String()
 }
 
 // toString ... data details
