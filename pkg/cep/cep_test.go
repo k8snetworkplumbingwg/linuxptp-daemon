@@ -134,10 +134,10 @@ func TestListenerResilience(t *testing.T) {
 			name: "version mismatch ignored",
 			input: func() io.Reader {
 				var buf bytes.Buffer
-				ipc.Encode(&buf, []ipc.Message{{
+				ipc.Transmit(&buf, ipc.Message{
 					Version: 99, Type: ipc.TypePTPState, Profile: testProfile,
 					IFace: testIFace, Values: ipc.StateValue{State: ipc.StateLocked},
-				}})
+				})
 				return &buf
 			},
 			wantCached: false,
@@ -147,7 +147,7 @@ func TestListenerResilience(t *testing.T) {
 			input: func() io.Reader {
 				var buf bytes.Buffer
 				buf.WriteString("not json\n")
-				ipc.Encode(&buf, []ipc.Message{validMsg})
+				ipc.Transmit(&buf, validMsg)
 				return &buf
 			},
 			wantCached: true,
@@ -161,26 +161,11 @@ func TestListenerResilience(t *testing.T) {
 			wantCached: true,
 		},
 		{
-			name: "status_response not cached",
-			input: func() io.Reader {
-				var buf bytes.Buffer
-				ipc.Encode(&buf, []ipc.Message{{
-					Version: ipc.Version,
-					Type:    ipc.TypeStatusResponse,
-				}})
-				return &buf
-			},
-			wantCached: false,
-		},
-		{
 			name: "cache_clear wipes prior entries",
 			input: func() io.Reader {
 				var buf bytes.Buffer
-				ipc.Encode(&buf, []ipc.Message{
-					{Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile,
-						IFace: testIFace, Values: ipc.StateValue{State: ipc.StateLocked}},
-					{Version: ipc.Version, Type: ipc.TypeCacheClear},
-				})
+				ipc.Transmit(&buf, ipc.Message{Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile, IFace: testIFace, Values: ipc.StateValue{State: ipc.StateLocked}})
+				ipc.Transmit(&buf, ipc.Message{Version: ipc.Version, Type: ipc.TypeCacheClear})
 				return &buf
 			},
 			wantCached: false,
@@ -246,14 +231,15 @@ func TestIntegrationEventDelivery(t *testing.T) {
 			close(done)
 		}()
 
-		ipc.Encode(pw, []ipc.Message{
-			{Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile,
-				IFace: testIFace, Values: ipc.StateValue{State: ipc.StateLocked}},
-			{Version: ipc.Version, Type: ipc.TypeGNSSState, Profile: "ts2phc.0.config",
-				IFace: testIFace, Values: ipc.GNSSStateValue{State: ipc.GNSSSynchronized}},
-			{Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile,
-				IFace: testIFace, Values: ipc.StateValue{State: ipc.StateFreerun}},
-		})
+		ipc.Transmit(pw, ipc.Message{
+			Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile,
+			IFace: testIFace, Values: ipc.StateValue{State: ipc.StateLocked}})
+		ipc.Transmit(pw, ipc.Message{
+			Version: ipc.Version, Type: ipc.TypeGNSSState, Profile: "ts2phc.0.config",
+			IFace: testIFace, Values: ipc.GNSSStateValue{State: ipc.GNSSSynchronized}})
+		ipc.Transmit(pw, ipc.Message{
+			Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile,
+			IFace: testIFace, Values: ipc.StateValue{State: ipc.StateFreerun}})
 
 		pw.Close()
 		<-done
@@ -463,12 +449,12 @@ func TestIntegrationCurrentState(t *testing.T) {
 		close(done)
 	}()
 
-	ipc.Encode(pw, []ipc.Message{
-		{Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile,
-			IFace: testIFace, Values: ipc.StateValue{State: ipc.StateLocked}},
-		{Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile,
-			IFace: testIFace, Values: ipc.StateValue{State: ipc.StateFreerun}},
-	})
+	ipc.Transmit(pw, ipc.Message{
+		Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile,
+		IFace: testIFace, Values: ipc.StateValue{State: ipc.StateLocked}})
+	ipc.Transmit(pw, ipc.Message{
+		Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile,
+		IFace: testIFace, Values: ipc.StateValue{State: ipc.StateFreerun}})
 
 	pw.Close()
 	<-done

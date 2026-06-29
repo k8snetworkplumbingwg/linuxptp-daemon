@@ -172,10 +172,6 @@ func (l *CloudEventProxy) Listen(r io.Reader) {
 			glog.Info("received cache_clear from daemon, clearing event cache")
 			l.cache.Clear()
 			continue
-		case ipc.TypeStatusResponse:
-			// TODO: handle this
-			glog.Info("received status_response from daemon")
-			continue
 		case ipc.TypeStatusRequest:
 			glog.Warning("received status_request from daemon (unexpected direction)")
 			continue

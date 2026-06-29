@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/cep"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 
 	"github.com/golang/glog"
 )
@@ -73,7 +74,13 @@ func main() {
 				glog.Errorf("accept error: %v", acceptErr)
 				continue
 			}
-			glog.Info("daemon connected")
+			glog.Info("daemon connected, requesting current state")
+			conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if encodeErr := ipc.Transmit(conn, ipc.Message{Type: ipc.TypeStatusRequest, Version: ipc.Version}); encodeErr != nil {
+				glog.Errorf("failed to send status_request: %v", encodeErr)
+				conn.Close()
+				continue
+			}
 			proxy.Listen(conn)
 			conn.Close()
 			glog.Warning("daemon disconnected")

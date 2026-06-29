@@ -19,7 +19,6 @@ const (
 	TypeSyncState         = "sync_state"
 	TypeCacheClear        = "cache_clear"
 	TypeStatusRequest     = "status_request"
-	TypeStatusResponse    = "status_response"
 )
 
 // Synchronization state values.
@@ -124,7 +123,8 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 
 // StateValue carries a PTP or OS clock synchronization state.
 type StateValue struct {
-	State string `json:"state"`
+	State  string `json:"state"`
+	Offset int64  `json:"offset,omitempty"`
 }
 
 // Value implements Value.
@@ -171,13 +171,11 @@ type SyncEClockQualityValue struct {
 // Value implements Value.
 func (SyncEClockQualityValue) Value() {}
 
-// Encode encodes the given msgs as newline deliminated JSON, and writes them to the given writer
-func Encode(w io.Writer, msgs []Message) error {
+// Transmit encodes the given msg as newline deliminated JSON, and writes them to the given writer
+func Transmit(w io.Writer, msg Message) error {
 	enc := json.NewEncoder(w)
-	for _, m := range msgs {
-		if err := enc.Encode(m); err != nil {
-			return err
-		}
+	if err := enc.Encode(msg); err != nil {
+		return err
 	}
 	return nil
 }
