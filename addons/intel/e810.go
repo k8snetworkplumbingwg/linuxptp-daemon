@@ -210,10 +210,6 @@ func AfterRunPTPCommandE810(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 					return fmt.Errorf("e810: failed to enter T-BC holdover")
 				}
 				glog.Info("e810: enter T-BC holdover")
-			case "dpll-pin-dump:source-lost":
-				clockChain.DumpPinStates("dpll source lost")
-			case "dpll-pin-dump:source-acquired":
-				clockChain.DumpPinStates("dpll source acquired")
 			case "reset-to-default":
 				err = clockChain.SetPinDefaults()
 				if err != nil {

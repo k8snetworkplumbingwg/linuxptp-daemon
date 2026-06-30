@@ -283,8 +283,6 @@ func (m *mockClockChain) GetLeadingNIC() CardInfo {
 	return CardInfo{}
 }
 
-func (m *mockClockChain) DumpPinStates(_ string) {}
-
 func (m *mockClockChain) assertCallCounts(t *testing.T, expectedNormalTBC, expectedHoldoverTBC, expectedSetPinDefaults int) {
 	assert.Equal(t, expectedNormalTBC, m.enterNormalTBCCount, "Expected enterNormalTBCCount")
 	assert.Equal(t, expectedHoldoverTBC, m.enterHoldoverTBCCount, "Expected enterHoldoverTBCCount")

@@ -1398,16 +1398,6 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 					dpllDaemon.SetHardwareConfigHandler(func(devices []*dpllnl.DoDeviceGetReply) error {
 						return dn.hardwareConfigManager.ProcessDPLLDeviceNotifications(devices)
 					})
-					np := nodeProfile
-					dpllDaemon.OnSourceLostChanged = func(iface string, sourceLost bool) {
-						if sourceLost {
-							glog.Infof("DPLL %s source lost: requesting pin dump", iface)
-							dn.pluginManager.AfterRunPTPCommand(np, "dpll-pin-dump:source-lost")
-						} else {
-							glog.Infof("DPLL %s source acquired: requesting pin dump", iface)
-							dn.pluginManager.AfterRunPTPCommand(np, "dpll-pin-dump:source-acquired")
-						}
-					}
 					dpllDaemon.CmdInit()
 					dprocess.depProcess = append(dprocess.depProcess, dpllDaemon)
 				}

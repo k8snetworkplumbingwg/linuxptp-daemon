@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/golang/glog"
 	"github.com/mdlayher/netlink"
@@ -665,12 +664,16 @@ func BatchPinSet(commands []dpll.PinParentDeviceCtl) error {
 			//TODO: handle properly after RHEL-137801 is fixed
 			return nil
 		}
-		reply, replyErr := dpll.GetPinInfoHR(info, time.Now())
-		if replyErr != nil {
-			glog.Error("failed to convert pin reply to human readable: ", replyErr)
-			return replyErr
+		for _, pd := range info.ParentDevice {
+			prioStr := "n/a"
+			if pd.Prio != nil {
+				prioStr = fmt.Sprintf("%d", *pd.Prio)
+			}
+			glog.Infof("  pin=%-3d %-14s clockID=0x%x parentID=%-2d dir=%-6s prio=%-4s admin=%-12s oper=%s",
+				info.ID, info.BoardLabel, info.ClockID, pd.ParentID,
+				dpll.GetPinDirection(pd.Direction), prioStr,
+				dpll.GetPinState(pd.State), dpll.GetPinOperstate(pd.Operstate))
 		}
-		glog.Info("pin reply: ", string(reply))
 	}
 	return nil
 }
