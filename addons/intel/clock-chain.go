@@ -3,7 +3,6 @@ package intel
 import (
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/golang/glog"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
@@ -626,12 +625,7 @@ func batchPinSet(commands []dpll.PinParentDeviceCtl) error {
 			glog.Error("failed to get pin: ", err)
 			return err
 		}
-		reply, err := dpll.GetPinInfoHR(info, time.Now())
-		if err != nil {
-			glog.Error("failed to convert pin reply to human readable: ", err)
-			return err
-		}
-		glog.Info("pin reply: ", string(reply))
+		dpll.LogPinInfo(info)
 	}
 	return nil
 }
