@@ -42,6 +42,13 @@ type pinGroup struct {
 	lines   []string
 }
 
+// isRelevantParent returns true if the parent is relevant to the pin.
+// A parent is relevant if it is in the "selectable", "connected", or "active" state.
+func isRelevantParent(pd *PinParentDevice) bool {
+	return pd.State == PinStateSelectable || pd.State == PinStateConnected ||
+		pd.Operstate == PinOperstateActive
+}
+
 func groupPinsByClockID(pins []*PinInfo) []pinGroup {
 	orderMap := map[uint64]int{}
 	var groups []pinGroup
@@ -61,6 +68,9 @@ func groupPinsByClockID(pins []*PinInfo) []pinGroup {
 			label = fmt.Sprintf("%s/%s", pin.BoardLabel, pin.PackageLabel)
 		}
 		for _, pd := range pin.ParentDevice {
+			if !isRelevantParent(&pd) {
+				continue
+			}
 			prioStr := "n/a"
 			if pd.Prio != nil {
 				prioStr = fmt.Sprintf("%d", *pd.Prio)
@@ -98,8 +108,7 @@ func LogPinInfo(pin *PinInfo) {
 
 func hasRelevantParent(pin *PinInfo) bool {
 	for _, pd := range pin.ParentDevice {
-		if pd.State == PinStateSelectable || pd.State == PinStateConnected ||
-			pd.Operstate == PinOperstateActive {
+		if isRelevantParent(&pd) {
 			return true
 		}
 	}

@@ -1,6 +1,7 @@
 package dpll_netlink
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -104,6 +105,28 @@ func TestGroupPinsByClockID(t *testing.T) {
 	assert.Contains(t, groups[0].lines[1], "CVL-SDP23")
 	assert.Contains(t, groups[0].lines[1], "admin=connected")
 	assert.Contains(t, groups[1].lines[0], "prio=5")
+}
+
+func TestGroupPinsByClockID_MultiParent(t *testing.T) {
+	pins := []*PinInfo{
+		{
+			ID: 29, ClockID: 0xAA, BoardLabel: "CVL-SDP23",
+			ParentDevice: []PinParentDevice{
+				{ParentID: 2, Direction: PinDirectionOutput, State: PinStateSelectable, Prio: prio(3)},
+				{ParentID: 3, Direction: PinDirectionOutput, State: PinStateConnected},
+			},
+		},
+	}
+	groups := groupPinsByClockID(pins)
+	assert.Equal(t, 1, len(groups), "pin should be included")
+	assert.GreaterOrEqual(t, len(groups[0].lines), 1, "at least one parent line")
+	hasConnected := false
+	for _, line := range groups[0].lines {
+		if strings.Contains(line, "admin=connected") {
+			hasConnected = true
+		}
+	}
+	assert.True(t, hasConnected, "connected parent must appear in output")
 }
 
 func TestGroupPinsByClockID_Empty(t *testing.T) {
