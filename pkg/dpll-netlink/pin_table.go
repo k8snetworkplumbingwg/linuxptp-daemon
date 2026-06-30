@@ -56,14 +56,18 @@ func groupPinsByClockID(pins []*PinInfo) []pinGroup {
 			orderMap[pin.ClockID] = idx
 			groups = append(groups, pinGroup{clockID: pin.ClockID})
 		}
+		label := pin.BoardLabel
+		if pin.PackageLabel != "" {
+			label = fmt.Sprintf("%s/%s", pin.BoardLabel, pin.PackageLabel)
+		}
 		for _, pd := range pin.ParentDevice {
 			prioStr := "n/a"
 			if pd.Prio != nil {
 				prioStr = fmt.Sprintf("%d", *pd.Prio)
 			}
 			groups[idx].lines = append(groups[idx].lines,
-				fmt.Sprintf("  pin=%-3d %-14s parentID=%-2d dir=%-6s prio=%-4s admin=%-12s oper=%s",
-					pin.ID, pin.BoardLabel, pd.ParentID,
+				fmt.Sprintf("  pin=%-3d %-20s parentID=%-2d dir=%-6s prio=%-4s admin=%-12s oper=%s",
+					pin.ID, label, pd.ParentID,
 					GetPinDirection(pd.Direction),
 					prioStr,
 					GetPinState(pd.State),
@@ -71,6 +75,25 @@ func groupPinsByClockID(pins []*PinInfo) []pinGroup {
 		}
 	}
 	return groups
+}
+
+// LogPinInfo logs each parent device of a pin in table format.
+// Suitable for use after pin set commands to confirm the applied state.
+func LogPinInfo(pin *PinInfo) {
+	label := pin.BoardLabel
+	if pin.PackageLabel != "" {
+		label = fmt.Sprintf("%s/%s", pin.BoardLabel, pin.PackageLabel)
+	}
+	for _, pd := range pin.ParentDevice {
+		prioStr := "n/a"
+		if pd.Prio != nil {
+			prioStr = fmt.Sprintf("%d", *pd.Prio)
+		}
+		glog.Infof("  pin=%-3d 0x%x %-20s parentID=%-2d dir=%-6s prio=%-4s admin=%-12s oper=%s",
+			pin.ID, pin.ClockID, label, pd.ParentID,
+			GetPinDirection(pd.Direction), prioStr,
+			GetPinState(pd.State), GetPinOperstate(pd.Operstate))
+	}
 }
 
 func hasRelevantParent(pin *PinInfo) bool {

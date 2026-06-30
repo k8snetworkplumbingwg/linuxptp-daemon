@@ -122,6 +122,20 @@ func TestGroupPinsByClockID_AllFiltered(t *testing.T) {
 	assert.Empty(t, groups)
 }
 
+func TestGroupPinsByClockID_WithPackageLabel(t *testing.T) {
+	pins := []*PinInfo{
+		{
+			ID: 5, ClockID: 0xDD, BoardLabel: "SDP0", PackageLabel: "U1901",
+			ParentDevice: []PinParentDevice{
+				{ParentID: 0, Direction: PinDirectionInput, State: PinStateSelectable, Prio: prio(3)},
+			},
+		},
+	}
+	groups := groupPinsByClockID(pins)
+	assert.Equal(t, 1, len(groups))
+	assert.Contains(t, groups[0].lines[0], "SDP0/U1901", "should combine board and package labels")
+}
+
 func TestGroupPinsByClockID_PrioNil(t *testing.T) {
 	pins := []*PinInfo{
 		{

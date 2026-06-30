@@ -625,16 +625,7 @@ func batchPinSet(commands []dpll.PinParentDeviceCtl) error {
 			glog.Error("failed to get pin: ", err)
 			return err
 		}
-		for _, pd := range info.ParentDevice {
-			prioStr := "n/a"
-			if pd.Prio != nil {
-				prioStr = fmt.Sprintf("%d", *pd.Prio)
-			}
-			glog.Infof("  pin=%-3d %-14s clockID=0x%x parentID=%-2d dir=%-6s prio=%-4s admin=%-12s oper=%s",
-				info.ID, info.BoardLabel, info.ClockID, pd.ParentID,
-				dpll.GetPinDirection(pd.Direction), prioStr,
-				dpll.GetPinState(pd.State), dpll.GetPinOperstate(pd.Operstate))
-		}
+		dpll.LogPinInfo(info)
 	}
 	return nil
 }
