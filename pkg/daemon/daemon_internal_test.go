@@ -2923,7 +2923,7 @@ func TestEmitClockClassLogs_EmitsWithNilParentDS(t *testing.T) {
 	// tests already cover the socket write path via EmitClockClass).
 	eventChannel := make(chan event.Event)
 	closeCh := make(chan bool, 1)
-	handler := event.Init("testnode", false, "", eventChannel, closeCh, nil, nil, nil)
+	handler := event.Init("testnode", false, "", eventChannel, closeCh, nil, nil, nil, nil)
 
 	// Create a PMC process with parentDS = nil (the bug condition).
 	// Before the fix, EmitClockClassLogs skipped the call when parentDS was nil.
@@ -3085,7 +3085,7 @@ func TestEmitLogsHandler_Ready_EmitsReplayThenOpensGate(t *testing.T) {
 					stopped:             false,
 				},
 			},
-			ptpEventHandler: event.Init("test-node", false, socketPath, nil, nil, nil, nil, nil),
+			ptpEventHandler: event.Init("test-node", false, socketPath, nil, nil, nil, nil, nil, nil),
 			daemon:          dn,
 		},
 	}

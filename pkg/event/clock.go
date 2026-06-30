@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 )
 
@@ -22,6 +23,7 @@ type clockIO interface {
 	emitClockClass(clockClass fbprotocol.ClockClass, cfgName string)
 	getStoredClockClass(cfgName string) (fbprotocol.ClockClass, bool)
 	updateDownstreamData(bc *BCClock, cfgName string)
+	sendIPC(msg ipc.Message)
 }
 
 // BCProcessResult holds the outcome of BCClock.addEvent.

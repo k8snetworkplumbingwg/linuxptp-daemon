@@ -7,6 +7,7 @@ import (
 	"time"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
@@ -25,6 +26,7 @@ func (n *noopClockIO) getStoredClockClass(string) (fbprotocol.ClockClass, bool) 
 	return 0, false
 }
 func (n *noopClockIO) updateDownstreamData(*BCClock, string) {}
+func (n *noopClockIO) sendIPC(ipc.Message)                    {}
 
 func newTestBCClock(lcp *LeadingClockParams) *BCClock {
 	if lcp == nil {

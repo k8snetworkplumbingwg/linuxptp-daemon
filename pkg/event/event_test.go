@@ -12,6 +12,7 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
@@ -19,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 )
@@ -307,7 +309,7 @@ func TestEventHandler_ProcessEvents(t *testing.T) {
 	eChannel := make(chan event.Event, 100)
 	closeChn := make(chan bool)
 	go listenToEvents(closeChn, logOut)
-	eventManager := event.Init("node", true, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil)
+	eventManager := event.Init("node", true, "/tmp/go.sock", eChannel, closeChn, nil, nil, nil, nil)
 	go eventManager.ProcessEvents()
 	assert.NoError(t, leap.MockLeapFile())
 	defer func() {
@@ -543,7 +545,7 @@ func TestBCClockClassThroughProcessEvents(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}()
 
-	eventManager := event.Init("node", true, socketPath, eChannel, closeChn, nil, nil, nil)
+	eventManager := event.Init("node", true, socketPath, eChannel, closeChn, nil, nil, nil, nil)
 	go eventManager.ProcessEvents()
 	defer func() { closeChn <- true }()
 
@@ -684,7 +686,7 @@ func TestBCClockClassMetric(t *testing.T) {
 
 	eChannel := make(chan event.Event, 100)
 	closeChn := make(chan bool)
-	eventManager := event.Init("testnode", false, "", eChannel, closeChn, offsetGauge, clockStateGauge, clockClassGauge)
+	eventManager := event.Init("testnode", false, "", eChannel, closeChn, offsetGauge, clockStateGauge, clockClassGauge, nil)
 	go eventManager.ProcessEvents()
 	defer func() { closeChn <- true }()
 
@@ -749,4 +751,229 @@ func TestBCClockClassMetric(t *testing.T) {
 
 	assert.True(t, waitForMetric(clockClassGauge, bcCfgPTP4l, 135, 5*time.Second),
 		"expected clock class metric = 135 for %s after HOLDOVER", bcCfgPTP4l)
+}
+
+// drainIPCMessages collects all IPC messages available on the channel within the timeout.
+func drainIPCMessages(ch <-chan ipc.Message, timeout time.Duration) []ipc.Message {
+	var msgs []ipc.Message
+	deadline := time.After(timeout)
+	for {
+		select {
+		case msg := <-ch:
+			msgs = append(msgs, msg)
+		case <-deadline:
+			return msgs
+		}
+	}
+}
+
+// waitForIPCMessage waits for an IPC message matching the given type and returns it.
+func waitForIPCMessage(ch <-chan ipc.Message, msgType string, timeout time.Duration) (ipc.Message, bool) {
+	deadline := time.After(timeout)
+	for {
+		select {
+		case msg := <-ch:
+			if msg.Type == msgType {
+				return msg, true
+			}
+		case <-deadline:
+			return ipc.Message{}, false
+		}
+	}
+}
+
+func TestBCClockIPCCacheIntegration(t *testing.T) {
+	pmcMock := &pmc.MockClient{
+		ParentTimeCurrentDSResult: pmc.ParentTimeCurrentDS{
+			ParentDataSet: protocol.ParentDataSet{
+				GrandmasterClockClass:    6,
+				GrandmasterClockAccuracy: 0x21,
+			},
+			TimePropertiesDS: protocol.TimePropertiesDS{
+				CurrentUtcOffset:      37,
+				CurrentUtcOffsetValid: true,
+				PtpTimescale:          true,
+				TimeTraceable:         true,
+			},
+			CurrentDS: protocol.CurrentDS{StepsRemoved: 1},
+		},
+	}
+	pmc.SetMock(pmcMock)
+	defer pmc.ResetMock()
+
+	assert.NoError(t, leap.MockLeapFile())
+	defer func() {
+		close(leap.LeapMgr.Close)
+		time.Sleep(100 * time.Millisecond)
+	}()
+
+	clockClassGauge := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "test_ipc_clock_class", Help: "test"},
+		[]string{"process", "config", "node"},
+	)
+	offsetGauge := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "test_ipc_offset", Help: "test"},
+		[]string{"from", "process", "node", "iface"},
+	)
+	clockStateGauge := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "test_ipc_clock_state", Help: "test"},
+		[]string{"process", "node", "iface"},
+	)
+
+	cache := ipc.NewCache(100)
+	eChannel := make(chan event.Event, 100)
+	closeChn := make(chan bool)
+	eventManager := event.Init("node", false, "", eChannel, closeChn, offsetGauge, clockStateGauge, clockClassGauge, cache)
+	go eventManager.ProcessEvents()
+	defer func() { closeChn <- true }()
+
+	clk, addErr := eventManager.AddClock("ptp4l.0.config", event.BC)
+	require.NoError(t, addErr)
+	bc := clk.(*event.BCClock)
+	bc.UpdateUpstreamParentDataSet(protocol.ParentDataSet{
+		GrandmasterClockClass:    6,
+		GrandmasterClockAccuracy: 0x21,
+	})
+
+	time.Sleep(200 * time.Millisecond)
+
+	const (
+		bcCfgDPLL  = "ts2phc.0.config"
+		bcCfgPTP4l = "ptp4l.0.config"
+	)
+
+	// --- Phase 1: FREERUN → LOCKED ---
+
+	// First DPLL event carries leading source configuration
+	eChannel <- sendBCEvent(bcCfgDPLL, event.DPLL, event.PTP_LOCKED,
+		map[event.ValueType]interface{}{
+			event.LeadingSource:            true,
+			event.InSyncConditionThreshold: uint64(10000),
+			event.InSyncConditionTimes:     uint64(1),
+			event.ToFreeRunThreshold:       uint64(1500),
+			event.MaxInSpecOffset:          uint64(500),
+			event.OFFSET:                   int64(10),
+		}, false)
+	time.Sleep(100 * time.Millisecond)
+
+	// Fill DPLL window (10 events for WindowSize=10)
+	for i := 0; i < 10; i++ {
+		eChannel <- sendBCEvent(bcCfgDPLL, event.DPLL, event.PTP_LOCKED,
+			map[event.ValueType]interface{}{event.OFFSET: int64(10)}, false)
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// First PTP4l event with downstream config
+	eChannel <- sendBCEvent(bcCfgPTP4l, event.PTP4l, event.PTP_LOCKED,
+		map[event.ValueType]interface{}{
+			event.ControlledPortsConfig: "ptp4l.0.config",
+			event.ClockIDKey:            "001122.fffe.334455",
+			event.OFFSET:                int64(10),
+		}, false)
+	time.Sleep(100 * time.Millisecond)
+
+	// Fill PTP4l window — last event triggers FREERUN→LOCKED
+	for i := 0; i < 10; i++ {
+		eChannel <- sendBCEvent(bcCfgPTP4l, event.PTP4l, event.PTP_LOCKED,
+			map[event.ValueType]interface{}{event.OFFSET: int64(10)}, false)
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Collect IPC messages from FREERUN→LOCKED transition
+	msgs := drainIPCMessages(cache.Out(), 2*time.Second)
+
+	var gotPTPStateLocked bool
+	for _, msg := range msgs {
+		if msg.Type == ipc.TypePTPState {
+			sv, ok := msg.Values.(ipc.StateValue)
+			if ok && sv.State == ipc.StateLocked {
+				gotPTPStateLocked = true
+				assert.Equal(t, bcCfgPTP4l, msg.Profile, "ptp_state profile should be ptp4l config")
+				assert.Equal(t, "ens1f0", msg.IFace, "ptp_state iface should be leading interface")
+			}
+		}
+	}
+	assert.True(t, gotPTPStateLocked, "expected ptp_state LOCKED after FREERUN→LOCKED transition")
+
+	// --- Phase 2: LOCKED → HOLDOVER ---
+
+	// Drain any leftover messages before triggering the next transition
+	drainIPCMessages(cache.Out(), 200*time.Millisecond)
+
+	// PTP4l source lost → LOCKED→HOLDOVER
+	eChannel <- sendBCEvent(bcCfgPTP4l, event.PTP4l, event.PTP_FREERUN,
+		map[event.ValueType]interface{}{event.OFFSET: int64(10)}, true)
+
+	msgs = drainIPCMessages(cache.Out(), 2*time.Second)
+
+	var gotPTPStateHoldover, gotClockClass135 bool
+	for _, msg := range msgs {
+		if msg.Type == ipc.TypePTPState {
+			sv, ok := msg.Values.(ipc.StateValue)
+			if ok && sv.State == ipc.StateHoldover {
+				gotPTPStateHoldover = true
+			}
+		}
+		if msg.Type == ipc.TypeClockClass {
+			cv, ok := msg.Values.(ipc.ClockClassValue)
+			if ok && cv.ClockClass == 135 {
+				gotClockClass135 = true
+			}
+		}
+	}
+	assert.True(t, gotPTPStateHoldover, "expected ptp_state HOLDOVER after LOCKED→HOLDOVER")
+	assert.True(t, gotClockClass135, "expected clock_class 135 after LOCKED→HOLDOVER")
+
+	// --- Phase 3: HOLDOVER → FREERUN ---
+
+	drainIPCMessages(cache.Out(), 200*time.Millisecond)
+
+	// Large offset on leading DPLL triggers freeRunCondition → HOLDOVER→FREERUN
+	eChannel <- sendBCEvent(bcCfgDPLL, event.DPLL, event.PTP_LOCKED,
+		map[event.ValueType]interface{}{event.OFFSET: int64(50000)}, false)
+
+	msgs = drainIPCMessages(cache.Out(), 2*time.Second)
+
+	var gotPTPStateFreerun, gotClockClass248 bool
+	for _, msg := range msgs {
+		if msg.Type == ipc.TypePTPState {
+			sv, ok := msg.Values.(ipc.StateValue)
+			if ok && sv.State == ipc.StateFreerun {
+				gotPTPStateFreerun = true
+			}
+		}
+		if msg.Type == ipc.TypeClockClass {
+			cv, ok := msg.Values.(ipc.ClockClassValue)
+			if ok && cv.ClockClass == 248 {
+				gotClockClass248 = true
+			}
+		}
+	}
+	assert.True(t, gotPTPStateFreerun, "expected ptp_state FREERUN after HOLDOVER→FREERUN")
+	assert.True(t, gotClockClass248, "expected clock_class 248 after HOLDOVER→FREERUN")
+
+	// --- Phase 4: Dedup check ---
+
+	drainIPCMessages(cache.Out(), 200*time.Millisecond)
+
+	// Send more events that don't change state — should produce no IPC messages
+	for i := 0; i < 5; i++ {
+		eChannel <- sendBCEvent(bcCfgDPLL, event.DPLL, event.PTP_LOCKED,
+			map[event.ValueType]interface{}{event.OFFSET: int64(50000)}, false)
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	dedup := drainIPCMessages(cache.Out(), 500*time.Millisecond)
+	assert.Empty(t, dedup, "duplicate events should not produce IPC messages")
+
+	// --- Verify cache snapshot ---
+
+	snap := cache.Snapshot()
+	assert.NotEmpty(t, snap, "cache snapshot should contain stored messages")
+	types := map[string]bool{}
+	for _, m := range snap {
+		types[m.Type] = true
+	}
+	assert.True(t, types[ipc.TypePTPState], "snapshot should contain ptp_state")
+	assert.True(t, types[ipc.TypeClockClass], "snapshot should contain clock_class")
 }

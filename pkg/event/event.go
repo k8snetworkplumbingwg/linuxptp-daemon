@@ -12,6 +12,7 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/debug"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
@@ -112,6 +113,7 @@ const (
 	PHC2SYS    EventSource = "phc2sys"
 	PPS        EventSource = "1pps"
 	SYNCE      EventSource = "synce4l"
+	CHRONYD    EventSource = "chronyd"
 	MONITORING EventSource = "monitoring"
 )
 
@@ -178,6 +180,7 @@ type EventHandler struct {
 	ReduceLog          bool // reduce logs for every announce
 	portRole           map[string]map[string]*parser.PTPEvent
 	clocks             map[string]Clock // cfgName → Clock
+	ipcCache           *ipc.Cache
 }
 
 // getConn returns the current event socket connection under lock.
@@ -238,7 +241,8 @@ type Event struct {
 
 // Init ... initialize event manager
 func Init(nodeName string, stdOutToSocket bool, socketName string, processChannel chan Event, closeCh chan bool,
-	offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec, clockClassMetric *prometheus.GaugeVec) *EventHandler {
+	offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec, clockClassMetric *prometheus.GaugeVec,
+	ipcCache *ipc.Cache) *EventHandler {
 	return &EventHandler{
 		nodeName:           nodeName,
 		stdoutSocket:       socketName,
@@ -256,6 +260,7 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		ReduceLog:          true,
 		portRole:           map[string]map[string]*parser.PTPEvent{},
 		clocks:             map[string]Clock{},
+		ipcCache:           ipcCache,
 	}
 }
 
@@ -795,6 +800,17 @@ func (e *EventHandler) emitClockClass(clockClass fbprotocol.ClockClass, cfgName 
 
 func (e *EventHandler) updateDownstreamData(bc *BCClock, cfgName string) {
 	bc.updateDownstreamData(cfgName)
+}
+
+func (e *EventHandler) sendIPC(msg ipc.Message) {
+	if e.ipcCache != nil {
+		e.ipcCache.Send(msg)
+	}
+}
+
+// IPCCache returns the IPC cache, or nil if not configured.
+func (e *EventHandler) IPCCache() *ipc.Cache {
+	return e.ipcCache
 }
 
 // reconnectEventSocket closes the current connection and dials a new one using

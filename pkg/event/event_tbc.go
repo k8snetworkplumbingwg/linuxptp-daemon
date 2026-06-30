@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
@@ -97,7 +98,29 @@ func (c *BCClock) addEvent(event Event) (Event, BCProcessResult, *DataDetails) {
 	d.AddEvent(event)
 	d.UpdateState()
 	c.updateLeadingClockData(event)
+
+	prevState := c.syncState.state
+	prevClockClass := c.syncState.clockClass
+
 	needsTTSCAnnounce, needsDownstreamUpdate := c.updateBCState(event)
+
+	profile := strings.Replace(c.cfgName, "ts2phc", "ptp4l", 1)
+	if c.syncState.state != prevState {
+		c.io.sendIPC(ipc.Message{
+			Type:    ipc.TypePTPState,
+			Profile: profile,
+			IFace:   c.syncState.leadingIFace,
+			Values:  ipc.StateValue{State: ptpStateToIPCState(c.syncState.state)},
+		})
+	}
+	if c.syncState.clockClass != prevClockClass {
+		c.io.sendIPC(ipc.Message{
+			Type:    ipc.TypeClockClass,
+			Profile: profile,
+			Values:  ipc.ClockClassValue{ClockClass: uint8(c.syncState.clockClass)},
+		})
+	}
+
 	if needsTTSCAnnounce {
 		c.io.announceClockClass(c.syncState.clockClass, c.syncState.clockAccuracy, c.cfgName)
 	}
@@ -627,6 +650,17 @@ func (c *BCClock) getLeadingInterfaceBC() string {
 		return c.leadingClockData.leadingInterface
 	}
 	return LEADING_INTERFACE_UNKNOWN
+}
+
+func ptpStateToIPCState(s PTPState) string {
+	switch s {
+	case PTP_LOCKED:
+		return ipc.StateLocked
+	case PTP_HOLDOVER:
+		return ipc.StateHoldover
+	default:
+		return ipc.StateFreerun
+	}
 }
 
 func (c *BCClock) updateLeadingClockData(event Event) {
