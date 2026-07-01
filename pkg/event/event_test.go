@@ -977,3 +977,227 @@ func TestBCClockIPCCacheIntegration(t *testing.T) {
 	assert.True(t, types[ipc.TypePTPState], "snapshot should contain ptp_state")
 	assert.True(t, types[ipc.TypeClockClass], "snapshot should contain clock_class")
 }
+
+func TestOverallClockStateIntegration(t *testing.T) {
+	pmcMock := &pmc.MockClient{
+		ParentTimeCurrentDSResult: pmc.ParentTimeCurrentDS{
+			ParentDataSet: protocol.ParentDataSet{
+				GrandmasterClockClass:    6,
+				GrandmasterClockAccuracy: 0x21,
+			},
+			TimePropertiesDS: protocol.TimePropertiesDS{
+				CurrentUtcOffset:      37,
+				CurrentUtcOffsetValid: true,
+				PtpTimescale:          true,
+				TimeTraceable:         true,
+			},
+			CurrentDS: protocol.CurrentDS{StepsRemoved: 1},
+		},
+	}
+	pmc.SetMock(pmcMock)
+	defer pmc.ResetMock()
+
+	assert.NoError(t, leap.MockLeapFile())
+	defer func() {
+		close(leap.LeapMgr.Close)
+		time.Sleep(100 * time.Millisecond)
+	}()
+
+	clockClassGauge := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "test_overall_clock_class", Help: "test"},
+		[]string{"process", "config", "node"},
+	)
+	offsetGauge := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "test_overall_offset", Help: "test"},
+		[]string{"from", "process", "node", "iface"},
+	)
+	clockStateGauge := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "test_overall_clock_state", Help: "test"},
+		[]string{"process", "node", "iface"},
+	)
+
+	cache := ipc.NewCache(100)
+	eChannel := make(chan event.Event, 100)
+	closeChn := make(chan bool)
+	eventManager := event.Init("node", false, "", eChannel, closeChn, offsetGauge, clockStateGauge, clockClassGauge, cache)
+	go eventManager.ProcessEvents()
+	defer func() { closeChn <- true }()
+
+	// Register two BCClocks
+	clk1, err := eventManager.AddClock("ptp4l.0.config", event.BC)
+	require.NoError(t, err)
+	bc1 := clk1.(*event.BCClock)
+	bc1.UpdateUpstreamParentDataSet(protocol.ParentDataSet{
+		GrandmasterClockClass:    6,
+		GrandmasterClockAccuracy: 0x21,
+	})
+
+	clk2, err := eventManager.AddClock("ptp4l.1.config", event.BC)
+	require.NoError(t, err)
+	bc2 := clk2.(*event.BCClock)
+	bc2.UpdateUpstreamParentDataSet(protocol.ParentDataSet{
+		GrandmasterClockClass:    6,
+		GrandmasterClockAccuracy: 0x21,
+	})
+
+	time.Sleep(200 * time.Millisecond)
+
+	// --- Phase 1: Lock both BCClocks' PTP state ---
+
+	lockBCClock := func(cfgDPLL, cfgPTP4l string) {
+		eChannel <- sendBCEvent(cfgDPLL, event.DPLL, event.PTP_LOCKED,
+			map[event.ValueType]interface{}{
+				event.LeadingSource:            true,
+				event.InSyncConditionThreshold: uint64(10000),
+				event.InSyncConditionTimes:     uint64(1),
+				event.ToFreeRunThreshold:       uint64(1500),
+				event.MaxInSpecOffset:          uint64(500),
+				event.OFFSET:                   int64(10),
+			}, false)
+		time.Sleep(100 * time.Millisecond)
+
+		for i := 0; i < 10; i++ {
+			eChannel <- sendBCEvent(cfgDPLL, event.DPLL, event.PTP_LOCKED,
+				map[event.ValueType]interface{}{event.OFFSET: int64(10)}, false)
+			time.Sleep(50 * time.Millisecond)
+		}
+
+		eChannel <- sendBCEvent(cfgPTP4l, event.PTP4l, event.PTP_LOCKED,
+			map[event.ValueType]interface{}{
+				event.ControlledPortsConfig: cfgPTP4l,
+				event.ClockIDKey:            "001122.fffe.334455",
+				event.OFFSET:                int64(10),
+			}, false)
+		time.Sleep(100 * time.Millisecond)
+
+		for i := 0; i < 10; i++ {
+			eChannel <- sendBCEvent(cfgPTP4l, event.PTP4l, event.PTP_LOCKED,
+				map[event.ValueType]interface{}{event.OFFSET: int64(10)}, false)
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	lockBCClock("ts2phc.0.config", "ptp4l.0.config")
+	lockBCClock("ts2phc.1.config", "ptp4l.1.config")
+
+	// Drain all messages from PTP locking phase
+	msgs := drainIPCMessages(cache.Out(), 2*time.Second)
+
+	// Verify we got ptp_state LOCKED but sync_state should be FREERUN
+	// (os clock is still FREERUN since no PHC2SYS event yet)
+	var gotPTPLocked int
+	var gotSyncStateFreerun int
+	for _, msg := range msgs {
+		if msg.Type == ipc.TypePTPState {
+			if sv, ok := msg.Values.(ipc.StateValue); ok && sv.State == ipc.StateLocked {
+				gotPTPLocked++
+			}
+		}
+		if msg.Type == ipc.TypeSyncState {
+			if sv, ok := msg.Values.(ipc.SyncStateValue); ok && sv.State == ipc.StateFreerun {
+				gotSyncStateFreerun++
+			}
+		}
+	}
+	assert.GreaterOrEqual(t, gotPTPLocked, 2, "expected ptp_state LOCKED for both profiles")
+
+	// --- Phase 2: Send PHC2SYS LOCKED event ---
+
+	drainIPCMessages(cache.Out(), 200*time.Millisecond)
+
+	eChannel <- event.Event{
+		Source:    event.PHC2SYS,
+		IFace:     "CLOCK_REALTIME",
+		CfgName:   "ptp4l.0.config",
+		ClockType: event.BC,
+		Time:      time.Now().UnixMilli(),
+		Data: &event.PTPData{
+			State:  event.PTP_LOCKED,
+			Values: map[event.ValueType]interface{}{event.OFFSET: int64(5)},
+		},
+	}
+
+	msgs = drainIPCMessages(cache.Out(), 2*time.Second)
+
+	var osClockCount int
+	var syncStateLocked int
+	syncStateProfiles := map[string]bool{}
+	for _, msg := range msgs {
+		if msg.Type == ipc.TypeOSClockState {
+			osClockCount++
+			sv, ok := msg.Values.(ipc.StateValue)
+			require.True(t, ok)
+			assert.Equal(t, ipc.StateLocked, sv.State)
+		}
+		if msg.Type == ipc.TypeSyncState {
+			sv, ok := msg.Values.(ipc.SyncStateValue)
+			if ok && sv.State == ipc.StateLocked {
+				syncStateLocked++
+				syncStateProfiles[msg.Profile] = true
+			}
+		}
+	}
+	assert.Equal(t, 1, osClockCount, "os_clock_state should be emitted exactly once")
+	assert.Equal(t, 2, syncStateLocked, "sync_state LOCKED should be emitted for both profiles")
+	assert.True(t, syncStateProfiles["ptp4l.0.config"], "sync_state should include profile 0")
+	assert.True(t, syncStateProfiles["ptp4l.1.config"], "sync_state should include profile 1")
+
+	// --- Phase 3: Send PHC2SYS FREERUN → overall drops to FREERUN ---
+
+	drainIPCMessages(cache.Out(), 200*time.Millisecond)
+
+	eChannel <- event.Event{
+		Source:    event.PHC2SYS,
+		IFace:     "CLOCK_REALTIME",
+		CfgName:   "ptp4l.0.config",
+		ClockType: event.BC,
+		Time:      time.Now().UnixMilli(),
+		Data: &event.PTPData{
+			State:  event.PTP_FREERUN,
+			Values: map[event.ValueType]interface{}{event.OFFSET: int64(0)},
+		},
+	}
+
+	msgs = drainIPCMessages(cache.Out(), 2*time.Second)
+
+	var syncStateFreerunCount int
+	for _, msg := range msgs {
+		if msg.Type == ipc.TypeSyncState {
+			sv, ok := msg.Values.(ipc.SyncStateValue)
+			if ok && sv.State == ipc.StateFreerun {
+				syncStateFreerunCount++
+			}
+		}
+	}
+	assert.Equal(t, 2, syncStateFreerunCount, "sync_state FREERUN should be emitted for both profiles")
+
+	// --- Phase 4: Duplicate PHC2SYS FREERUN → no new messages ---
+
+	drainIPCMessages(cache.Out(), 200*time.Millisecond)
+
+	eChannel <- event.Event{
+		Source:    event.PHC2SYS,
+		IFace:     "CLOCK_REALTIME",
+		CfgName:   "ptp4l.0.config",
+		ClockType: event.BC,
+		Time:      time.Now().UnixMilli(),
+		Data: &event.PTPData{
+			State:  event.PTP_FREERUN,
+			Values: map[event.ValueType]interface{}{event.OFFSET: int64(0)},
+		},
+	}
+
+	dedup := drainIPCMessages(cache.Out(), 500*time.Millisecond)
+	osClockDedup := 0
+	syncStateDedup := 0
+	for _, msg := range dedup {
+		if msg.Type == ipc.TypeOSClockState {
+			osClockDedup++
+		}
+		if msg.Type == ipc.TypeSyncState {
+			syncStateDedup++
+		}
+	}
+	assert.Equal(t, 0, osClockDedup, "duplicate os_clock_state should not be emitted")
+	assert.Equal(t, 0, syncStateDedup, "duplicate sync_state should not be emitted")
+}

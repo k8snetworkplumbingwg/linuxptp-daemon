@@ -652,6 +652,22 @@ func (c *BCClock) getLeadingInterfaceBC() string {
 	return LEADING_INTERFACE_UNKNOWN
 }
 
+func worstOfState(a, b PTPState) PTPState {
+	if a == PTP_FREERUN || b == PTP_FREERUN {
+		return PTP_FREERUN
+	}
+	if a == PTP_HOLDOVER || b == PTP_HOLDOVER {
+		return PTP_HOLDOVER
+	}
+	return PTP_LOCKED
+}
+
+func (c *BCClock) updateOverallSyncState(osClockState PTPState) bool {
+	prev := c.overallSyncState
+	c.overallSyncState = worstOfState(c.syncState.state, osClockState)
+	return c.overallSyncState != prev
+}
+
 func ptpStateToIPCState(s PTPState) string {
 	switch s {
 	case PTP_LOCKED:

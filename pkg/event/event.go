@@ -180,6 +180,7 @@ type EventHandler struct {
 	ReduceLog          bool // reduce logs for every announce
 	portRole           map[string]map[string]*parser.PTPEvent
 	clocks             map[string]Clock // cfgName → Clock
+	osClockState       PTPState
 	ipcCache           *ipc.Cache
 }
 
@@ -260,6 +261,7 @@ func Init(nodeName string, stdOutToSocket bool, socketName string, processChanne
 		ReduceLog:          true,
 		portRole:           map[string]map[string]*parser.PTPEvent{},
 		clocks:             map[string]Clock{},
+		osClockState:       PTP_FREERUN,
 		ipcCache:           ipcCache,
 	}
 }
@@ -299,6 +301,7 @@ func (e *EventHandler) RemoveAllClocks() {
 			}
 			bc.leadingClockData = newLeadingClockParams()
 			bc.syncState = clockSyncState{}
+			bc.overallSyncState = PTP_FREERUN
 			bc.data = nil
 		}
 	}
@@ -310,6 +313,7 @@ func (e *EventHandler) RemoveAllClocks() {
 	e.clockAccuracy = fbprotocol.ClockAccuracyUnknown
 	e.outOfSpec = false
 	e.frequencyTraceable = false
+	e.osClockState = PTP_FREERUN
 	e.Unlock()
 
 	// unregisterMetrics takes its own lock, so call outside ours.
@@ -813,6 +817,51 @@ func (e *EventHandler) IPCCache() *ipc.Cache {
 	return e.ipcCache
 }
 
+// handleOSClockEvent fans out a PHC2SYS/CHRONYD event to all BCClocks,
+// emits os_clock_state IPC once (system-wide), and emits sync_state IPC
+// per-profile when the overall state changes.
+func (e *EventHandler) handleOSClockEvent(event Event) {
+	prevOS := e.osClockState
+	if ptp, ok := event.Data.(*PTPData); ok {
+		e.osClockState = ptp.State
+	}
+
+	osChanged := e.osClockState != prevOS
+	if osChanged {
+		e.sendIPC(ipc.Message{
+			Type:   ipc.TypeOSClockState,
+			IFace:  event.IFace,
+			Values: ipc.StateValue{State: ptpStateToIPCState(e.osClockState)},
+		})
+	}
+
+	// TODO: This is weird, locking to make copy of specific state, probably should just lock entire func
+	seen := map[*BCClock]bool{}
+	e.Lock()
+	clocks := make([]Clock, 0, len(e.clocks))
+	for _, clk := range e.clocks {
+		clocks = append(clocks, clk)
+	}
+	e.Unlock()
+
+	for _, clk := range clocks {
+		bc, ok := clk.(*BCClock)
+		if !ok || seen[bc] {
+			continue
+		}
+		seen[bc] = true
+
+		if bc.updateOverallSyncState(e.osClockState) {
+			profile := strings.Replace(bc.cfgName, "ts2phc", "ptp4l", 1)
+			e.sendIPC(ipc.Message{
+				Type:    ipc.TypeSyncState,
+				Profile: profile,
+				Values:  ipc.SyncStateValue{State: ptpStateToIPCState(bc.overallSyncState)},
+			})
+		}
+	}
+}
+
 // reconnectEventSocket closes the current connection and dials a new one using
 // the shared reconnection utility with exponential backoff.
 // Serialized via reconnectMu to prevent concurrent reconnection attempts from leaking connections.
@@ -1008,6 +1057,7 @@ func (e *EventHandler) ProcessEvents() {
 					if bc, bcOk := clk.(*BCClock); bcOk {
 						bc.leadingClockData = newLeadingClockParams()
 						bc.syncState = clockSyncState{}
+						bc.overallSyncState = PTP_FREERUN
 						bc.data = nil
 					}
 				}
@@ -1045,6 +1095,8 @@ func (e *EventHandler) ProcessEvents() {
 				if !e.stdoutToSocket && ptp != nil {
 					e.UpdateClockStateMetrics(ptp.State, string(event.Source), event.IFace)
 				}
+			} else if event.Source == PHC2SYS || event.Source == CHRONYD {
+				e.handleOSClockEvent(event)
 			} else {
 
 				// Update the in MemData
@@ -1070,6 +1122,14 @@ func (e *EventHandler) ProcessEvents() {
 							var result BCProcessResult
 							event, result, dataDetails = bc.addEvent(event)
 							clockState = result.ClockState
+							if bc.updateOverallSyncState(e.osClockState) {
+								profile := strings.Replace(bc.cfgName, "ts2phc", "ptp4l", 1)
+								e.sendIPC(ipc.Message{
+									Type:    ipc.TypeSyncState,
+									Profile: profile,
+									Values:  ipc.SyncStateValue{State: ptpStateToIPCState(bc.overallSyncState)},
+								})
+							}
 						}
 					}
 				}

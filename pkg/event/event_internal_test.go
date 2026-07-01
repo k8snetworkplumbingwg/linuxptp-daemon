@@ -40,6 +40,7 @@ func newTestBCClock(lcp *LeadingClockParams) *BCClock {
 			clockClass:    protocol.ClockClassUninitialized,
 			clockAccuracy: fbprotocol.ClockAccuracyUnknown,
 		},
+		overallSyncState: PTP_FREERUN,
 	}
 }
 
@@ -1108,5 +1109,49 @@ func TestUpdateSpecState(t *testing.T) {
 		e.updateSpecState(Event{Source: TS2PHC, Data: &PTPData{OutOfSpec: false, FrequencyTraceable: false}})
 		assert.True(t, e.outOfSpec, "non-DPLL event should not change outOfSpec")
 		assert.True(t, e.frequencyTraceable, "non-DPLL event should not change frequencyTraceable")
+	})
+}
+
+func TestWorstOfState(t *testing.T) {
+	tests := []struct {
+		a, b     PTPState
+		expected PTPState
+	}{
+		{PTP_LOCKED, PTP_LOCKED, PTP_LOCKED},
+		{PTP_LOCKED, PTP_FREERUN, PTP_FREERUN},
+		{PTP_FREERUN, PTP_LOCKED, PTP_FREERUN},
+		{PTP_HOLDOVER, PTP_LOCKED, PTP_HOLDOVER},
+		{PTP_LOCKED, PTP_HOLDOVER, PTP_HOLDOVER},
+		{PTP_FREERUN, PTP_HOLDOVER, PTP_FREERUN},
+		{PTP_HOLDOVER, PTP_FREERUN, PTP_FREERUN},
+		{PTP_HOLDOVER, PTP_HOLDOVER, PTP_HOLDOVER},
+		{PTP_FREERUN, PTP_FREERUN, PTP_FREERUN},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.a)+"_"+string(tt.b), func(t *testing.T) {
+			assert.Equal(t, tt.expected, worstOfState(tt.a, tt.b))
+		})
+	}
+}
+
+func TestUpdateOverallSyncState(t *testing.T) {
+	t.Run("changes when PTP and OS clock differ", func(t *testing.T) {
+		bc := newTestBCClock(nil)
+		bc.syncState.state = PTP_LOCKED
+		bc.overallSyncState = PTP_LOCKED
+
+		changed := bc.updateOverallSyncState(PTP_FREERUN)
+		assert.True(t, changed)
+		assert.Equal(t, PTP_FREERUN, bc.overallSyncState)
+	})
+
+	t.Run("no change when already correct", func(t *testing.T) {
+		bc := newTestBCClock(nil)
+		bc.syncState.state = PTP_LOCKED
+		bc.overallSyncState = PTP_LOCKED
+
+		changed := bc.updateOverallSyncState(PTP_LOCKED)
+		assert.False(t, changed)
+		assert.Equal(t, PTP_LOCKED, bc.overallSyncState)
 	})
 }

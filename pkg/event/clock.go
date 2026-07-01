@@ -28,7 +28,9 @@ type clockIO interface {
 
 // BCProcessResult holds the outcome of BCClock.addEvent.
 type BCProcessResult struct {
-	ClockState clockSyncState
+	ClockState       clockSyncState
+	SyncStateChanged bool
+	OverallSyncState PTPState
 }
 
 // GMClock is a Grand Master clock instance.
@@ -50,6 +52,7 @@ type BCClock struct {
 	cfgName          string
 	io               clockIO
 	syncState        clockSyncState
+	overallSyncState PTPState
 	data             []*Data
 	leadingClockData *LeadingClockParams
 	downstreamCancel context.CancelFunc
@@ -86,6 +89,7 @@ func newClock(cfgName string, clockType ClockType, io clockIO) (Clock, error) {
 				clockClass:    protocol.ClockClassUninitialized,
 				clockAccuracy: fbprotocol.ClockAccuracyUnknown,
 			},
+			overallSyncState: PTP_FREERUN,
 			leadingClockData: newLeadingClockParams(),
 		}, nil
 	case OC:
