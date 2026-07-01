@@ -31,6 +31,15 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+const (
+	testBCCfgPTP4l  = "ptp4l.0.config"
+	testBCCfgTS2PHC = "ts2phc.0.config"
+	testClockID     = "001122.fffe.334455"
+	testHelpStr     = "test"
+	testFromLabel   = "from"
+	testIfaceLabel  = "iface"
+)
+
 var (
 	staleSocketTimeout = 100 * time.Millisecond
 )
@@ -549,7 +558,7 @@ func TestBCClockClassThroughProcessEvents(t *testing.T) {
 	go eventManager.ProcessEvents()
 	defer func() { closeChn <- true }()
 
-	clk, addErr := eventManager.AddClock("ptp4l.0.config", event.BC)
+	clk, addErr := eventManager.AddClock(testBCCfgPTP4l, event.BC)
 	assert.NoError(t, addErr)
 	bc := clk.(*event.BCClock)
 	bc.UpdateUpstreamParentDataSet(protocol.ParentDataSet{
@@ -560,8 +569,8 @@ func TestBCClockClassThroughProcessEvents(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	const (
-		bcCfgDPLL  = "ts2phc.0.config"
-		bcCfgPTP4l = "ptp4l.0.config"
+		bcCfgDPLL  = testBCCfgTS2PHC
+		bcCfgPTP4l = testBCCfgPTP4l
 	)
 
 	// First DPLL event carries leading source configuration.
@@ -589,8 +598,8 @@ func TestBCClockClassThroughProcessEvents(t *testing.T) {
 	// First PTP4l event carries downstream port configuration
 	eChannel <- sendBCEvent(bcCfgPTP4l, event.PTP4l, event.PTP_LOCKED,
 		map[event.ValueType]interface{}{
-			event.ControlledPortsConfig: "ptp4l.0.config",
-			event.ClockIDKey:            "001122.fffe.334455",
+			event.ControlledPortsConfig: testBCCfgPTP4l,
+			event.ClockIDKey:            testClockID,
 			event.OFFSET:                int64(10),
 		}, false)
 	time.Sleep(100 * time.Millisecond)
@@ -674,14 +683,14 @@ func TestBCClockClassMetric(t *testing.T) {
 			Name: "test_ptp_offset",
 			Help: "test offset metric",
 		},
-		[]string{"from", "process", "node", "iface"},
+		[]string{testFromLabel, "process", "node", testIfaceLabel},
 	)
 	clockStateGauge := prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "test_ptp_clock_state",
 			Help: "test clock state metric",
 		},
-		[]string{"process", "node", "iface"},
+		[]string{"process", "node", testIfaceLabel},
 	)
 
 	eChannel := make(chan event.Event, 100)
@@ -690,7 +699,7 @@ func TestBCClockClassMetric(t *testing.T) {
 	go eventManager.ProcessEvents()
 	defer func() { closeChn <- true }()
 
-	clk, addErr := eventManager.AddClock("ptp4l.0.config", event.BC)
+	clk, addErr := eventManager.AddClock(testBCCfgPTP4l, event.BC)
 	assert.NoError(t, addErr)
 	bc := clk.(*event.BCClock)
 	bc.UpdateUpstreamParentDataSet(protocol.ParentDataSet{
@@ -701,8 +710,8 @@ func TestBCClockClassMetric(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	const (
-		bcCfgDPLL  = "ts2phc.0.config"
-		bcCfgPTP4l = "ptp4l.0.config"
+		bcCfgDPLL  = testBCCfgTS2PHC
+		bcCfgPTP4l = testBCCfgPTP4l
 	)
 
 	// Fill DPLL window: first event creates detail, next 10 fill WindowSize=10
@@ -726,8 +735,8 @@ func TestBCClockClassMetric(t *testing.T) {
 	// Fill PTP4l window
 	eChannel <- sendBCEvent(bcCfgPTP4l, event.PTP4l, event.PTP_LOCKED,
 		map[event.ValueType]interface{}{
-			event.ControlledPortsConfig: "ptp4l.0.config",
-			event.ClockIDKey:            "001122.fffe.334455",
+			event.ControlledPortsConfig: testBCCfgPTP4l,
+			event.ClockIDKey:            testClockID,
 			event.OFFSET:                int64(10),
 		}, false)
 	time.Sleep(100 * time.Millisecond)
@@ -808,16 +817,16 @@ func TestBCClockIPCCacheIntegration(t *testing.T) {
 	}()
 
 	clockClassGauge := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{Name: "test_ipc_clock_class", Help: "test"},
+		prometheus.GaugeOpts{Name: "test_ipc_clock_class", Help: testHelpStr},
 		[]string{"process", "config", "node"},
 	)
 	offsetGauge := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{Name: "test_ipc_offset", Help: "test"},
-		[]string{"from", "process", "node", "iface"},
+		prometheus.GaugeOpts{Name: "test_ipc_offset", Help: testHelpStr},
+		[]string{testFromLabel, "process", "node", testIfaceLabel},
 	)
 	clockStateGauge := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{Name: "test_ipc_clock_state", Help: "test"},
-		[]string{"process", "node", "iface"},
+		prometheus.GaugeOpts{Name: "test_ipc_clock_state", Help: testHelpStr},
+		[]string{"process", "node", testIfaceLabel},
 	)
 
 	cache := ipc.NewCache(100)
@@ -827,7 +836,7 @@ func TestBCClockIPCCacheIntegration(t *testing.T) {
 	go eventManager.ProcessEvents()
 	defer func() { closeChn <- true }()
 
-	clk, addErr := eventManager.AddClock("ptp4l.0.config", event.BC)
+	clk, addErr := eventManager.AddClock(testBCCfgPTP4l, event.BC)
 	require.NoError(t, addErr)
 	bc := clk.(*event.BCClock)
 	bc.UpdateUpstreamParentDataSet(protocol.ParentDataSet{
@@ -838,8 +847,8 @@ func TestBCClockIPCCacheIntegration(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	const (
-		bcCfgDPLL  = "ts2phc.0.config"
-		bcCfgPTP4l = "ptp4l.0.config"
+		bcCfgDPLL  = testBCCfgTS2PHC
+		bcCfgPTP4l = testBCCfgPTP4l
 	)
 
 	// --- Phase 1: FREERUN → LOCKED ---
@@ -866,8 +875,8 @@ func TestBCClockIPCCacheIntegration(t *testing.T) {
 	// First PTP4l event with downstream config
 	eChannel <- sendBCEvent(bcCfgPTP4l, event.PTP4l, event.PTP_LOCKED,
 		map[event.ValueType]interface{}{
-			event.ControlledPortsConfig: "ptp4l.0.config",
-			event.ClockIDKey:            "001122.fffe.334455",
+			event.ControlledPortsConfig: testBCCfgPTP4l,
+			event.ClockIDKey:            testClockID,
 			event.OFFSET:                int64(10),
 		}, false)
 	time.Sleep(100 * time.Millisecond)
@@ -1004,16 +1013,16 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	}()
 
 	clockClassGauge := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{Name: "test_overall_clock_class", Help: "test"},
+		prometheus.GaugeOpts{Name: "test_overall_clock_class", Help: testHelpStr},
 		[]string{"process", "config", "node"},
 	)
 	offsetGauge := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{Name: "test_overall_offset", Help: "test"},
-		[]string{"from", "process", "node", "iface"},
+		prometheus.GaugeOpts{Name: "test_overall_offset", Help: testHelpStr},
+		[]string{testFromLabel, "process", "node", testIfaceLabel},
 	)
 	clockStateGauge := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{Name: "test_overall_clock_state", Help: "test"},
-		[]string{"process", "node", "iface"},
+		prometheus.GaugeOpts{Name: "test_overall_clock_state", Help: testHelpStr},
+		[]string{"process", "node", testIfaceLabel},
 	)
 
 	cache := ipc.NewCache(100)
@@ -1024,7 +1033,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	defer func() { closeChn <- true }()
 
 	// Register two BCClocks
-	clk1, err := eventManager.AddClock("ptp4l.0.config", event.BC)
+	clk1, err := eventManager.AddClock(testBCCfgPTP4l, event.BC)
 	require.NoError(t, err)
 	bc1 := clk1.(*event.BCClock)
 	bc1.UpdateUpstreamParentDataSet(protocol.ParentDataSet{
@@ -1065,7 +1074,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 		eChannel <- sendBCEvent(cfgPTP4l, event.PTP4l, event.PTP_LOCKED,
 			map[event.ValueType]interface{}{
 				event.ControlledPortsConfig: cfgPTP4l,
-				event.ClockIDKey:            "001122.fffe.334455",
+				event.ClockIDKey:            testClockID,
 				event.OFFSET:                int64(10),
 			}, false)
 		time.Sleep(100 * time.Millisecond)
@@ -1077,7 +1086,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 		}
 	}
 
-	lockBCClock("ts2phc.0.config", "ptp4l.0.config")
+	lockBCClock(testBCCfgTS2PHC, testBCCfgPTP4l)
 	lockBCClock("ts2phc.1.config", "ptp4l.1.config")
 
 	// Drain all messages from PTP locking phase
@@ -1108,7 +1117,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	eChannel <- event.Event{
 		Source:    event.PHC2SYS,
 		IFace:     "CLOCK_REALTIME",
-		CfgName:   "ptp4l.0.config",
+		CfgName:   testBCCfgPTP4l,
 		ClockType: event.BC,
 		Time:      time.Now().UnixMilli(),
 		Data: &event.PTPData{
@@ -1139,7 +1148,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	}
 	assert.Equal(t, 1, osClockCount, "os_clock_state should be emitted exactly once")
 	assert.Equal(t, 2, syncStateLocked, "sync_state LOCKED should be emitted for both profiles")
-	assert.True(t, syncStateProfiles["ptp4l.0.config"], "sync_state should include profile 0")
+	assert.True(t, syncStateProfiles[testBCCfgPTP4l], "sync_state should include profile 0")
 	assert.True(t, syncStateProfiles["ptp4l.1.config"], "sync_state should include profile 1")
 
 	// --- Phase 3: Send PHC2SYS FREERUN → overall drops to FREERUN ---
@@ -1149,7 +1158,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	eChannel <- event.Event{
 		Source:    event.PHC2SYS,
 		IFace:     "CLOCK_REALTIME",
-		CfgName:   "ptp4l.0.config",
+		CfgName:   testBCCfgPTP4l,
 		ClockType: event.BC,
 		Time:      time.Now().UnixMilli(),
 		Data: &event.PTPData{
@@ -1178,7 +1187,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	eChannel <- event.Event{
 		Source:    event.PHC2SYS,
 		IFace:     "CLOCK_REALTIME",
-		CfgName:   "ptp4l.0.config",
+		CfgName:   testBCCfgPTP4l,
 		ClockType: event.BC,
 		Time:      time.Now().UnixMilli(),
 		Data: &event.PTPData{
@@ -1228,16 +1237,16 @@ func TestSyncEIPCIntegration(t *testing.T) {
 	}()
 
 	clockClassGauge := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{Name: "test_synce_clock_class", Help: "test"},
+		prometheus.GaugeOpts{Name: "test_synce_clock_class", Help: testHelpStr},
 		[]string{"process", "config", "node"},
 	)
 	offsetGauge := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{Name: "test_synce_offset", Help: "test"},
-		[]string{"from", "process", "node", "iface"},
+		prometheus.GaugeOpts{Name: "test_synce_offset", Help: testHelpStr},
+		[]string{testFromLabel, "process", "node", testIfaceLabel},
 	)
 	clockStateGauge := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{Name: "test_synce_clock_state", Help: "test"},
-		[]string{"process", "node", "iface"},
+		prometheus.GaugeOpts{Name: "test_synce_clock_state", Help: testHelpStr},
+		[]string{"process", "node", testIfaceLabel},
 	)
 
 	cache := ipc.NewCache(100)
@@ -1247,7 +1256,7 @@ func TestSyncEIPCIntegration(t *testing.T) {
 	go eventManager.ProcessEvents()
 	defer func() { closeChn <- true }()
 
-	_, err := eventManager.AddClock("ptp4l.0.config", event.BC)
+	_, err := eventManager.AddClock(testBCCfgPTP4l, event.BC)
 	require.NoError(t, err)
 
 	time.Sleep(200 * time.Millisecond)
@@ -1273,7 +1282,7 @@ func TestSyncEIPCIntegration(t *testing.T) {
 	msg, ok := waitForIPCMessage(cache.Out(), ipc.TypeSyncEState, 2*time.Second)
 	assert.True(t, ok, "expected synce_state IPC message")
 	if ok {
-		assert.Equal(t, "ptp4l.0.config", msg.Profile)
+		assert.Equal(t, testBCCfgPTP4l, msg.Profile)
 		assert.Equal(t, "ens7f0", msg.IFace)
 		sv, svOK := msg.Values.(ipc.SyncEStateValue)
 		require.True(t, svOK)
@@ -1305,7 +1314,7 @@ func TestSyncEIPCIntegration(t *testing.T) {
 	msg, ok = waitForIPCMessage(cache.Out(), ipc.TypeSyncEClockQuality, 2*time.Second)
 	assert.True(t, ok, "expected synce_clock_quality IPC message")
 	if ok {
-		assert.Equal(t, "ptp4l.0.config", msg.Profile)
+		assert.Equal(t, testBCCfgPTP4l, msg.Profile)
 		qv, qvOK := msg.Values.(ipc.SyncEClockQualityValue)
 		require.True(t, qvOK)
 		assert.Equal(t, 4, qv.QL)

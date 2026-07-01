@@ -155,8 +155,8 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		select {
 		case process.eventCh <- event.Event{
 			Source:    event.PHC2SYS,
-			CfgName:  configName,
-			IFace:    ptpMetrics.Iface,
+			CfgName:   configName,
+			IFace:     ptpMetrics.Iface,
 			ClockType: process.clockType,
 			Time:      time.Now().UnixMilli(),
 			Data: &event.PTPData{
@@ -170,8 +170,8 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		select {
 		case process.eventCh <- event.Event{
 			Source:    event.CHRONYD,
-			CfgName:  configName,
-			IFace:    ptpMetrics.Iface,
+			CfgName:   configName,
+			IFace:     ptpMetrics.Iface,
 			ClockType: process.clockType,
 			Time:      time.Now().UnixMilli(),
 			Data: &event.PTPData{

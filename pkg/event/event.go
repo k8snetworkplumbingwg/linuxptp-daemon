@@ -1086,7 +1086,8 @@ func (e *EventHandler) ProcessEvents() {
 			}
 			var logOut []string
 			logDataValues := ""
-			if event.Source == SYNCE {
+			switch event.Source {
+			case SYNCE:
 				ptp, _ := event.Data.(*PTPData)
 				logDataValues = event.GetLogData()
 				if event.WriteToLog && logDataValues != "" {
@@ -1101,9 +1102,9 @@ func (e *EventHandler) ProcessEvents() {
 						bc.processSyncE(event)
 					}
 				}
-			} else if event.Source == PHC2SYS || event.Source == CHRONYD {
+			case PHC2SYS, CHRONYD:
 				e.handleOSClockEvent(event)
-			} else {
+			default:
 
 				// Update the in MemData
 

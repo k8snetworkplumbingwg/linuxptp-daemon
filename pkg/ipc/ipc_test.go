@@ -19,7 +19,7 @@ func TestMessageJSON(t *testing.T) {
 			msg: Message{
 				Version: Version, Type: TypePTPState,
 				Timestamp: "2024-01-15T10:30:00.123456789Z",
-				Profile:   "ptp4l.0.config", IFace: "ens2f0",
+				Profile:   testProfile, IFace: testIFace,
 				Values: StateValue{State: StateLocked},
 			},
 			wantValues: StateValue{State: StateLocked},
@@ -28,7 +28,7 @@ func TestMessageJSON(t *testing.T) {
 			name: "gnss state value",
 			msg: Message{
 				Version: Version, Type: TypeGNSSState,
-				Profile: "ts2phc.0.config", IFace: "ens2f0",
+				Profile: "ts2phc.0.config", IFace: testIFace,
 				Values: GNSSStateValue{State: GNSSSynchronized},
 			},
 			wantValues: GNSSStateValue{State: GNSSSynchronized},
@@ -37,7 +37,7 @@ func TestMessageJSON(t *testing.T) {
 			name: "sync state value",
 			msg: Message{
 				Version: Version, Type: TypeSyncState,
-				Profile: "ptp4l.0.config",
+				Profile: testProfile,
 				Values:  SyncStateValue{State: StateLocked},
 			},
 			wantValues: SyncStateValue{State: StateLocked},
@@ -55,7 +55,7 @@ func TestMessageJSON(t *testing.T) {
 			name: "clock class value",
 			msg: Message{
 				Version: Version, Type: TypeClockClass,
-				Profile: "ptp4l.0.config",
+				Profile: testProfile,
 				Values:  ClockClassValue{ClockClass: 6},
 			},
 			wantValues: ClockClassValue{ClockClass: 6},

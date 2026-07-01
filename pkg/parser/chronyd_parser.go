@@ -22,7 +22,7 @@ type chronydParsed struct {
 	Locked     bool
 }
 
-func (p *chronydParsed) Populate(line string, matched, fields []string) error {
+func (p *chronydParsed) Populate(_ string, matched, fields []string) error {
 	for i, field := range fields {
 		switch field {
 		case "config_name":
@@ -40,7 +40,7 @@ func NewChronydExtractor() *BaseMetricsExtractor[*chronydParsed] {
 		RegexExtractorPairs: []RegexExtractorPair[*chronydParsed]{
 			{
 				Regex: chronydSelectedSourceRegex,
-				Extractor: func(parsed *chronydParsed) (*Metrics, *PTPEvent, error) {
+				Extractor: func(_ *chronydParsed) (*Metrics, *PTPEvent, error) {
 					return &Metrics{
 						Iface:      constants.ClockRealTime,
 						ClockState: constants.ClockStateLocked,
@@ -51,7 +51,7 @@ func NewChronydExtractor() *BaseMetricsExtractor[*chronydParsed] {
 			},
 			{
 				Regex: chronydNoSelectableSourcesRegex,
-				Extractor: func(parsed *chronydParsed) (*Metrics, *PTPEvent, error) {
+				Extractor: func(_ *chronydParsed) (*Metrics, *PTPEvent, error) {
 					return &Metrics{
 						Iface:      constants.ClockRealTime,
 						ClockState: constants.ClockStateFreeRun,

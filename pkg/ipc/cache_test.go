@@ -8,13 +8,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testProfile = "ptp4l.0.config"
+	testIFace   = "ens2f0"
+)
+
 func TestCacheSendAndDedup(t *testing.T) {
 	c := NewCache(10)
 
 	msg := Message{
 		Type:    TypePTPState,
-		Profile: "ptp4l.0.config",
-		IFace:   "ens2f0",
+		Profile: testProfile,
+		IFace:   testIFace,
 		Values:  StateValue{State: StateLocked},
 	}
 
@@ -32,12 +37,12 @@ func TestCacheSendDifferentKeys(t *testing.T) {
 
 	ptpMsg := Message{
 		Type:    TypePTPState,
-		Profile: "ptp4l.0.config",
+		Profile: testProfile,
 		Values:  StateValue{State: StateLocked},
 	}
 	clockMsg := Message{
 		Type:    TypeClockClass,
-		Profile: "ptp4l.0.config",
+		Profile: testProfile,
 		Values:  ClockClassValue{ClockClass: 6},
 	}
 
@@ -53,7 +58,7 @@ func TestCacheSendDifferentProfiles(t *testing.T) {
 
 	msg0 := Message{
 		Type:    TypePTPState,
-		Profile: "ptp4l.0.config",
+		Profile: testProfile,
 		Values:  StateValue{State: StateLocked},
 	}
 	msg1 := Message{
@@ -74,7 +79,7 @@ func TestCacheOutChannel(t *testing.T) {
 
 	msg := Message{
 		Type:    TypePTPState,
-		Profile: "ptp4l.0.config",
+		Profile: testProfile,
 		Values:  StateValue{State: StateLocked},
 	}
 	c.Send(msg)
@@ -99,8 +104,8 @@ func TestCacheOutChannel(t *testing.T) {
 func TestCacheOutChannelNonBlocking(t *testing.T) {
 	c := NewCache(1) // buffer size 1
 
-	msg1 := Message{Type: TypePTPState, Profile: "ptp4l.0.config", Values: StateValue{State: StateLocked}}
-	msg2 := Message{Type: TypeClockClass, Profile: "ptp4l.0.config", Values: ClockClassValue{ClockClass: 6}}
+	msg1 := Message{Type: TypePTPState, Profile: testProfile, Values: StateValue{State: StateLocked}}
+	msg2 := Message{Type: TypeClockClass, Profile: testProfile, Values: ClockClassValue{ClockClass: 6}}
 
 	c.Send(msg1) // fills the channel buffer
 	c.Send(msg2) // should not block even though channel is full
@@ -112,8 +117,8 @@ func TestCacheOutChannelNonBlocking(t *testing.T) {
 func TestCacheSnapshot(t *testing.T) {
 	c := NewCache(10)
 
-	c.Send(Message{Type: TypePTPState, Profile: "ptp4l.0.config", Values: StateValue{State: StateLocked}})
-	c.Send(Message{Type: TypeClockClass, Profile: "ptp4l.0.config", Values: ClockClassValue{ClockClass: 7}})
+	c.Send(Message{Type: TypePTPState, Profile: testProfile, Values: StateValue{State: StateLocked}})
+	c.Send(Message{Type: TypeClockClass, Profile: testProfile, Values: ClockClassValue{ClockClass: 7}})
 
 	snap := c.Snapshot()
 	require.Len(t, snap, 2)
@@ -129,14 +134,14 @@ func TestCacheSnapshot(t *testing.T) {
 func TestCacheClear(t *testing.T) {
 	c := NewCache(10)
 
-	c.Send(Message{Type: TypePTPState, Profile: "ptp4l.0.config", Values: StateValue{State: StateLocked}})
+	c.Send(Message{Type: TypePTPState, Profile: testProfile, Values: StateValue{State: StateLocked}})
 	assert.Len(t, c.Snapshot(), 1)
 
 	c.Clear()
 	assert.Len(t, c.Snapshot(), 0)
 
 	// After clear, same message should be accepted again (no longer a duplicate)
-	assert.True(t, c.Send(Message{Type: TypePTPState, Profile: "ptp4l.0.config", Values: StateValue{State: StateLocked}}))
+	assert.True(t, c.Send(Message{Type: TypePTPState, Profile: testProfile, Values: StateValue{State: StateLocked}}))
 }
 
 func TestCacheAutoFillsVersionAndTimestamp(t *testing.T) {
@@ -144,7 +149,7 @@ func TestCacheAutoFillsVersionAndTimestamp(t *testing.T) {
 
 	msg := Message{
 		Type:    TypePTPState,
-		Profile: "ptp4l.0.config",
+		Profile: testProfile,
 		Values:  StateValue{State: StateLocked},
 	}
 	c.Send(msg)
@@ -164,7 +169,7 @@ func TestCachePreservesExplicitVersionAndTimestamp(t *testing.T) {
 		Version:   42,
 		Timestamp: "2024-01-15T10:30:00.123456789Z",
 		Type:      TypePTPState,
-		Profile:   "ptp4l.0.config",
+		Profile:   testProfile,
 		Values:    StateValue{State: StateLocked},
 	}
 	c.Send(msg)
@@ -179,13 +184,13 @@ func TestCacheIFaceChangeIsNotDuplicate(t *testing.T) {
 
 	msg1 := Message{
 		Type:    TypePTPState,
-		Profile: "ptp4l.0.config",
-		IFace:   "ens2f0",
+		Profile: testProfile,
+		IFace:   testIFace,
 		Values:  StateValue{State: StateLocked},
 	}
 	msg2 := Message{
 		Type:    TypePTPState,
-		Profile: "ptp4l.0.config",
+		Profile: testProfile,
 		IFace:   "ens3f0",
 		Values:  StateValue{State: StateLocked},
 	}

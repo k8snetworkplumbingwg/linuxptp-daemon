@@ -686,7 +686,8 @@ func (c *BCClock) processSyncE(event Event) {
 	}
 	profile := strings.Replace(c.cfgName, "ts2phc", "ptp4l", 1)
 
-	if eecState, ok := ptp.Values[EEC_STATE].(string); ok {
+	eecState, hasEEC := ptp.Values[EEC_STATE].(string)
+	if hasEEC {
 		c.io.sendIPC(ipc.Message{
 			Type:    ipc.TypeSyncEState,
 			Profile: profile,
