@@ -1201,3 +1201,153 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	assert.Equal(t, 0, osClockDedup, "duplicate os_clock_state should not be emitted")
 	assert.Equal(t, 0, syncStateDedup, "duplicate sync_state should not be emitted")
 }
+
+func TestSyncEIPCIntegration(t *testing.T) {
+	pmcMock := &pmc.MockClient{
+		ParentTimeCurrentDSResult: pmc.ParentTimeCurrentDS{
+			ParentDataSet: protocol.ParentDataSet{
+				GrandmasterClockClass:    6,
+				GrandmasterClockAccuracy: 0x21,
+			},
+			TimePropertiesDS: protocol.TimePropertiesDS{
+				CurrentUtcOffset:      37,
+				CurrentUtcOffsetValid: true,
+				PtpTimescale:          true,
+				TimeTraceable:         true,
+			},
+			CurrentDS: protocol.CurrentDS{StepsRemoved: 1},
+		},
+	}
+	pmc.SetMock(pmcMock)
+	defer pmc.ResetMock()
+
+	assert.NoError(t, leap.MockLeapFile())
+	defer func() {
+		close(leap.LeapMgr.Close)
+		time.Sleep(100 * time.Millisecond)
+	}()
+
+	clockClassGauge := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "test_synce_clock_class", Help: "test"},
+		[]string{"process", "config", "node"},
+	)
+	offsetGauge := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "test_synce_offset", Help: "test"},
+		[]string{"from", "process", "node", "iface"},
+	)
+	clockStateGauge := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "test_synce_clock_state", Help: "test"},
+		[]string{"process", "node", "iface"},
+	)
+
+	cache := ipc.NewCache(100)
+	eChannel := make(chan event.Event, 100)
+	closeChn := make(chan bool)
+	eventManager := event.Init("node", false, "", eChannel, closeChn, offsetGauge, clockStateGauge, clockClassGauge, cache)
+	go eventManager.ProcessEvents()
+	defer func() { closeChn <- true }()
+
+	_, err := eventManager.AddClock("ptp4l.0.config", event.BC)
+	require.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+
+	// --- Phase 1: SyncE state event → synce_state IPC ---
+
+	eChannel <- event.Event{
+		Source:     event.SYNCE,
+		IFace:      "ens7f0",
+		CfgName:    "synce4l.0.config",
+		Time:       time.Now().UnixMilli(),
+		WriteToLog: true,
+		Data: &event.PTPData{
+			State: event.PTP_LOCKED,
+			Values: map[event.ValueType]interface{}{
+				event.EEC_STATE:      "EEC_LOCKED",
+				event.DEVICE:         "synce1",
+				event.NETWORK_OPTION: 1,
+			},
+		},
+	}
+
+	msg, ok := waitForIPCMessage(cache.Out(), ipc.TypeSyncEState, 2*time.Second)
+	assert.True(t, ok, "expected synce_state IPC message")
+	if ok {
+		assert.Equal(t, "ptp4l.0.config", msg.Profile)
+		assert.Equal(t, "ens7f0", msg.IFace)
+		sv, svOK := msg.Values.(ipc.SyncEStateValue)
+		require.True(t, svOK)
+		assert.Equal(t, "EEC_LOCKED", sv.State)
+	}
+
+	// --- Phase 2: SyncE clock quality event → synce_clock_quality IPC ---
+
+	drainIPCMessages(cache.Out(), 200*time.Millisecond)
+
+	eChannel <- event.Event{
+		Source:     event.SYNCE,
+		IFace:      "ens7f0",
+		CfgName:    "synce4l.0.config",
+		Time:       time.Now().UnixMilli(),
+		WriteToLog: true,
+		Data: &event.PTPData{
+			State: event.PTP_LOCKED,
+			Values: map[event.ValueType]interface{}{
+				event.QL:             byte(4),
+				event.EXT_QL:         byte(0xFF),
+				event.CLOCK_QUALITY:  "PRS",
+				event.DEVICE:         "synce1",
+				event.NETWORK_OPTION: 1,
+			},
+		},
+	}
+
+	msg, ok = waitForIPCMessage(cache.Out(), ipc.TypeSyncEClockQuality, 2*time.Second)
+	assert.True(t, ok, "expected synce_clock_quality IPC message")
+	if ok {
+		assert.Equal(t, "ptp4l.0.config", msg.Profile)
+		qv, qvOK := msg.Values.(ipc.SyncEClockQualityValue)
+		require.True(t, qvOK)
+		assert.Equal(t, 4, qv.QL)
+		assert.Equal(t, 0xFF, qv.ExtendedQL)
+	}
+
+	// --- Phase 3: Verify SyncE does NOT affect ptp_state or sync_state ---
+
+	drainIPCMessages(cache.Out(), 200*time.Millisecond)
+
+	eChannel <- event.Event{
+		Source:     event.SYNCE,
+		IFace:      "ens7f0",
+		CfgName:    "synce4l.0.config",
+		Time:       time.Now().UnixMilli(),
+		WriteToLog: true,
+		Data: &event.PTPData{
+			State: event.PTP_FREERUN,
+			Values: map[event.ValueType]interface{}{
+				event.EEC_STATE:      "EEC_FREERUN",
+				event.DEVICE:         "synce1",
+				event.NETWORK_OPTION: 1,
+			},
+		},
+	}
+
+	msgs := drainIPCMessages(cache.Out(), 1*time.Second)
+	for _, m := range msgs {
+		assert.NotEqual(t, ipc.TypePTPState, m.Type, "SyncE should not produce ptp_state IPC")
+		assert.NotEqual(t, ipc.TypeSyncState, m.Type, "SyncE should not produce sync_state IPC")
+	}
+
+	// Verify synce_state was updated to FREERUN
+	snap := cache.Snapshot()
+	var foundSyncEState bool
+	for _, m := range snap {
+		if m.Type == ipc.TypeSyncEState {
+			foundSyncEState = true
+			sv, svOK := m.Values.(ipc.SyncEStateValue)
+			require.True(t, svOK)
+			assert.Equal(t, "EEC_FREERUN", sv.State)
+		}
+	}
+	assert.True(t, foundSyncEState, "cache should contain synce_state after SyncE event")
+}

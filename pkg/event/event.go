@@ -1095,6 +1095,12 @@ func (e *EventHandler) ProcessEvents() {
 				if !e.stdoutToSocket && ptp != nil {
 					e.UpdateClockStateMetrics(ptp.State, string(event.Source), event.IFace)
 				}
+				ptp4lName := strings.Replace(event.CfgName, "synce4l", "ptp4l", 1)
+				if clk := e.GetClock(ptp4lName); clk != nil {
+					if bc, ok := clk.(*BCClock); ok {
+						bc.processSyncE(event)
+					}
+				}
 			} else if event.Source == PHC2SYS || event.Source == CHRONYD {
 				e.handleOSClockEvent(event)
 			} else {

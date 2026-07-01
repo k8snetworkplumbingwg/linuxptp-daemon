@@ -1134,6 +1134,109 @@ func TestWorstOfState(t *testing.T) {
 	}
 }
 
+type recordingClockIO struct {
+	sync.Mutex
+	ipcMessages []ipc.Message
+}
+
+func (r *recordingClockIO) announceClockClass(fbprotocol.ClockClass, fbprotocol.ClockAccuracy, string) {
+}
+func (r *recordingClockIO) emitClockClass(fbprotocol.ClockClass, string) {}
+func (r *recordingClockIO) getStoredClockClass(string) (fbprotocol.ClockClass, bool) {
+	return 0, false
+}
+func (r *recordingClockIO) updateDownstreamData(*BCClock, string) {}
+func (r *recordingClockIO) sendIPC(msg ipc.Message) {
+	r.ipcMessages = append(r.ipcMessages, msg)
+}
+
+func TestProcessSyncE(t *testing.T) {
+	t.Run("state event emits synce_state IPC", func(t *testing.T) {
+		rio := &recordingClockIO{}
+		bc := &BCClock{cfgName: "ptp4l.0.config", io: rio}
+		ev := Event{
+			Source: SYNCE,
+			IFace:  "ens7f0",
+			Data: &PTPData{
+				Values: map[ValueType]interface{}{
+					EEC_STATE: "EEC_LOCKED",
+				},
+			},
+		}
+		bc.processSyncE(ev)
+		assert.Len(t, rio.ipcMessages, 1)
+		assert.Equal(t, ipc.TypeSyncEState, rio.ipcMessages[0].Type)
+		assert.Equal(t, "ptp4l.0.config", rio.ipcMessages[0].Profile)
+		assert.Equal(t, "ens7f0", rio.ipcMessages[0].IFace)
+		assert.Equal(t, ipc.SyncEStateValue{State: "EEC_LOCKED"}, rio.ipcMessages[0].Values)
+	})
+
+	t.Run("quality event emits synce_clock_quality IPC", func(t *testing.T) {
+		rio := &recordingClockIO{}
+		bc := &BCClock{cfgName: "ptp4l.0.config", io: rio}
+		ev := Event{
+			Source: SYNCE,
+			IFace:  "ens7f0",
+			Data: &PTPData{
+				Values: map[ValueType]interface{}{
+					QL:     byte(4),
+					EXT_QL: byte(0xFF),
+				},
+			},
+		}
+		bc.processSyncE(ev)
+		assert.Len(t, rio.ipcMessages, 1)
+		assert.Equal(t, ipc.TypeSyncEClockQuality, rio.ipcMessages[0].Type)
+		assert.Equal(t, "ptp4l.0.config", rio.ipcMessages[0].Profile)
+		assert.Equal(t, ipc.SyncEClockQualityValue{QL: 4, ExtendedQL: 0xFF}, rio.ipcMessages[0].Values)
+	})
+
+	t.Run("event with both state and quality emits two IPC messages", func(t *testing.T) {
+		rio := &recordingClockIO{}
+		bc := &BCClock{cfgName: "ptp4l.0.config", io: rio}
+		ev := Event{
+			Source: SYNCE,
+			IFace:  "ens7f0",
+			Data: &PTPData{
+				Values: map[ValueType]interface{}{
+					EEC_STATE: "EEC_LOCKED",
+					QL:        byte(4),
+					EXT_QL:    byte(21),
+				},
+			},
+		}
+		bc.processSyncE(ev)
+		assert.Len(t, rio.ipcMessages, 2)
+		types := []string{rio.ipcMessages[0].Type, rio.ipcMessages[1].Type}
+		assert.Contains(t, types, ipc.TypeSyncEState)
+		assert.Contains(t, types, ipc.TypeSyncEClockQuality)
+	})
+
+	t.Run("nil PTPData does not panic", func(t *testing.T) {
+		rio := &recordingClockIO{}
+		bc := &BCClock{cfgName: "ptp4l.0.config", io: rio}
+		bc.processSyncE(Event{Source: SYNCE, Data: nil})
+		assert.Empty(t, rio.ipcMessages)
+	})
+
+	t.Run("ts2phc cfgName normalizes to ptp4l profile", func(t *testing.T) {
+		rio := &recordingClockIO{}
+		bc := &BCClock{cfgName: "ts2phc.0.config", io: rio}
+		ev := Event{
+			Source: SYNCE,
+			IFace:  "ens7f0",
+			Data: &PTPData{
+				Values: map[ValueType]interface{}{
+					EEC_STATE: "EEC_HOLDOVER",
+				},
+			},
+		}
+		bc.processSyncE(ev)
+		assert.Len(t, rio.ipcMessages, 1)
+		assert.Equal(t, "ptp4l.0.config", rio.ipcMessages[0].Profile)
+	})
+}
+
 func TestUpdateOverallSyncState(t *testing.T) {
 	t.Run("changes when PTP and OS clock differ", func(t *testing.T) {
 		bc := newTestBCClock(nil)

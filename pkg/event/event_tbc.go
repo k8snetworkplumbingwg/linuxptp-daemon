@@ -679,6 +679,34 @@ func ptpStateToIPCState(s PTPState) string {
 	}
 }
 
+func (c *BCClock) processSyncE(event Event) {
+	ptp, ok := event.Data.(*PTPData)
+	if !ok || ptp == nil {
+		return
+	}
+	profile := strings.Replace(c.cfgName, "ts2phc", "ptp4l", 1)
+
+	if eecState, ok := ptp.Values[EEC_STATE].(string); ok {
+		c.io.sendIPC(ipc.Message{
+			Type:    ipc.TypeSyncEState,
+			Profile: profile,
+			IFace:   event.IFace,
+			Values:  ipc.SyncEStateValue{State: eecState},
+		})
+	}
+
+	ql, hasQL := ptp.Values[QL].(byte)
+	extQL, hasExtQL := ptp.Values[EXT_QL].(byte)
+	if hasQL || hasExtQL {
+		c.io.sendIPC(ipc.Message{
+			Type:    ipc.TypeSyncEClockQuality,
+			Profile: profile,
+			IFace:   event.IFace,
+			Values:  ipc.SyncEClockQualityValue{QL: int(ql), ExtendedQL: int(extQL)},
+		})
+	}
+}
+
 func (c *BCClock) updateLeadingClockData(event Event) {
 	ptp, ok := event.Data.(*PTPData)
 	if !ok {
