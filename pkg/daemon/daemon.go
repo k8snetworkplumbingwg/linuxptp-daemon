@@ -36,6 +36,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
@@ -219,7 +220,7 @@ func (p *ProcessManager) SetTestData(name, msgTag string, ifaces config.IFaces) 
 	p.process[0].messageTag = msgTag
 	p.process[0].ifaces = ifaces
 	p.process[0].logParser = getParser(name)
-	p.process[0].handler = event.Init("test", false, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics)
+	p.process[0].handler = event.Init("test", false, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics, nil)
 	// Reset aliases for each test to avoid cross-case collisions.
 	alias.ClearAliases()
 	// Calculate aliases for the test interfaces to ensure proper aliasing
@@ -575,7 +576,7 @@ func New(
 	pm := &ProcessManager{
 		process:         nil,
 		eventChannel:    eventChannel,
-		ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics),
+		ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics, ipc.NewCache(100)),
 	}
 	tracker.processManager = pm
 
@@ -752,6 +753,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	glog.Infof("in applyNodePTPProfiles - starting to apply %d node profiles", len(dn.ptpUpdate.NodeProfiles))
 
 	dn.stopAllProcesses()
+	dn.processManager.ptpEventHandler.RemoveAllClocks()
 	// All process should have been stopped,
 	// clear process in process manager.
 	// Assigning processManager.process to nil releases
@@ -1024,6 +1026,11 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			return err
 		}
 		clockType = ptp4lOutput.clock_type
+	}
+
+	clockCfgName := fmt.Sprintf("ptp4l.%d.config", runID)
+	if _, err = dn.processManager.ptpEventHandler.AddClock(clockCfgName, clockType); err != nil {
+		return fmt.Errorf("failed to register clock for profile %s: %v", *nodeProfile.Name, err)
 	}
 
 	for _, pProcess := range ptpProcesses {

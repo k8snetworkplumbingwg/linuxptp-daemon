@@ -29,12 +29,19 @@ func ensureLeapMocked(t *testing.T) {
 	})
 }
 
-func newPMCTestEventHandler() *EventHandler {
-	return &EventHandler{
-		data:             map[string][]*Data{},
-		clkSyncState:     map[string]*clockSyncState{},
-		downstreamCancel: map[string]context.CancelFunc{},
-		LeadingClockData: newLeadingClockParams(),
+func newPMCTestBCClock() *BCClock {
+	handler := &EventHandler{
+		data:         map[string][]*Data{},
+		clkSyncState: map[string]*clockSyncState{},
+	}
+	return &BCClock{
+		io:               handler,
+		leadingClockData: newLeadingClockParams(),
+		syncState: clockSyncState{
+			state:         PTP_FREERUN,
+			clockClass:    protocol.ClockClassUninitialized,
+			clockAccuracy: fbprotocol.ClockAccuracyUnknown,
+		},
 	}
 }
 
@@ -51,34 +58,22 @@ func filterSetCalls(calls []pmc.SetCall, method string) []pmc.SetCall {
 // --- applyIfLockedBC ---
 
 func TestApplyIfLockedBC_LockedRunsFn(t *testing.T) {
-	e := newPMCTestEventHandler()
-	cfgName := testCfgName
-	e.clkSyncState[cfgName] = &clockSyncState{state: PTP_LOCKED}
+	bc := newPMCTestBCClock()
+	bc.syncState = clockSyncState{state: PTP_LOCKED}
 
 	called := false
-	ok := e.applyIfLockedBC(cfgName, "test", func() { called = true })
+	ok := bc.applyIfLockedBC("test", func() { called = true })
 
 	assert.True(t, ok)
 	assert.True(t, called)
 }
 
 func TestApplyIfLockedBC_NotLockedSkipsFn(t *testing.T) {
-	e := newPMCTestEventHandler()
-	cfgName := testCfgName
-	e.clkSyncState[cfgName] = &clockSyncState{state: PTP_FREERUN}
+	bc := newPMCTestBCClock()
+	bc.syncState = clockSyncState{state: PTP_FREERUN}
 
 	called := false
-	ok := e.applyIfLockedBC(cfgName, "test", func() { called = true })
-
-	assert.False(t, ok)
-	assert.False(t, called)
-}
-
-func TestApplyIfLockedBC_MissingConfigSkipsFn(t *testing.T) {
-	e := newPMCTestEventHandler()
-
-	called := false
-	ok := e.applyIfLockedBC("nonexistent", "test", func() { called = true })
+	ok := bc.applyIfLockedBC("test", func() { called = true })
 
 	assert.False(t, ok)
 	assert.False(t, called)
@@ -91,16 +86,16 @@ func TestAnnounceLocalData_Freerun_SetsGMSettingsAndEGP(t *testing.T) {
 	mock := &pmc.MockClient{}
 	pmc.SetMock(mock)
 	defer pmc.ResetMock()
-	e := newPMCTestEventHandler()
+	bc := newPMCTestBCClock()
 	cfgName := testCfgName
-	e.LeadingClockData.clockID = "001122.fffe.334455"
-	e.LeadingClockData.controlledPortsConfig = testControlledCfg
-	e.clkSyncState[cfgName] = &clockSyncState{
+	bc.leadingClockData.clockID = "001122.fffe.334455"
+	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.syncState = clockSyncState{
 		state:      PTP_FREERUN,
 		clockClass: protocol.ClockClassFreerun,
 	}
 
-	e.announceLocalData(cfgName)
+	bc.announceLocalData(cfgName)
 
 	// 3 async goroutines: 1 EGP + 2 GM settings
 	if !assert.Eventually(t, func() bool {
@@ -143,21 +138,21 @@ func TestAnnounceLocalData_Holdover135_SetsTimeProperties(t *testing.T) {
 	mock := &pmc.MockClient{}
 	pmc.SetMock(mock)
 	defer pmc.ResetMock()
-	e := newPMCTestEventHandler()
+	bc := newPMCTestBCClock()
 	cfgName := testCfgName
-	e.LeadingClockData.clockID = "aabbcc.fffe.ddeeff"
-	e.LeadingClockData.controlledPortsConfig = testControlledCfg
-	e.LeadingClockData.downstreamTimeProperties = &protocol.TimePropertiesDS{
+	bc.leadingClockData.clockID = "aabbcc.fffe.ddeeff"
+	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.leadingClockData.downstreamTimeProperties = &protocol.TimePropertiesDS{
 		CurrentUtcOffset:      37,
 		CurrentUtcOffsetValid: true,
 		Leap61:                true,
 	}
-	e.clkSyncState[cfgName] = &clockSyncState{
+	bc.syncState = clockSyncState{
 		state:      PTP_HOLDOVER,
 		clockClass: fbprotocol.ClockClass(135),
 	}
 
-	e.announceLocalData(cfgName)
+	bc.announceLocalData(cfgName)
 
 	if !assert.Eventually(t, func() bool {
 		return len(filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")) >= 2
@@ -188,19 +183,19 @@ func TestAnnounceLocalData_Holdover165_NotTimeTraceable(t *testing.T) {
 	mock := &pmc.MockClient{}
 	pmc.SetMock(mock)
 	defer pmc.ResetMock()
-	e := newPMCTestEventHandler()
+	bc := newPMCTestBCClock()
 	cfgName := testCfgName
-	e.LeadingClockData.clockID = "aabbcc.fffe.ddeeff"
-	e.LeadingClockData.controlledPortsConfig = testControlledCfg
-	e.LeadingClockData.downstreamTimeProperties = &protocol.TimePropertiesDS{
+	bc.leadingClockData.clockID = "aabbcc.fffe.ddeeff"
+	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.leadingClockData.downstreamTimeProperties = &protocol.TimePropertiesDS{
 		CurrentUtcOffset: 37,
 	}
-	e.clkSyncState[cfgName] = &clockSyncState{
+	bc.syncState = clockSyncState{
 		state:      PTP_HOLDOVER,
 		clockClass: fbprotocol.ClockClass(165),
 	}
 
-	e.announceLocalData(cfgName)
+	bc.announceLocalData(cfgName)
 
 	if !assert.Eventually(t, func() bool {
 		return len(filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")) >= 2
@@ -227,18 +222,18 @@ func TestAnnounceLocalData_NilDownstreamTimeProperties_SkipsGMSettings(t *testin
 	mock := &pmc.MockClient{}
 	pmc.SetMock(mock)
 	defer pmc.ResetMock()
-	e := newPMCTestEventHandler()
+	bc := newPMCTestBCClock()
 	cfgName := testCfgName
 
-	e.LeadingClockData.clockID = "aabbcc.fffe.ddeeff"
-	e.LeadingClockData.controlledPortsConfig = testControlledCfg
-	e.LeadingClockData.downstreamTimeProperties = nil
-	e.clkSyncState[cfgName] = &clockSyncState{
+	bc.leadingClockData.clockID = "aabbcc.fffe.ddeeff"
+	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.leadingClockData.downstreamTimeProperties = nil
+	bc.syncState = clockSyncState{
 		state:      PTP_HOLDOVER,
 		clockClass: fbprotocol.ClockClass(135),
 	}
 
-	e.announceLocalData(cfgName)
+	bc.announceLocalData(cfgName)
 
 	// EGP runs in a goroutine; GM settings should be skipped
 	if !assert.Eventually(t, func() bool {
@@ -252,19 +247,6 @@ func TestAnnounceLocalData_NilDownstreamTimeProperties_SkipsGMSettings(t *testin
 
 	gmCalls := filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")
 	assert.Empty(t, gmCalls)
-}
-
-func TestAnnounceLocalData_MissingClkSyncState_Returns(t *testing.T) {
-	mock := &pmc.MockClient{}
-	pmc.SetMock(mock)
-	defer pmc.ResetMock()
-	e := newPMCTestEventHandler()
-
-	e.announceLocalData("nonexistent")
-
-	// Returns synchronously before launching any goroutines
-	assert.Empty(t, mock.SnapshotSetCalls())
-	assert.Empty(t, mock.SnapshotGetCalls())
 }
 
 // --- downstreamAnnounceIWF ---
@@ -293,12 +275,12 @@ func TestDownstreamAnnounceIWF_Locked_FetchesAndSetsDownstream(t *testing.T) {
 	pmc.SetMock(mock)
 	defer pmc.ResetMock()
 
-	e := newPMCTestEventHandler()
-	e.LeadingClockData.controlledPortsConfig = testControlledCfg
-	e.clkSyncState[cfgName] = &clockSyncState{state: PTP_LOCKED}
+	bc := newPMCTestBCClock()
+	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.syncState = clockSyncState{state: PTP_LOCKED}
 
 	ctx := context.Background()
-	e.downstreamAnnounceIWF(ctx, cfgName)
+	bc.downstreamAnnounceIWF(ctx, cfgName)
 
 	getCalls := mock.SnapshotGetCalls()
 	if !assert.Len(t, getCalls, 1) {
@@ -330,9 +312,9 @@ func TestDownstreamAnnounceIWF_Locked_FetchesAndSetsDownstream(t *testing.T) {
 	assert.True(t, gs.TimePropertiesDS.PtpTimescale)
 	assert.True(t, gs.TimePropertiesDS.TimeTraceable)
 
-	assert.Equal(t, uint8(6), e.LeadingClockData.upstreamParentDataSet.GrandmasterClockClass)
-	assert.Equal(t, uint8(6), e.LeadingClockData.downstreamParentDataSet.GrandmasterClockClass)
-	assert.Equal(t, uint16(1), e.LeadingClockData.upstreamCurrentDSStepsRemoved)
+	assert.Equal(t, uint8(6), bc.leadingClockData.upstreamParentDataSet.GrandmasterClockClass)
+	assert.Equal(t, uint8(6), bc.leadingClockData.downstreamParentDataSet.GrandmasterClockClass)
+	assert.Equal(t, uint16(1), bc.leadingClockData.upstreamCurrentDSStepsRemoved)
 }
 
 func TestDownstreamAnnounceIWF_FetchError_ReturnsEarly(t *testing.T) {
@@ -341,12 +323,12 @@ func TestDownstreamAnnounceIWF_FetchError_ReturnsEarly(t *testing.T) {
 	}
 	pmc.SetMock(mock)
 	defer pmc.ResetMock()
-	e := newPMCTestEventHandler()
+	bc := newPMCTestBCClock()
 	cfgName := testCfgName
-	e.clkSyncState[cfgName] = &clockSyncState{state: PTP_LOCKED}
+	bc.syncState = clockSyncState{state: PTP_LOCKED}
 
 	ctx := context.Background()
-	e.downstreamAnnounceIWF(ctx, cfgName)
+	bc.downstreamAnnounceIWF(ctx, cfgName)
 
 	getCalls := mock.SnapshotGetCalls()
 	if !assert.Len(t, getCalls, 1) {
@@ -363,12 +345,12 @@ func TestDownstreamAnnounceIWF_NotLocked_AbortsAfterFetch(t *testing.T) {
 	}
 	pmc.SetMock(mock)
 	defer pmc.ResetMock()
-	e := newPMCTestEventHandler()
+	bc := newPMCTestBCClock()
 	cfgName := testCfgName
-	e.clkSyncState[cfgName] = &clockSyncState{state: PTP_FREERUN}
+	bc.syncState = clockSyncState{state: PTP_FREERUN}
 
 	ctx := context.Background()
-	e.downstreamAnnounceIWF(ctx, cfgName)
+	bc.downstreamAnnounceIWF(ctx, cfgName)
 
 	getCalls := mock.SnapshotGetCalls()
 	if !assert.Len(t, getCalls, 1) {
@@ -385,14 +367,14 @@ func TestDownstreamAnnounceIWF_CancelledBeforeAnnounce(t *testing.T) {
 	}
 	pmc.SetMock(mock)
 	defer pmc.ResetMock()
-	e := newPMCTestEventHandler()
+	bc := newPMCTestBCClock()
 	cfgName := testCfgName
-	e.clkSyncState[cfgName] = &clockSyncState{state: PTP_LOCKED}
+	bc.syncState = clockSyncState{state: PTP_LOCKED}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	e.downstreamAnnounceIWF(ctx, cfgName)
+	bc.downstreamAnnounceIWF(ctx, cfgName)
 
 	getCalls := mock.SnapshotGetCalls()
 	if !assert.Len(t, getCalls, 1) {
@@ -412,12 +394,12 @@ func TestUpdateDownstreamData_Locked_CallsDownstreamAnnounceIWF(t *testing.T) {
 	}
 	pmc.SetMock(mock)
 	defer pmc.ResetMock()
-	e := newPMCTestEventHandler()
+	bc := newPMCTestBCClock()
 	cfgName := testCfgName
-	e.LeadingClockData.controlledPortsConfig = testControlledCfg
-	e.clkSyncState[cfgName] = &clockSyncState{state: PTP_LOCKED}
+	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.syncState = clockSyncState{state: PTP_LOCKED}
 
-	e.updateDownstreamData(cfgName)
+	bc.updateDownstreamData(cfgName)
 
 	if !assert.Eventually(t, func() bool {
 		return len(mock.SnapshotGetCalls()) >= 1
@@ -434,31 +416,18 @@ func TestUpdateDownstreamData_Freerun_CallsAnnounceLocalData(t *testing.T) {
 	mock := &pmc.MockClient{}
 	pmc.SetMock(mock)
 	defer pmc.ResetMock()
-	e := newPMCTestEventHandler()
+	bc := newPMCTestBCClock()
 	cfgName := testCfgName
-	e.LeadingClockData.clockID = "001122.fffe.334455"
-	e.LeadingClockData.controlledPortsConfig = testControlledCfg
-	e.clkSyncState[cfgName] = &clockSyncState{
+	bc.leadingClockData.clockID = "001122.fffe.334455"
+	bc.leadingClockData.controlledPortsConfig = testControlledCfg
+	bc.syncState = clockSyncState{
 		state:      PTP_FREERUN,
 		clockClass: protocol.ClockClassFreerun,
 	}
 
-	e.updateDownstreamData(cfgName)
+	bc.updateDownstreamData(cfgName)
 
 	assert.Eventually(t, func() bool {
 		return len(filterSetCalls(mock.SnapshotSetCalls(), "SetExternalGMPropertiesNP")) >= 1
 	}, 1*time.Second, 10*time.Millisecond)
-}
-
-func TestUpdateDownstreamData_MissingConfig_Returns(t *testing.T) {
-	mock := &pmc.MockClient{}
-	pmc.SetMock(mock)
-	defer pmc.ResetMock()
-	e := newPMCTestEventHandler()
-
-	e.updateDownstreamData("nonexistent")
-
-	// Returns synchronously before launching any goroutines
-	assert.Empty(t, mock.SnapshotSetCalls())
-	assert.Empty(t, mock.SnapshotGetCalls())
 }

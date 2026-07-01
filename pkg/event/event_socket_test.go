@@ -650,7 +650,7 @@ func TestEmitClockClass_ReconnectsOnBrokenPipe(t *testing.T) {
 
 // --- EmitClockClass (exported, via clkSyncState) ---
 
-func TestEmitClockClassExported_SkipsWhenNoClkSyncState(t *testing.T) {
+func TestEmitClockClassExported_EmitsDefaultState(t *testing.T) {
 	socketPath := shortSocketPath(t)
 	listener, err := net.Listen("unix", socketPath)
 	assert.NoError(t, err)
@@ -662,15 +662,13 @@ func TestEmitClockClassExported_SkipsWhenNoClkSyncState(t *testing.T) {
 	e := NewEventHandlerForTests(socketPath)
 	assert.True(t, e.reconnectEventSocket())
 
-	// No clkSyncState entry for this config; EmitClockClass should return early
+	// No stored clock class — EmitClockClass should be a no-op
 	e.EmitClockClass("ptp4l.99.config")
 
-	// Verify nothing was sent
 	select {
-	case got := <-received:
-		t.Fatalf("expected no message but got: %q", got)
+	case <-received:
+		t.Fatal("expected no message when no clock class is stored")
 	case <-time.After(200 * time.Millisecond):
-		// expected: no data sent
 	}
 
 	e.setConn(nil) // cleanup
@@ -688,11 +686,8 @@ func TestEmitClockClassExported_EmitsStoredClockClass(t *testing.T) {
 	e := NewEventHandlerForTests(socketPath)
 	assert.True(t, e.reconnectEventSocket())
 
-	// Populate clkSyncState via test helper
+	// Set and emit for config 0
 	e.SetClockClass("ptp4l.0.config", 6)
-	e.SetClockClass("ptp4l.1.config", 255)
-
-	// Emit for config 0
 	e.EmitClockClass("ptp4l.0.config")
 
 	select {
@@ -703,7 +698,8 @@ func TestEmitClockClassExported_EmitsStoredClockClass(t *testing.T) {
 		t.Fatal("timed out waiting for clock class message")
 	}
 
-	// Emit for config 1
+	// Set and emit for config 1
+	e.SetClockClass("ptp4l.1.config", 255)
 	e.EmitClockClass("ptp4l.1.config")
 
 	select {
@@ -763,14 +759,13 @@ func TestStoreClockClassLocked_MakesEmitClockClassWork(t *testing.T) {
 	e := newTestEventHandler(socketPath)
 	assert.True(t, e.reconnectEventSocket())
 
-	// Simulate what clockClassRequestCh handler does
+	bc := &BCClock{io: e, leadingClockData: newLeadingClockParams()}
+
+	// Store clock class in clkSyncState and emit for first config
 	e.Lock()
 	e.storeClockClassLocked("ptp4l.0.config", fbprotocol.ClockClass(6), fbprotocol.ClockAccuracy(0x21))
-	e.storeClockClassLocked("ptp4l.1.config", fbprotocol.ClockClass(255), fbprotocol.ClockAccuracy(0xFE))
 	e.Unlock()
-
-	// EmitClockClass should now find and emit the stored values
-	e.EmitClockClass("ptp4l.0.config")
+	bc.EmitClockClass("ptp4l.0.config")
 
 	select {
 	case got := <-received:
@@ -780,7 +775,11 @@ func TestStoreClockClassLocked_MakesEmitClockClassWork(t *testing.T) {
 		t.Fatal("timed out waiting for clock class message")
 	}
 
-	e.EmitClockClass("ptp4l.1.config")
+	// Store different clock class and emit for second config
+	e.Lock()
+	e.storeClockClassLocked("ptp4l.1.config", fbprotocol.ClockClass(255), fbprotocol.ClockAccuracy(0xFE))
+	e.Unlock()
+	bc.EmitClockClass("ptp4l.1.config")
 
 	select {
 	case got := <-received:

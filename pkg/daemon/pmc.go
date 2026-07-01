@@ -289,7 +289,11 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 	pmc.parentDS = &parentDS
 
 	if pmc.clockType == TBC {
-		pmc.eventHandler.UpdateUpstreamParentDataSet(parentDS)
+		if clk := pmc.eventHandler.GetClock(pmc.configFileName); clk != nil {
+			if bc, ok := clk.(*event.BCClock); ok {
+				bc.UpdateUpstreamParentDataSet(parentDS)
+			}
+		}
 	} else if oldParentDS == nil || oldParentDS.GrandmasterClockClass != parentDS.GrandmasterClockClass {
 		pmc.eventHandler.AnnounceClockClass(
 			fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
