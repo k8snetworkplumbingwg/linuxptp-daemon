@@ -139,7 +139,7 @@ func (e *EventHandler) updateBCState(event Event) (clockSyncState, bool, bool) {
 	glog.V(14).Info("current BC state: ", e.clkSyncState[cfgName].state)
 	switch e.clkSyncState[cfgName].state {
 	case PTP_NOTSET, PTP_FREERUN:
-		if !e.isSourceLostBC(cfgName) && e.inSyncCondition(cfgName) {
+		if sourceLost, _, _ := e.isSourceLostBC(cfgName); !sourceLost && e.inSyncCondition(cfgName) {
 			e.clkSyncState[cfgName].state = PTP_LOCKED
 			glog.Info("BC FSM: FREERUN to LOCKED")
 			e.LeadingClockData.lastInSpec = true
@@ -151,12 +151,16 @@ func (e *EventHandler) updateBCState(event Event) (clockSyncState, bool, bool) {
 			e.clkSyncState[cfgName].clockClass = protocol.ClockClassFreerun
 			glog.Info("BC FSM: LOCKED to FREERUN")
 			updateDownstreamData = true
-		} else if e.isSourceLostBC(cfgName) {
-			e.clkSyncState[cfgName].state = PTP_HOLDOVER
-			e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClass(135)
-			glog.Info("BC FSM: LOCKED to HOLDOVER")
-			e.LeadingClockData.lastInSpec = true
-			updateDownstreamData = true
+		} else if sourceLost, ptpLost, dpllLost := e.isSourceLostBC(cfgName); sourceLost {
+			if e.ShouldSuppressHoldover != nil && e.ShouldSuppressHoldover(ptpLost, dpllLost) {
+				glog.Info("BC FSM: suppressing LOCKED->HOLDOVER (process restart within threshold)")
+			} else {
+				e.clkSyncState[cfgName].state = PTP_HOLDOVER
+				e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClass(135)
+				glog.Info("BC FSM: LOCKED to HOLDOVER")
+				e.LeadingClockData.lastInSpec = true
+				updateDownstreamData = true
+			}
 		} else {
 			if *e.LeadingClockData.upstreamTimeProperties != *e.LeadingClockData.downstreamTimeProperties {
 				e.LeadingClockData.downstreamTimeProperties = e.LeadingClockData.upstreamTimeProperties
@@ -181,7 +185,7 @@ func (e *EventHandler) updateBCState(event Event) (clockSyncState, bool, bool) {
 			e.clkSyncState[cfgName].clockClass = protocol.ClockClassFreerun
 			glog.Info("BC FSM: HOLDOVER to FREERUN")
 			updateDownstreamData = true
-		case e.inSyncCondition(cfgName) && !e.isSourceLostBC(cfgName):
+		case func() bool { lost, _, _ := e.isSourceLostBC(cfgName); return e.inSyncCondition(cfgName) && !lost }():
 			e.clkSyncState[cfgName].state = PTP_LOCKED
 			glog.Info("BC FSM: HOLDOVER to LOCKED")
 			updateDownstreamData = true
@@ -498,9 +502,9 @@ func (e *EventHandler) inSyncCondition(cfgName string) bool {
 	return false
 }
 
-func (e *EventHandler) isSourceLostBC(cfgName string) bool {
-	ptpLost := true
-	dpllLost := false
+func (e *EventHandler) isSourceLostBC(cfgName string) (lost bool, ptpLost bool, dpllLost bool) {
+	ptpLost = true
+	dpllLost = false
 	dpllLostIface := ""
 	if data, ok := e.data[cfgName]; ok {
 		for _, d := range data {
@@ -524,14 +528,15 @@ func (e *EventHandler) isSourceLostBC(cfgName string) bool {
 			}
 		}
 	}
+	lost = ptpLost || dpllLost
 	glog.Infof("Source %s: ptpLost %t, dpllLost %t %s",
 		func() string {
-			if dpllLost || ptpLost {
+			if lost {
 				return "LOST"
 			}
 			return "NOT LOST"
 		}(), ptpLost, dpllLost, dpllLostIface)
-	return ptpLost || dpllLost
+	return
 }
 
 func (e *EventHandler) getLargestOffset(cfgName string) int64 {
