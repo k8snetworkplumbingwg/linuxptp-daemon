@@ -50,7 +50,6 @@ func WithClock(c Clock) OrchestratorOption {
 	}
 }
 
-
 // Clock abstracts time operations for testability.
 type Clock interface {
 	Now() time.Time
