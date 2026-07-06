@@ -293,7 +293,7 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 	} else if oldParentDS == nil || oldParentDS.GrandmasterClockClass != parentDS.GrandmasterClockClass {
 		pmc.eventHandler.AnnounceClockClass(
 			fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
-			fbprotocol.ClockAccuracy(parentDS.GrandmasterClockClass),
+			fbprotocol.ClockAccuracy(parentDS.GrandmasterClockAccuracy),
 			pmc.configFileName,
 			event.ClockType(pmc.clockType),
 		)
