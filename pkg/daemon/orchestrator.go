@@ -138,6 +138,9 @@ func (o *ProcessOrchestrator) run(ctx context.Context) error {
 			glog.Warningf("orchestrator: phase %q cancelled: %v", phase.Name, err)
 			return fmt.Errorf("phase %q: %w", phase.Name, err)
 		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("phase %q: %w", phase.Name, ctx.Err())
+		}
 
 		glog.Infof("orchestrator: starting phase %d/%d %q", i+1, len(o.plan.Phases), phase.Name)
 		if err := o.startPhaseProcesses(phase); err != nil {
