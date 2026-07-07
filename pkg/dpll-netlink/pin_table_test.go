@@ -2,6 +2,7 @@ package dpll_netlink
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -170,6 +171,29 @@ func TestBuildPinRows_PrioNil(t *testing.T) {
 
 func TestBuildPinRows_Empty(t *testing.T) {
 	assert.Empty(t, buildPinRows(nil, 0xAA, 0, DpllLockStatusUnlocked))
+}
+
+func TestInvalidatePinTableConn_NilSafe(t *testing.T) {
+	pinTableConnMu.Lock()
+	pinTableConn = nil
+	pinTableConnMu.Unlock()
+
+	assert.NotPanics(t, invalidatePinTableConn)
+}
+
+// TestDialPinTableConn_ReturnsPromptly guards against dialPinTableConn ever
+// silently blocking for the full pinTableNetlinkTimeout. Whether the "dpll"
+// netlink family is available depends on the environment (e.g. it fails
+// immediately on non-Linux OSes, but some Linux CI kernels register the
+// family even without real DPLL hardware behind it), so this only asserts
+// on timing, not on a specific dial outcome.
+func TestDialPinTableConn_ReturnsPromptly(t *testing.T) {
+	start := time.Now()
+	conn, err := dialPinTableConn()
+	if err == nil {
+		defer conn.Close() //nolint:errcheck
+	}
+	assert.Less(t, time.Since(start), pinTableNetlinkTimeout)
 }
 
 func TestBuildPinRows_WithPackageLabel(t *testing.T) {
