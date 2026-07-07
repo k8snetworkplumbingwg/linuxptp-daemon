@@ -351,7 +351,7 @@ func AfterRunPTPCommandE825(data *interface{}, nodeProfile *ptpv1.PtpProfile, co
 			case "gpspipe":
 				glog.Infof("AfterRunPTPCommandE825 doing ublx config for command: %s", command)
 				// Execute user-supplied UblxCmds first:
-				pluginData.hwplugins = append(pluginData.hwplugins, e825Opts.UblxCmds.runAll(true)...)
+				pluginData.hwplugins = append(pluginData.hwplugins, e825Opts.UblxCmds.RunAll(true)...)
 			// "tbc-ho-exit" is called when ptp4l sync is achieved on the T-BC upstreamPort
 			case "tbc-ho-exit":
 				if tbcConfigured(nodeProfile) {

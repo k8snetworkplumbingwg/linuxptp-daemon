@@ -19,9 +19,9 @@ func Test_CmdDisableNmeaMsg(t *testing.T) {
 	cmds := cmdDisableNmeaMsg("FOO")
 	assert.Equal(t, len(expected), len(cmds))
 	for _, cmd := range cmds {
-		assert.Equal(t, "-z", cmd[0])
-		if slices.Contains(expected, cmd[1]) {
-			found = append(found, cmd[1])
+		assert.Equal(t, "-z", cmd.Args[0])
+		if slices.Contains(expected, cmd.Args[1]) {
+			found = append(found, cmd.Args[1])
 		}
 	}
 	slices.Sort(expected)

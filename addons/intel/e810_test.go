@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"testing"
 
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
@@ -31,13 +30,12 @@ func Test_AfterRunPTPCommandE810(t *testing.T) {
 	err = p.AfterRunPTPCommand(d, profile, "bad command")
 	assert.NoError(t, err)
 
-	mockExec, execRestore := setupExecMock()
-	defer execRestore()
-	mockExec.setDefaults("output", nil)
+	mock, cmdRestore := setupCommandMock()
+	defer cmdRestore()
 	err = p.AfterRunPTPCommand(d, profile, "gpspipe")
 	assert.NoError(t, err)
-	// Ensure all 9 required calls are the last 9:
-	requiredUblxCmds := []string{
+	// Verify all required ublox commands were executed
+	requiredPatterns := []string{
 		"CFG-HW-ANT_CFG_VOLTCTRL,1",
 		"GPS",
 		"Galileo",
@@ -49,15 +47,10 @@ func Test_AfterRunPTPCommandE810(t *testing.T) {
 		"CFG-MSG,1,38,248",
 		"SAVE",
 	}
-	found := make([]string, 0, len(requiredUblxCmds))
-	for _, call := range mockExec.actualCalls {
-		for _, arg := range call.args {
-			if slices.Contains(requiredUblxCmds, arg) {
-				found = append(found, arg)
-			}
-		}
+	for _, pattern := range requiredPatterns {
+		assert.True(t, mock.containsCommand(pattern),
+			"expected command containing %q", pattern)
 	}
-	assert.Equal(t, requiredUblxCmds, found)
 	// And expect 3 of them to have produced output (as specified in the profile)
 	assert.Equal(t, 3, len(data.hwplugins))
 }

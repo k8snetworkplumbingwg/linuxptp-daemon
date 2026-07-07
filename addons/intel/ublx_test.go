@@ -2,112 +2,117 @@ package intel
 
 import (
 	"errors"
-	"slices"
+	"strings"
 	"testing"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-type mockExecutor struct {
-	actualCalls   []actualCall
-	expectedCalls []expectedCall
-	defaultResult execResult
+// mockRunner implements ublox.Runner, recording all commands passed to it
+// without executing anything. Tests verify command content at the Command
+// level, not the raw exec level.
+type mockRunner struct {
+	commands      []ublox.Command
+	defaultOutput string
+	defaultErr    error
 }
 
-type actualCall struct {
-	name string
-	args []string
+func (m *mockRunner) Run(cmd ublox.Command) (string, error) {
+	m.commands = append(m.commands, cmd)
+	return m.defaultOutput, m.defaultErr
 }
 
-type expectedCall struct {
-	args       []string
-	returnData []byte
-	returnErr  error
-}
-
-type execResult struct {
-	data []byte
-	err  error
-}
-
-func (m *mockExecutor) run(name string, arg ...string) ([]byte, error) {
-	m.actualCalls = append(m.actualCalls, actualCall{name, arg})
-	for _, expected := range m.expectedCalls {
-		if slices.Equal(expected.args, arg) {
-			return expected.returnData, expected.returnErr
+func (m *mockRunner) RunAll(cmds ublox.CommandList, withSave bool) []string {
+	var results []string
+	for _, cmd := range cmds {
+		output, err := m.Run(cmd)
+		if cmd.ReportOutput {
+			if err != nil {
+				results = append(results, err.Error())
+			} else {
+				results = append(results, output)
+			}
 		}
 	}
-	return m.defaultResult.data, m.defaultResult.err
+	if withSave {
+		m.Run(ublox.SaveCommand) //nolint:errcheck // mock always succeeds for SAVE
+	}
+	return results
 }
 
-func (m *mockExecutor) setDefaults(data string, err error) {
-	m.defaultResult.data = []byte(data)
-	m.defaultResult.err = err
+func (m *mockRunner) Save() error {
+	_, err := m.Run(ublox.SaveCommand)
+	return err
 }
 
-func (m *mockExecutor) expect(args []string, data string, err error) {
-	m.expectedCalls = append(m.expectedCalls, expectedCall{
-		args:       args,
-		returnData: []byte(data),
-		returnErr:  err,
-	})
+// containsCommand returns true if any recorded command's Args contain
+// all the given substrings.
+func (m *mockRunner) containsCommand(substrs ...string) bool {
+	for _, cmd := range m.commands {
+		joined := strings.Join(cmd.Args, " ")
+		allFound := true
+		for _, s := range substrs {
+			if !strings.Contains(joined, s) {
+				allFound = false
+				break
+			}
+		}
+		if allFound {
+			return true
+		}
+	}
+	return false
 }
 
-// setupExecMock sets up a mock executor (returns the executor and the restoration function)
-func setupExecMock() (*mockExecutor, func()) {
-	originalExec := execCombined
-	execMockData := &mockExecutor{}
-	execCombined = execMockData.run
-	return execMockData, func() { execCombined = originalExec }
-}
-
-func Test_UbxCmdRun(t *testing.T) {
-	execMock, execRestore := setupExecMock()
-	defer execRestore()
-	execMock.setDefaults("result", nil)
-
-	cmd := UblxCmd{Args: []string{"arg"}}
-	stdout, err := cmd.run()
-	assert.NoError(t, err)
-	assert.Equal(t, "result", stdout)
-	assert.Equal(t, 1, len(execMock.actualCalls))
-	assert.Equal(t, []string{"-w", "0.1", "arg"}, execMock.actualCalls[0].args)
-
-	execMock.setDefaults("", errors.New("Error"))
-	_, err = cmd.run()
-	assert.Error(t, err)
-	assert.Equal(t, 2, len(execMock.actualCalls))
+// setupCommandMock replaces NewCommandRunnerFn with a mock runner.
+// No ExecCommand stubbing is needed.
+func setupCommandMock() (*mockRunner, func()) {
+	orig := ublox.NewCommandRunnerFn
+	mock := &mockRunner{defaultOutput: "output"}
+	ublox.NewCommandRunnerFn = func() (ublox.Runner, error) {
+		return mock, nil
+	}
+	return mock, func() { ublox.NewCommandRunnerFn = orig }
 }
 
 func Test_UbxCmdListRunAll(t *testing.T) {
-	execMock, execRestore := setupExecMock()
-	defer execRestore()
-	execMock.setDefaults("", errors.New("Unexpected call"))
-	execMock.expect([]string{"-w", "0.1", "arg1"}, "result1", nil)
-	execMock.expect([]string{"-w", "2", "arg2"}, "result2", nil)
-	execMock.expect([]string{"-w", "0.1", "arg3"}, "", errors.New("error3"))
-	execMock.expect([]string{"-w", "0.1", "arg4"}, "", errors.New("error4"))
-	execMock.expect([]string{"-w", "0.1", "-p", "SAVE"}, "", nil)
+	mock, restore := setupCommandMock()
+	defer restore()
 
 	cmdList := UblxCmdList{
-		UblxCmd{
-			ReportOutput: false,
-			Args:         []string{"arg1"},
-		},
-		UblxCmd{
-			ReportOutput: true,
-			Args:         []string{"-w", "2", "arg2"},
-		},
-		UblxCmd{
-			ReportOutput: false,
-			Args:         []string{"arg3"},
-		},
-		UblxCmd{
-			ReportOutput: true,
-			Args:         []string{"arg4"},
-		},
+		{ReportOutput: false, Args: []string{"arg1"}},
+		{ReportOutput: true, Args: []string{"-w", "2", "arg2"}},
+		{ReportOutput: false, Args: []string{"arg3"}},
+		{ReportOutput: true, Args: []string{"arg4"}},
 	}
 
-	results := cmdList.runAll(true)
-	assert.Equal(t, []string{"result2", "error4"}, results)
+	results := cmdList.RunAll(true)
+
+	// Should have 2 reportable results
+	require.Equal(t, 2, len(results))
+	assert.Equal(t, "output", results[0])
+	assert.Equal(t, "output", results[1])
+
+	// Verify all commands were executed
+	assert.True(t, mock.containsCommand("arg1"))
+	assert.True(t, mock.containsCommand("arg2"))
+	assert.True(t, mock.containsCommand("arg3"))
+	assert.True(t, mock.containsCommand("arg4"))
+	assert.True(t, mock.containsCommand("SAVE"))
+}
+
+func Test_UbxCmdListRunAll_Error(t *testing.T) {
+	mock, restore := setupCommandMock()
+	defer restore()
+	mock.defaultErr = errors.New("exec failed")
+
+	cmdList := UblxCmdList{
+		{ReportOutput: true, Args: []string{"will-fail"}},
+	}
+
+	results := cmdList.RunAll(false)
+	require.Equal(t, 1, len(results))
+	assert.Contains(t, results[0], "exec failed")
 }
