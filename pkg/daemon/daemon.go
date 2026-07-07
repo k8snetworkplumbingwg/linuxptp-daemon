@@ -1249,9 +1249,11 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		} else if pProcess == ts2phcProcessName { //& if the x plugin is enabled
 			if clockType == event.GM {
 				if output.gnss_serial_port == "" {
-					output.gnss_serial_port = GPSPIPE_SERIALPORT
+					output.gnss_serial_port = GPSDDefaultGNSSSerialPort
+					glog.Warningf("Setting GNSS serial port to %s", output.gnss_serial_port)
 				}
 				gmInterface := dprocess.ifaces.GetLeadingInterface().Name
+				glog.Infof("Working with GNSS serial port %s, leading iface %s", output.gnss_serial_port, gmInterface)
 
 				// Record ublox init results (MON-HW, etc.) to NodePtpDevice status.
 				// Replaces any previous "gnss" entries to avoid duplicates on re-init.
@@ -1968,7 +1970,7 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 				cmd := p.cmd
 				newCmd := exec.Command(cmd.Args[0], cmd.Args[1:]...)
 				p.cmd = newCmd
-				go p.cmdRun(p.dn.stdoutToSocket, &(p.dn.pluginManager))
+				go p.cmdRun(p.dn.stdoutToSocket, &p.dn.pluginManager)
 			}
 		} else {
 			go p.cmdStop()

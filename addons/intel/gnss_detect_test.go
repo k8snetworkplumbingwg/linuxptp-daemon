@@ -2,10 +2,12 @@ package intel
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/stretchr/testify/assert"
 )
@@ -146,76 +148,73 @@ ts2phc.extts_polarity rising`,
 	}
 }
 
-func TestGnssDeviceFromInterface(t *testing.T) {
-	tests := []struct {
-		name        string
-		iface       string
-		setupMock   func(*MockFileSystem)
-		expected    string
-		expectError bool
-	}{
-		{
-			name:  "single GNSS device found",
-			iface: "ens7f0",
-			setupMock: func(m *MockFileSystem) {
-				m.ExpectReadDir("/sys/class/net/ens7f0/device/gnss",
-					[]os.DirEntry{MockDirEntry{name: "gnss0"}}, nil)
-			},
-			expected:    "/dev/gnss0",
-			expectError: false,
-		},
-		{
-			name:  "multiple GNSS devices, returns first",
-			iface: "ens7f0",
-			setupMock: func(m *MockFileSystem) {
-				m.ExpectReadDir("/sys/class/net/ens7f0/device/gnss",
-					[]os.DirEntry{
-						MockDirEntry{name: "gnss0"},
-						MockDirEntry{name: "gnss1"},
-					}, nil)
-			},
-			expected:    "/dev/gnss0",
-			expectError: false,
-		},
-		{
-			name:  "sysfs directory does not exist",
-			iface: "ens7f0",
-			setupMock: func(m *MockFileSystem) {
-				m.ExpectReadDir("/sys/class/net/ens7f0/device/gnss",
-					nil, errors.New("no such file or directory"))
-			},
-			expected:    "",
-			expectError: true,
-		},
-		{
-			name:  "sysfs directory is empty",
-			iface: "ens7f0",
-			setupMock: func(m *MockFileSystem) {
-				m.ExpectReadDir("/sys/class/net/ens7f0/device/gnss",
-					[]os.DirEntry{}, nil)
-			},
-			expected:    "",
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mockFS, restoreFs := setupMockFS()
-			defer restoreFs()
-			tt.setupMock(mockFS)
-
-			result, err := gnssDeviceFromInterface(tt.iface)
-			if tt.expectError {
-				assert.Error(t, err)
-				assert.Empty(t, result)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.expected, result)
+func setupUbloxReadDirMock(entries map[string][]os.DirEntry, errs map[string]error) func() {
+	orig := ublox.ReadDir
+	ublox.ReadDir = func(name string) ([]os.DirEntry, error) {
+		if errs != nil {
+			if err, ok := errs[name]; ok {
+				return nil, err
 			}
-			mockFS.VerifyAllCalls(t)
-		})
+		}
+		if entries != nil {
+			if e, ok := entries[name]; ok {
+				return e, nil
+			}
+		}
+		return nil, errors.New("not found")
 	}
+	return func() { ublox.ReadDir = orig }
+}
+
+func TestGNSSDeviceFromInterface(t *testing.T) {
+	t.Run("single GNSS device found", func(t *testing.T) {
+		restore := setupUbloxReadDirMock(
+			map[string][]os.DirEntry{
+				fmt.Sprintf(ublox.GNSSDeviceSysfsTemplate, "ens7f0"): {MockDirEntry{name: "gnss0"}},
+			}, nil)
+		defer restore()
+
+		result, err := ublox.GNSSDeviceFromInterface("ens7f0")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/gnss0", result)
+	})
+
+	t.Run("multiple GNSS devices, returns first sorted", func(t *testing.T) {
+		restore := setupUbloxReadDirMock(
+			map[string][]os.DirEntry{
+				fmt.Sprintf(ublox.GNSSDeviceSysfsTemplate, "ens7f0"): {
+					MockDirEntry{name: "gnss1"},
+					MockDirEntry{name: "gnss0"},
+				},
+			}, nil)
+		defer restore()
+
+		result, err := ublox.GNSSDeviceFromInterface("ens7f0")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/gnss0", result)
+	})
+
+	t.Run("sysfs directory does not exist", func(t *testing.T) {
+		restore := setupUbloxReadDirMock(nil,
+			map[string]error{
+				fmt.Sprintf(ublox.GNSSDeviceSysfsTemplate, "ens7f0"): errors.New("no such file or directory"),
+			})
+		defer restore()
+
+		_, err := ublox.GNSSDeviceFromInterface("ens7f0")
+		assert.Error(t, err)
+	})
+
+	t.Run("sysfs directory is empty", func(t *testing.T) {
+		restore := setupUbloxReadDirMock(
+			map[string][]os.DirEntry{
+				fmt.Sprintf(ublox.GNSSDeviceSysfsTemplate, "ens7f0"): {},
+			}, nil)
+		defer restore()
+
+		_, err := ublox.GNSSDeviceFromInterface("ens7f0")
+		assert.Error(t, err)
+	})
 }
 
 func TestAutoDetectGNSSSerialPort(t *testing.T) {
@@ -228,10 +227,11 @@ verbose 1
 ts2phc.extts_polarity rising`
 
 	t.Run("patches config when GNSS device found", func(t *testing.T) {
-		mockFS, restoreFs := setupMockFS()
-		defer restoreFs()
-		mockFS.ExpectReadDir("/sys/class/net/ens7f0/device/gnss",
-			[]os.DirEntry{MockDirEntry{name: "gnss0"}}, nil)
+		restore := setupUbloxReadDirMock(
+			map[string][]os.DirEntry{
+				fmt.Sprintf(ublox.GNSSDeviceSysfsTemplate, "ens7f0"): {MockDirEntry{name: "gnss0"}},
+			}, nil)
+		defer restore()
 
 		conf := ts2phcConf
 		profile := &ptpv1.PtpProfile{Ts2PhcConf: &conf}
@@ -245,7 +245,6 @@ ts2phc.extts_polarity rising`
 				break
 			}
 		}
-		mockFS.VerifyAllCalls(t)
 	})
 
 	t.Run("skips when nmea_serialport already set", func(t *testing.T) {
@@ -269,16 +268,16 @@ ts2phc.extts_polarity rising`
 	})
 
 	t.Run("skips when sysfs lookup fails", func(t *testing.T) {
-		mockFS, restoreFs := setupMockFS()
-		defer restoreFs()
-		mockFS.ExpectReadDir("/sys/class/net/ens7f0/device/gnss",
-			nil, errors.New("no such file or directory"))
+		restore := setupUbloxReadDirMock(nil,
+			map[string]error{
+				fmt.Sprintf(ublox.GNSSDeviceSysfsTemplate, "ens7f0"): errors.New("no such file or directory"),
+			})
+		defer restore()
 
 		conf := ts2phcConf
 		profile := &ptpv1.PtpProfile{Ts2PhcConf: &conf}
 		autoDetectGNSSSerialPort(profile)
 
 		assert.NotContains(t, *profile.Ts2PhcConf, "ts2phc.nmea_serialport")
-		mockFS.VerifyAllCalls(t)
 	})
 }
