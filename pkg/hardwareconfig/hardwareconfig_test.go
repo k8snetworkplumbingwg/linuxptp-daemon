@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	dpllcfg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
@@ -2049,4 +2050,54 @@ func TestE830HardwareConfigFromTestdata(t *testing.T) {
 
 	t.Logf("Loaded gnrd-hwconfig-e830.yaml: %d subsystems, %d with DPLL flags",
 		len(chain.Structure), e830Count)
+}
+
+func TestGetInterfaceNameFromSources_GNSSSource(t *testing.T) {
+	const testGNSSBoardLabel = "GNSS_1PPS_IN"
+	hcm := newHardwareConfigManagerForTests()
+
+	clockChain := &ptpv2alpha1.ClockChain{
+		Structure: []ptpv2alpha1.Subsystem{
+			{
+				Name: testSubsystemLeader,
+				DPLL: ptpv2alpha1.DPLL{
+					NetworkInterface: testIfaceEns7f0,
+				},
+			},
+		},
+		Behavior: &ptpv2alpha1.Behavior{
+			Sources: []ptpv2alpha1.SourceConfig{
+				{
+					Name:       testSourceGNSS,
+					SourceType: ptpv2alpha1.SourceTypeGNSS,
+					Subsystem:  testSubsystemLeader,
+					BoardLabel: testGNSSBoardLabel,
+				},
+				{
+					Name:       "DPLL",
+					SourceType: ptpv2alpha1.SourceTypeDPLL,
+					Subsystem:  testSubsystemLeader,
+				},
+			},
+		},
+	}
+
+	t.Run("gnss_source", func(t *testing.T) {
+		iface, err := hcm.getInterfaceNameFromSources(testSourceGNSS, clockChain)
+		require.NoError(t, err)
+		require.NotNil(t, iface)
+		assert.Equal(t, testIfaceEns7f0, *iface)
+	})
+
+	t.Run("dpll_source", func(t *testing.T) {
+		iface, err := hcm.getInterfaceNameFromSources("DPLL", clockChain)
+		require.NoError(t, err)
+		require.NotNil(t, iface)
+		assert.Equal(t, testIfaceEns7f0, *iface)
+	})
+
+	t.Run("unknown_source", func(t *testing.T) {
+		_, err := hcm.getInterfaceNameFromSources("nonexistent", clockChain)
+		assert.Error(t, err)
+	})
 }

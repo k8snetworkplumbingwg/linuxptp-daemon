@@ -4,6 +4,44 @@
 # Hardware-specific pins (SDP2, SDP0) are hardcoded in the template
 
 behaviorProfiles:
+  t-gm:
+    sources:
+      - name: GNSS
+        sourceType: gnss
+        subsystem: "{subsystem}"
+        boardLabel: GNSS_1PPS_IN
+
+    conditions:
+      - name: "Initialize T-GM"
+        triggers:
+          - conditionType: init
+            sourceName: GNSS
+        desiredStates:
+          - dpll:
+              subsystem: "{subsystem}"
+              boardLabel: GNSS_1PPS_IN
+              eec:
+                state: selectable
+              pps:
+                state: selectable
+          - dpll:
+              subsystem: "{subsystem}"
+              boardLabel: GNSS_10M_IN
+              eec:
+                state: selectable
+              pps:
+                state: selectable
+          - ptpPin:
+              name: SDP2
+              func: Disabled
+              chan: 0
+              sourceName: GNSS
+          - ptpPin:
+              name: SDP0
+              func: Disabled
+              chan: 0
+              sourceName: GNSS
+
   t-bc:
     # Pin role mappings - defines which pins serve which roles
     pinRoles:

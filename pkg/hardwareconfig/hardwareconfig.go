@@ -432,14 +432,13 @@ func (hcm *HardwareConfigManager) GetHardwareConfigsForProfile(nodeProfile *ptpv
 	if nodeProfile.Name == nil {
 		return nil
 	}
-
-	var relevantConfigs []ptpv2alpha1.HardwareProfile
+	var profiles []ptpv2alpha1.HardwareProfile
 	for _, hwConfig := range hcm.hardwareConfigs {
 		if ProfileNamesMatch(*nodeProfile.Name, hwConfig.Spec.RelatedPtpProfileName) {
-			relevantConfigs = append(relevantConfigs, hwConfig.Spec.Profile)
+			profiles = append(profiles, hwConfig.Spec.Profile)
 		}
 	}
-	return relevantConfigs
+	return profiles
 }
 
 // ApplyHardwareConfigsForProfile applies hardware configurations for a PTP profile
@@ -1762,10 +1761,12 @@ func (hcm *HardwareConfigManager) getInterfaceNameFromSources(sourceName string,
 		}
 	}
 
-	// For DPLL sources, use the subsystem's network interface from structure
-	if source.SourceType == "dpllPhaseLocked" {
+	// For DPLL and GNSS sources, use the subsystem's network interface from structure.
+	// These source types don't have ptpTimeReceivers; they resolve the interface
+	// from the subsystem's DPLL.NetworkInterface or first Ethernet port.
+	if source.SourceType == ptpv2alpha1.SourceTypeDPLL || source.SourceType == ptpv2alpha1.SourceTypeGNSS {
 		if source.Subsystem == "" {
-			return nil, fmt.Errorf("DPLL source %s has no subsystem specified", sourceName)
+			return nil, fmt.Errorf("%s source %s has no subsystem specified", source.SourceType, sourceName)
 		}
 		// Find the subsystem in the structure section
 		for _, subsystem := range clockChain.Structure {

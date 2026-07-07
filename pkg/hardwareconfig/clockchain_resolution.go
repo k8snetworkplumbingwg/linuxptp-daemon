@@ -261,11 +261,11 @@ func (hcm *HardwareConfigManager) ResolveClockChain(hwConfig *ptpv2alpha1.Hardwa
 		}
 	}
 
-	// Derive behavior from templates if not explicitly provided
-	if resolvedConfig.Spec.Profile.ClockChain.Behavior == nil {
-		if err := hcm.deriveBehavior(resolvedConfig, clockType); err != nil {
-			return nil, fmt.Errorf("failed to derive behavior: %w", err)
-		}
+	// Derive behavior from templates, merging any user-provided sources.
+	// Always run even when the user supplies Behavior.Sources (e.g. gnssConfig)
+	// so the template's DPLL pin details and conditions are still applied.
+	if err := hcm.deriveBehavior(resolvedConfig, clockType); err != nil {
+		return nil, fmt.Errorf("failed to derive behavior: %w", err)
 	}
 
 	// Print resolved configuration for debugging/verification
@@ -495,17 +495,19 @@ func deepCopyAndResolveCondition(cond ptpv2alpha1.Condition, vars templateVariab
 func (hcm *HardwareConfigManager) deriveBehavior(hwConfig *ptpv2alpha1.HardwareConfig, clockType string) error {
 	clockChain := hwConfig.Spec.Profile.ClockChain
 
-	// If behavior is already provided, merge with templates (future enhancement)
-	// For now, if behavior exists, skip derivation
-	if clockChain.Behavior != nil && (len(clockChain.Behavior.Sources) > 0 || len(clockChain.Behavior.Conditions) > 0) {
-		glog.Infof("Behavior already provided, skipping template derivation")
-		return nil
+	// Save any user-provided sources for merging after template instantiation.
+	// User sources can provide fields like gnssConfig that the template can't
+	// know ahead of time, while the template provides the DPLL pin details
+	// and conditions that the user shouldn't need to specify.
+	var userSources []ptpv2alpha1.SourceConfig
+	var userConditions []ptpv2alpha1.Condition
+	if clockChain.Behavior != nil {
+		userSources = clockChain.Behavior.Sources
+		userConditions = clockChain.Behavior.Conditions
 	}
 
-	// Initialize behavior if nil
-	if clockChain.Behavior == nil {
-		clockChain.Behavior = &ptpv2alpha1.Behavior{}
-	}
+	// Initialize/reset behavior for template derivation
+	clockChain.Behavior = &ptpv2alpha1.Behavior{}
 
 	// Process each subsystem to derive behavior
 	for _, subsystem := range clockChain.Structure {
@@ -561,8 +563,66 @@ func (hcm *HardwareConfigManager) deriveBehavior(hwConfig *ptpv2alpha1.HardwareC
 		}
 	}
 
+	// Merge user-provided source fields onto template-derived sources.
+	// Match by Name first, then by SourceType. User fields (e.g., gnssConfig)
+	// overlay template defaults without replacing DPLL/pin details.
+	for _, userSource := range userSources {
+		merged := false
+		for i := range clockChain.Behavior.Sources {
+			tplSource := &clockChain.Behavior.Sources[i]
+			if (userSource.Name != "" && tplSource.Name == userSource.Name) ||
+				(userSource.Name == "" && tplSource.SourceType == userSource.SourceType) {
+				mergeSourceConfig(tplSource, &userSource)
+				glog.Infof("Merged user source %q onto template source %q", userSource.Name, tplSource.Name)
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			// User source doesn't match any template source — add it as-is
+			clockChain.Behavior.Sources = append(clockChain.Behavior.Sources, userSource)
+			glog.Infof("Added user source %q (no matching template)", userSource.Name)
+		}
+	}
+
+	// Merge user-provided conditions onto template-derived conditions.
+	// Match by name: user conditions override same-named template conditions.
+	// Unmatched user conditions are appended.
+	for _, userCond := range userConditions {
+		merged := false
+		for i := range clockChain.Behavior.Conditions {
+			if clockChain.Behavior.Conditions[i].Name == userCond.Name {
+				clockChain.Behavior.Conditions[i] = userCond
+				glog.Infof("User condition %q overrides template condition", userCond.Name)
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			clockChain.Behavior.Conditions = append(clockChain.Behavior.Conditions, userCond)
+			glog.Infof("Added user condition %q (no matching template)", userCond.Name)
+		}
+	}
+
 	glog.Infof("Derived behavior: %d sources, %d conditions",
 		len(clockChain.Behavior.Sources), len(clockChain.Behavior.Conditions))
 
 	return nil
+}
+
+// mergeSourceConfig overlays user-provided fields onto a template source.
+// Only non-zero user fields are applied, preserving template defaults.
+func mergeSourceConfig(tpl, user *ptpv2alpha1.SourceConfig) {
+	if user.Subsystem != "" {
+		tpl.Subsystem = user.Subsystem
+	}
+	if user.BoardLabel != "" {
+		tpl.BoardLabel = user.BoardLabel
+	}
+	if len(user.PTPTimeReceivers) > 0 {
+		tpl.PTPTimeReceivers = user.PTPTimeReceivers
+	}
+	if user.GNSSConfig != nil {
+		tpl.GNSSConfig = user.GNSSConfig
+	}
 }

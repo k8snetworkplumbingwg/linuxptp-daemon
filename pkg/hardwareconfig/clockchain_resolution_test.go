@@ -132,7 +132,7 @@ func TestClockChainResolution(t *testing.T) {
 			assert.Len(t, hwConfig.Spec.Profile.ClockChain.Structure, 1)
 
 			subsystem := hwConfig.Spec.Profile.ClockChain.Structure[0]
-			assert.Equal(t, "leader", subsystem.Name)
+			assert.Equal(t, testSubsystemLeader, subsystem.Name)
 			assert.Equal(t, tc.hwDefPath, subsystem.HardwareSpecificDefinitions)
 
 			// Before resolution: DPLL and Ethernet should be empty/omitted
@@ -191,7 +191,7 @@ func TestClockChainResolution(t *testing.T) {
 			// Set up mock leading interface resolver
 			mockResolver := newMockLeadingInterfaceResolver()
 			// Mock: eno2 -> PHC 0 -> PCI 0000:13:00.0 -> eno5
-			mockResolver.phcIDs["eno2"] = "/dev/ptp0"
+			mockResolver.phcIDs["eno2"] = testDevPtp0
 			mockResolver.symlinks["/sys/class/ptp/ptp0/device"] = "../../../0000:13:00.0"
 			mockResolver.dirEntries["/sys/bus/pci/devices/0000:13:00.0/net"] = []os.DirEntry{
 				&mockDirEntry{name: "eno5", isDir: false},
@@ -237,13 +237,13 @@ func TestClockChainResolution(t *testing.T) {
 
 			// Sources should be instantiated with resolved variables
 			assert.NotEmpty(t, behavior.Sources)
-			ptpSource := findSourceByName(behavior.Sources, "PTP")
+			ptpSource := findSourceByName(behavior.Sources, testSourcePTP)
 			assert.NotNil(t, ptpSource, "PTP source should be present")
 			if ptpSource == nil {
 				t.Fatal("PTP source should be present")
 			}
 			assert.Equal(t, ptpv2alpha1.SourceTypePTP, ptpSource.SourceType)
-			assert.Equal(t, "leader", ptpSource.Subsystem, "Subsystem should be resolved")
+			assert.Equal(t, testSubsystemLeader, ptpSource.Subsystem, "Subsystem should be resolved")
 			assert.Equal(t, tc.expectedPtpInput, ptpSource.BoardLabel, "BoardLabel should be resolved from pinRoles")
 			assert.Equal(t, upstreamPorts, ptpSource.PTPTimeReceivers,
 				"PTPTimeReceivers should match upstream ports")
@@ -337,7 +337,7 @@ func TestClockChainResolution_DualUpstream(t *testing.T) {
 	// Set up mock leading interface resolver:
 	// eno8703 -> PHC 0 -> PCI 0000:87:00.0 -> eno8703 (leading interface)
 	mockResolver := newMockLeadingInterfaceResolver()
-	mockResolver.phcIDs["eno8703"] = "/dev/ptp0"
+	mockResolver.phcIDs["eno8703"] = testDevPtp0
 	mockResolver.symlinks["/sys/class/ptp/ptp0/device"] = "../../../0000:87:00.0"
 	mockResolver.dirEntries["/sys/bus/pci/devices/0000:87:00.0/net"] = []os.DirEntry{
 		&mockDirEntry{name: "eno8703", isDir: false},
@@ -376,12 +376,12 @@ func TestClockChainResolution_DualUpstream(t *testing.T) {
 	}
 
 	// PTP source should have both ports as PTPTimeReceivers
-	ptpSource := findSourceByName(behavior.Sources, "PTP")
+	ptpSource := findSourceByName(behavior.Sources, testSourcePTP)
 	if !assert.NotNil(t, ptpSource, "PTP source should exist") {
 		t.Fatal()
 	}
 	assert.Equal(t, ptpv2alpha1.SourceTypePTP, ptpSource.SourceType)
-	assert.Equal(t, "leader", ptpSource.Subsystem)
+	assert.Equal(t, testSubsystemLeader, ptpSource.Subsystem)
 	assert.Equal(t, "ETH01_SDP_TIMESYNC_0", ptpSource.BoardLabel)
 	assert.Equal(t, upstreamPorts, ptpSource.PTPTimeReceivers,
 		"PTPTimeReceivers should contain both upstream ports derived from PTP config")
@@ -391,7 +391,7 @@ func TestClockChainResolution_DualUpstream(t *testing.T) {
 	assert.NotNil(t, initCond, "Initialize T-BC condition should be present")
 	if initCond != nil && len(initCond.DesiredStates) > 0 && initCond.DesiredStates[0].DPLL != nil {
 		assert.Equal(t, "GNSS_1PPS_IN", initCond.DesiredStates[0].DPLL.BoardLabel)
-		assert.Equal(t, "leader", initCond.DesiredStates[0].DPLL.Subsystem)
+		assert.Equal(t, testSubsystemLeader, initCond.DesiredStates[0].DPLL.Subsystem)
 	}
 
 	lockedCond := findConditionByName(behavior.Conditions, "PTP Source Locked")
@@ -507,7 +507,7 @@ func TestClockChainResolutionWithE830(t *testing.T) {
 
 	// Set up mock leading interface resolver for the leader subsystem
 	mockResolver := newMockLeadingInterfaceResolver()
-	mockResolver.phcIDs["eno2"] = "/dev/ptp0"
+	mockResolver.phcIDs["eno2"] = testDevPtp0
 	mockResolver.symlinks["/sys/class/ptp/ptp0/device"] = "../../../0000:13:00.0"
 	mockResolver.dirEntries["/sys/bus/pci/devices/0000:13:00.0/net"] = []os.DirEntry{
 		&mockDirEntry{name: "eno5", isDir: false},
@@ -554,4 +554,209 @@ func TestClockChainResolutionWithE830(t *testing.T) {
 	}
 
 	t.Logf("ResolveClockChain succeeded: leader derived, %d E830 subsystems skipped", len(e830Before))
+}
+
+func TestMergeSourceConfig(t *testing.T) {
+	t.Run("merges gnssConfig onto template", func(t *testing.T) {
+		tpl := ptpv2alpha1.SourceConfig{
+			Name:       testSourceGNSS,
+			SourceType: ptpv2alpha1.SourceTypeGNSS,
+			Subsystem:  testSubsystemLeader,
+			BoardLabel: "GNSS_1PPS_IN",
+		}
+		user := ptpv2alpha1.SourceConfig{
+			Name:       testSourceGNSS,
+			SourceType: ptpv2alpha1.SourceTypeGNSS,
+			GNSSConfig: &ptpv2alpha1.GNSSConfig{
+				Init: ptpv2alpha1.GNSSInit{AntennaVoltage: true},
+			},
+		}
+		mergeSourceConfig(&tpl, &user)
+
+		assert.Equal(t, testSubsystemLeader, tpl.Subsystem, "template subsystem preserved")
+		assert.Equal(t, "GNSS_1PPS_IN", tpl.BoardLabel, "template boardLabel preserved")
+		assert.NotNil(t, tpl.GNSSConfig, "user gnssConfig merged")
+		assert.True(t, tpl.GNSSConfig.Init.AntennaVoltage)
+	})
+
+	t.Run("user overrides subsystem and boardLabel", func(t *testing.T) {
+		tpl := ptpv2alpha1.SourceConfig{
+			Name:       testSourcePTP,
+			Subsystem:  testSubsystemLeader,
+			BoardLabel: "DEFAULT_PIN",
+		}
+		user := ptpv2alpha1.SourceConfig{
+			Name:       testSourcePTP,
+			Subsystem:  "custom-sub",
+			BoardLabel: "CUSTOM_PIN",
+		}
+		mergeSourceConfig(&tpl, &user)
+
+		assert.Equal(t, "custom-sub", tpl.Subsystem)
+		assert.Equal(t, "CUSTOM_PIN", tpl.BoardLabel)
+	})
+
+	t.Run("empty user fields do not overwrite template", func(t *testing.T) {
+		tpl := ptpv2alpha1.SourceConfig{
+			Name:             testSourcePTP,
+			Subsystem:        testSubsystemLeader,
+			BoardLabel:       "TEMPLATE_PIN",
+			PTPTimeReceivers: []string{testIfaceE810},
+		}
+		user := ptpv2alpha1.SourceConfig{
+			Name: testSourcePTP,
+			// All other fields empty/nil
+		}
+		mergeSourceConfig(&tpl, &user)
+
+		assert.Equal(t, testSubsystemLeader, tpl.Subsystem)
+		assert.Equal(t, "TEMPLATE_PIN", tpl.BoardLabel)
+		assert.Equal(t, []string{testIfaceE810}, tpl.PTPTimeReceivers)
+		assert.Nil(t, tpl.GNSSConfig)
+	})
+
+	t.Run("user ptpTimeReceivers override template", func(t *testing.T) {
+		tpl := ptpv2alpha1.SourceConfig{
+			Name:             testSourcePTP,
+			PTPTimeReceivers: []string{"old-port"},
+		}
+		user := ptpv2alpha1.SourceConfig{
+			Name:             testSourcePTP,
+			PTPTimeReceivers: []string{"new-port1", "new-port2"},
+		}
+		mergeSourceConfig(&tpl, &user)
+
+		assert.Equal(t, []string{"new-port1", "new-port2"}, tpl.PTPTimeReceivers)
+	})
+}
+
+func TestDeriveBehavior_UnmatchedUserSourceAdded(t *testing.T) {
+	fakeClient := fake.NewClientset()
+	hcm := NewHardwareConfigManager(fakeClient, "default", nil)
+
+	clockType := testClockTypeTGM
+	hwConfig := &ptpv2alpha1.HardwareConfig{
+		Spec: ptpv2alpha1.HardwareConfigSpec{
+			Profile: ptpv2alpha1.HardwareProfile{
+				ClockType: &clockType,
+				ClockChain: &ptpv2alpha1.ClockChain{
+					Structure: []ptpv2alpha1.Subsystem{
+						{
+							Name:                        testSubsystemLeader,
+							HardwareSpecificDefinitions: HwDefIntelE825,
+							DPLL: ptpv2alpha1.DPLL{
+								NetworkInterface: testIfaceEns7f0,
+							},
+							Ethernet: []ptpv2alpha1.Ethernet{
+								{Ports: []string{testIfaceEns7f0}},
+							},
+						},
+					},
+					Behavior: &ptpv2alpha1.Behavior{
+						Sources: []ptpv2alpha1.SourceConfig{
+							{
+								Name:       "CustomSource",
+								SourceType: ptpv2alpha1.SourceTypeDPLL,
+								Subsystem:  testSubsystemLeader,
+								BoardLabel: "CUSTOM_PIN",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := hcm.deriveBehavior(hwConfig, clockType)
+	assert.NoError(t, err)
+
+	behavior := hwConfig.Spec.Profile.ClockChain.Behavior
+	assert.NotNil(t, behavior)
+
+	// Should have the template GNSS source + the unmatched custom source
+	var foundGNSS, foundCustom bool
+	for _, s := range behavior.Sources {
+		if s.Name == testSourceGNSS {
+			foundGNSS = true
+		}
+		if s.Name == "CustomSource" {
+			foundCustom = true
+			assert.Equal(t, ptpv2alpha1.SourceTypeDPLL, s.SourceType)
+			assert.Equal(t, "CUSTOM_PIN", s.BoardLabel)
+		}
+	}
+	assert.True(t, foundGNSS, "template GNSS source should be present")
+	assert.True(t, foundCustom, "unmatched user source should be added")
+}
+
+func TestDeriveBehavior_UserConditionsPreserved(t *testing.T) {
+	fakeClient := fake.NewClientset()
+	hcm := NewHardwareConfigManager(fakeClient, "default", nil)
+
+	clockType := testClockTypeTGM
+	hwConfig := &ptpv2alpha1.HardwareConfig{
+		Spec: ptpv2alpha1.HardwareConfigSpec{
+			Profile: ptpv2alpha1.HardwareProfile{
+				ClockType: &clockType,
+				ClockChain: &ptpv2alpha1.ClockChain{
+					Structure: []ptpv2alpha1.Subsystem{
+						{
+							Name:                        testSubsystemLeader,
+							HardwareSpecificDefinitions: HwDefIntelE825,
+							DPLL: ptpv2alpha1.DPLL{
+								NetworkInterface: testIfaceEns7f0,
+							},
+							Ethernet: []ptpv2alpha1.Ethernet{
+								{Ports: []string{testIfaceEns7f0}},
+							},
+						},
+					},
+					Behavior: &ptpv2alpha1.Behavior{
+						// User overrides "Initialize T-GM" with custom desired states
+						Conditions: []ptpv2alpha1.Condition{
+							{
+								Name: "Initialize T-GM",
+								DesiredStates: []ptpv2alpha1.DesiredState{
+									{DPLL: &ptpv2alpha1.DPLLDesiredState{
+										Subsystem:  testSubsystemLeader,
+										BoardLabel: "USER_OVERRIDE_PIN",
+									}},
+								},
+							},
+							{
+								Name: "Custom User Condition",
+								DesiredStates: []ptpv2alpha1.DesiredState{
+									{DPLL: &ptpv2alpha1.DPLLDesiredState{
+										Subsystem:  testSubsystemLeader,
+										BoardLabel: "USER_PIN",
+									}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := hcm.deriveBehavior(hwConfig, clockType)
+	assert.NoError(t, err)
+
+	behavior := hwConfig.Spec.Profile.ClockChain.Behavior
+	require.NotNil(t, behavior)
+
+	// "Initialize T-GM" should be the user's version (overrides template)
+	initCond := findConditionByName(behavior.Conditions, "Initialize T-GM")
+	require.NotNil(t, initCond, "Initialize T-GM should be present")
+	require.Len(t, initCond.DesiredStates, 1)
+	assert.Equal(t, "USER_OVERRIDE_PIN", initCond.DesiredStates[0].DPLL.BoardLabel,
+		"User condition should override template condition")
+
+	// "Custom User Condition" should be preserved (unmatched, appended)
+	customCond := findConditionByName(behavior.Conditions, "Custom User Condition")
+	require.NotNil(t, customCond, "Unmatched user condition should be appended")
+	assert.Equal(t, "USER_PIN", customCond.DesiredStates[0].DPLL.BoardLabel)
+
+	// Template sources should still be present
+	assert.NotEmpty(t, behavior.Sources, "Template sources should be derived")
 }
