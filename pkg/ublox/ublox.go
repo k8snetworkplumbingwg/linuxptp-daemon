@@ -50,41 +50,37 @@ var (
 	}
 )
 
-func cmdMsgoutAllBusses(prefix, msg string, val int) CommandList {
-	result := make(CommandList, len(ublxBusTypes))
-	for i, bus := range ublxBusTypes {
-		result[i] = Command{
-			Args: []string{"-z", fmt.Sprintf("CFG-MSGOUT-%s_%s_%s,%d", prefix, msg, bus, val)},
+func batchMsgoutAllBusses(prefix string, msgs []string, val int) Command {
+	result := Command{}
+	for _, msg := range msgs {
+		for _, bus := range ublxBusTypes {
+			result.Args = append(result.Args, "-z", fmt.Sprintf("CFG-MSGOUT-%s_%s_%s,%d", prefix, msg, bus, val))
 		}
 	}
 	return result
 }
 
 // Generates a series of UblxCmds which disable the given message type on all bus types
-func cmdDisableNmeaMsg(msg string) CommandList {
-	return cmdMsgoutAllBusses("NMEA_ID", msg, 0)
+func batchDisableNmeaMsgs(msgs []string) Command {
+	return batchMsgoutAllBusses("NMEA_ID", msgs, 0)
 }
 
 // Generate a series of commands to enable the given b8nary command on all bus types
-func cmdEnableNavMsg(msg string) CommandList {
-	return cmdMsgoutAllBusses("UBX_NAV", msg, 1)
+func batchEnableNavMsgs(msgs []string) Command {
+	return batchMsgoutAllBusses("UBX_NAV", msgs, 1)
 }
 
 // Return the default set of commands we need to set at initialization
 func defaultUblxCmds() CommandList {
 	// Begin by disabling all binary commands, then re-adding the ones we need
 	cmds := CommandList{disableBinary}
-	// Re-enable required b8nary commands
-	for _, msg := range navEnableMsg {
-		cmds = append(cmds, cmdEnableNavMsg(msg)...)
-	}
+	// Re-enable required binary commands
+	cmds = append(cmds, batchEnableNavMsgs(navEnableMsg))
 
 	// Next, enable all NMEA commands, but prune out any we don't need:
 	cmds = append(cmds, enableNMEA)
 	// More pruning of all bus-specific NMEA messages
-	for _, msg := range nmeaDisableMsg {
-		cmds = append(cmds, cmdDisableNmeaMsg(msg)...)
-	}
+	cmds = append(cmds, batchDisableNmeaMsgs(nmeaDisableMsg))
 
 	return cmds
 }
