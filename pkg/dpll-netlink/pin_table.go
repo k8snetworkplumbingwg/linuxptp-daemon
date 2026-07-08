@@ -15,6 +15,15 @@ import (
 // table when the DPLL driver is slow/unresponsive than to stall on it.
 const pinTableNetlinkTimeout = 2 * time.Second
 
+// pinTableHeaders/pinTableHeadersWithDir are the column sets shared by every
+// pin table rendered from this file. Kept as package vars (rather than
+// inlined at each call site) so the two render paths (filtered/no-dir vs.
+// unfiltered/with-dir) stay visibly in sync.
+var (
+	pinTableHeaders        = []interface{}{"id", "Brd. L", "Pkg. L", "prio", "adm.", "oper."}
+	pinTableHeadersWithDir = []interface{}{"id", "Brd. L", "Pkg. L", "dir", "prio", "adm.", "oper."}
+)
+
 // pinTableConn is a DPLL netlink connection shared across LogPinTable calls,
 // guarded by pinTableConnMu. Reusing one connection instead of dialing fresh
 // on every device notification avoids the socket churn a per-call Dial would
@@ -98,7 +107,8 @@ func isActiveParent(pd *PinParentDevice) bool {
 }
 
 // pinRow holds the single relevant parent-device entry for one pin, ready to
-// be rendered as one table row.
+// be rendered as one table row (no "dir" column: buildPinRows only ever
+// keeps input pins, so it would be constant and redundant).
 type pinRow struct {
 	id           uint32
 	boardLabel   string
@@ -106,6 +116,79 @@ type pinRow struct {
 	prio         string
 	admin        string
 	oper         string
+}
+
+// columns renders a pinRow as a table row.
+func (r pinRow) columns() []string {
+	return []string{fmt.Sprintf("%d", r.id), r.boardLabel, r.packageLabel, r.prio, r.admin, r.oper}
+}
+
+// pinRowsToColumns converts rows to the [][]string shape renderTable expects.
+func pinRowsToColumns(rows []pinRow) [][]string {
+	cols := make([][]string, len(rows))
+	for i, r := range rows {
+		cols[i] = r.columns()
+	}
+	return cols
+}
+
+// renderTable renders headers/rows into a table string using the shared
+// rodaine/table formatting for this package. Pure function: no I/O, no
+// logging, so it's trivial to unit test and safe to reuse from any call site
+// that already has data shaped as rows of strings.
+func renderTable(headers []interface{}, rows [][]string) string {
+	var buf bytes.Buffer
+	tbl := table.New(headers...)
+	tbl.WithWriter(&buf)
+	tbl.SetRows(rows)
+	tbl.Print()
+	return buf.String()
+}
+
+// LogPins logs the given pins as a compact table, one row per parent device
+// of each pin. Unlike LogPinTable, this applies no filtering by direction,
+// clock ID, device, or lock state — every parent device of every pin passed
+// in is shown, including output pins.
+//
+// This is the shared rendering primitive behind LogPinTable and
+// LogPinConfirmation, exported so other packages that already hold a
+// []*PinInfo (their own DumpPinGet result, a single pin from DoPinGet, or a
+// test fixture) can log a consistent table without duplicating table-building
+// code or going through LogPinTable's dial/dump/notification-filtering path.
+func LogPins(title string, pins []*PinInfo) {
+	var rows [][]string
+	for _, pin := range pins {
+		for _, pd := range pin.ParentDevice {
+			prioStr := "n/a"
+			if pd.Prio != nil {
+				prioStr = fmt.Sprintf("%d", *pd.Prio)
+			}
+			rows = append(rows, []string{
+				fmt.Sprintf("%d", pin.ID),
+				pin.BoardLabel,
+				pin.PackageLabel,
+				GetPinDirection(pd.Direction),
+				prioStr,
+				GetPinState(pd.State),
+				GetPinOperstate(pd.Operstate),
+			})
+		}
+	}
+	if len(rows) == 0 {
+		glog.Infof("=== DPLL pin table (%s): no relevant pins ===", title)
+		return
+	}
+	glog.Infof("=== DPLL pin table (%s) ===\n%s", title, renderTable(pinTableHeadersWithDir, rows))
+}
+
+// LogPinConfirmation logs the current configuration of a single pin via
+// LogPins. Unlike LogPinTable, this applies no filtering by direction, clock
+// ID, device, or lock state — it's meant to show the full post-write state of
+// exactly the pin that was just set (including output pins, which
+// LogPinTable always skips), immediately after a pin-set command, for
+// confirmation purposes.
+func LogPinConfirmation(pin *PinInfo) {
+	LogPins(fmt.Sprintf("confirm pin=%d %#x", pin.ID, pin.ClockID), []*PinInfo{pin})
 }
 
 // buildPinRows selects, among the pins belonging to clockID, the input pins
@@ -170,19 +253,21 @@ func buildPinRows(pins []*PinInfo, clockID uint64, deviceID uint32, lockStatus u
 // nlUpdateState, processing notifications inline) are never blocked or
 // stalled by it.
 func LogPinTable(reason string, clockID uint64, deviceID uint32, lockStatus uint32) {
-	go logPinTable(reason, clockID, deviceID, lockStatus)
+	go fetchAndLogPinTable(reason, clockID, deviceID, lockStatus)
 }
 
-// logPinTable fetches DPLL pins and logs the table. Only pins belonging to
-// clockID are considered, and only the parent-device entry for deviceID is
-// looked at, so unrelated clock chips and the other DPLL sharing the same
-// chip (e.g. PPS vs EEC) don't pollute the table.
+// fetchAndLogPinTable dials (or reuses) a DPLL connection, dumps every pin on
+// the system, filters them down to the ones relevant to clockID/deviceID/
+// lockStatus (see buildPinRows), and logs the result as a table. Only pins
+// belonging to clockID are considered, and only the parent-device entry for
+// deviceID is looked at, so unrelated clock chips and the other DPLL sharing
+// the same chip (e.g. PPS vs EEC) don't pollute the table.
 //
 // It reuses a shared connection (see pinTableConn) rather than dialing fresh
 // every call, and bounds the dump with pinTableNetlinkTimeout so a slow or
 // unresponsive DPLL driver can't stall this indefinitely; either failure
 // mode discards the shared connection so the next call starts clean.
-func logPinTable(reason string, clockID uint64, deviceID uint32, lockStatus uint32) {
+func fetchAndLogPinTable(reason string, clockID uint64, deviceID uint32, lockStatus uint32) {
 	pinTableConnMu.Lock()
 	defer pinTableConnMu.Unlock()
 
@@ -212,13 +297,5 @@ func logPinTable(reason string, clockID uint64, deviceID uint32, lockStatus uint
 		return
 	}
 
-	var buf bytes.Buffer
-	tbl := table.New("id", "Brd. L", "Pkg. L", "prio", "adm.", "oper.")
-	tbl.WithWriter(&buf)
-	for _, r := range rows {
-		tbl.AddRow(r.id, r.boardLabel, r.packageLabel, r.prio, r.admin, r.oper)
-	}
-	tbl.Print()
-
-	glog.Infof("=== DPLL pin table (%s) clockID=%#x ===\n%s", reason, clockID, buf.String())
+	glog.Infof("=== DPLL pin table (%s) clockID=%#x ===\n%s", reason, clockID, renderTable(pinTableHeaders, pinRowsToColumns(rows)))
 }

@@ -196,6 +196,74 @@ func TestDialPinTableConn_ReturnsPromptly(t *testing.T) {
 	assert.Less(t, time.Since(start), pinTableNetlinkTimeout)
 }
 
+func TestRenderTable(t *testing.T) {
+	selectable := GetPinState(PinStateSelectable)
+	out := renderTable(pinTableHeaders, [][]string{
+		{"16", "REF0P", "", "6", selectable, pinOperstateActive},
+		{"17", "REF0N", "", "7", selectable, pinOperstateStandby},
+	})
+	assert.Contains(t, out, "id")
+	assert.Contains(t, out, "REF0P")
+	assert.Contains(t, out, "REF0N")
+	assert.Contains(t, out, pinOperstateActive)
+}
+
+func TestRenderTable_Empty(t *testing.T) {
+	out := renderTable(pinTableHeaders, nil)
+	// Header row should still render even with zero data rows.
+	assert.Contains(t, out, "id")
+}
+
+func TestPinRowColumns(t *testing.T) {
+	selectable := GetPinState(PinStateSelectable)
+	r := pinRow{id: 16, boardLabel: testPinREF0P, packageLabel: "", prio: "6", admin: selectable, oper: pinOperstateActive}
+	assert.Equal(t, []string{"16", testPinREF0P, "", "6", selectable, pinOperstateActive}, r.columns())
+}
+
+func TestPinRowsToColumns(t *testing.T) {
+	selectable := GetPinState(PinStateSelectable)
+	rows := []pinRow{
+		{id: 16, boardLabel: testPinREF0P, prio: "6", admin: selectable, oper: pinOperstateActive},
+		{id: 17, boardLabel: testPinREF0N, prio: "7", admin: selectable, oper: pinOperstateStandby},
+	}
+	cols := pinRowsToColumns(rows)
+	assert.Len(t, cols, 2)
+	assert.Equal(t, "16", cols[0][0])
+	assert.Equal(t, testPinREF0N, cols[1][1])
+}
+
+// TestLogPins_DoesNotPanic exercises LogPins (and, through it,
+// LogPinConfirmation) across a few shapes that could plausibly trip up the
+// row-building loop: no pins, a pin with no parent devices, and a pin with
+// multiple parents including an output direction (which LogPins, unlike
+// LogPinTable/buildPinRows, must still show).
+func TestLogPins_DoesNotPanic(t *testing.T) {
+	assert.NotPanics(t, func() { LogPins("empty", nil) })
+	assert.NotPanics(t, func() { LogPins("no-parents", []*PinInfo{{ID: 1, BoardLabel: "X"}}) })
+	assert.NotPanics(t, func() {
+		LogPins("mixed", []*PinInfo{
+			{
+				ID: 25, ClockID: 0xAA, BoardLabel: "OUT3",
+				ParentDevice: []PinParentDevice{
+					{ParentID: 1, Direction: PinDirectionOutput, State: PinStateConnected, Prio: prio(3)},
+					{ParentID: 2, Direction: PinDirectionInput, State: PinStateSelectable, Prio: nil},
+				},
+			},
+		})
+	})
+}
+
+func TestLogPinConfirmation_DoesNotPanic(t *testing.T) {
+	assert.NotPanics(t, func() {
+		LogPinConfirmation(&PinInfo{
+			ID: 16, ClockID: 0xAA, BoardLabel: testPinREF0P,
+			ParentDevice: []PinParentDevice{
+				{ParentID: 1, Direction: PinDirectionInput, State: PinStateConnected, Prio: prio(6)},
+			},
+		})
+	})
+}
+
 func TestBuildPinRows_WithPackageLabel(t *testing.T) {
 	pins := []*PinInfo{
 		{

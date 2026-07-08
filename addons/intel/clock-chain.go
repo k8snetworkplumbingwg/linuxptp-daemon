@@ -6,6 +6,7 @@ import (
 
 	"github.com/golang/glog"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
@@ -599,35 +600,8 @@ func (c *ClockChain) SetPinDefaults() error {
 	return errors.Join(err, fetchErr)
 }
 
-// BatchPinSet function pointer allows mocking of BatchPinSet
-var BatchPinSet = batchPinSet
-
-func batchPinSet(commands []dpll.PinParentDeviceCtl) error {
-	conn, err := dpll.Dial(nil)
-	if err != nil {
-		return fmt.Errorf("failed to dial DPLL: %v", err)
-	}
-	//nolint:errcheck
-	defer conn.Close()
-	for _, command := range commands {
-		glog.Infof("DPLL pin command %s", command.String())
-		b, err := dpll.EncodePinControl(command)
-		if err != nil {
-			return err
-		}
-		err = conn.SendCommand(dpll.DpllCmdPinSet, b)
-		if err != nil {
-			glog.Error("failed to send pin command: ", err)
-			return err
-		}
-		// Read back the pin purely to confirm the command was applied; the actual
-		// pin state is logged elsewhere (LogPinTable) when a DPLL notification
-		// reports a lock-state change, so we don't log it again here.
-		_, err = conn.DoPinGet(dpll.DoPinGetRequest{ID: command.ID})
-		if err != nil {
-			glog.Error("failed to get pin: ", err)
-			return err
-		}
-	}
-	return nil
-}
+// BatchPinSet function pointer allows mocking of BatchPinSet. Delegates to
+// hardwareconfig.BatchPinSet so both packages share one implementation
+// (dial, send, read-back-and-log-as-table, RHEL-137801 workaround) instead
+// of maintaining two near-identical copies.
+var BatchPinSet = hardwareconfig.BatchPinSet

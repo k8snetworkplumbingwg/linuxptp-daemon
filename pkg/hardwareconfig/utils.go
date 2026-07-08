@@ -478,14 +478,16 @@ func BatchPinSet(commands []dpll.PinParentDeviceCtl) error {
 			glog.Error("failed to send pin command: ", err)
 			return err
 		}
-		// Read back the pin purely to confirm the command was applied; the actual
-		// pin state is logged elsewhere (LogPinTable) when a DPLL notification
-		// reports a lock-state change, so we don't log it again here.
-		if _, getErr := conn.DoPinGet(dpll.DoPinGetRequest{ID: command.ID}); getErr != nil {
+		// Read back the pin to confirm the command was applied, and log it as a
+		// table (see LogPinConfirmation) since LogPinTable never shows output
+		// pins and reflects state as of the next notification, not this write.
+		info, getErr := conn.DoPinGet(dpll.DoPinGetRequest{ID: command.ID})
+		if getErr != nil {
 			glog.Error("failed to get pin: ", getErr)
 			//TODO: handle properly after RHEL-137801 is fixed
 			return nil
 		}
+		dpll.LogPinConfirmation(info)
 	}
 	return nil
 }
