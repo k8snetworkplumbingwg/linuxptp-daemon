@@ -28,51 +28,54 @@ const (
 var (
 	// Disable all binary messages
 	disableBinary = Command{Args: []string{"-d", "BINARY"}}
-	// Re-enable NAV-CLOCK every 1s
-	enableBinaryNavClock = Command{Args: []string{"-p", "CFG-MSG,1,34,1"}}
-	// Re-enable NAV-CLOCK every 1s
-	enableBinaryNavStatus = Command{Args: []string{"-p", "CFG-MSG,1,3,1"}}
+	// NAV message types to re-enable
+	navEnableMsg = []string{
+		"CLOCK", "STATUS", "TIMELS",
+	}
 
 	// Enable all NMEA messages
-	enableNMEA = Command{Args: []string{"-e", "NMEA"}}
-	// Disable unneeded SA messages
-	disableSA = Command{Args: []string{"-p", "CFG-MSG,0xf0,0x02,0"}}
-	// Disable unneeded SV messages
-	disableSv = Command{Args: []string{"-p", "CFG-MSG,0xf0,0x03,0"}}
-
-	// Additional NMEA messages to disable by default
+	enableNMEA     = Command{Args: []string{"-e", "NMEA"}}
 	nmeaDisableMsg = []string{
-		"VTG", "GST", "ZDA", "GBS",
+		"VTG", "GST", "ZDA", "GBS", "GSA", "GSV",
 	}
 
 	// All NMEA bus types to disable NMEA messages
-	nmeaBusTypes = []string{
+	ublxBusTypes = []string{
 		"I2C", "UART1", "UART2", "USB", "SPI",
 	}
 )
 
-// Generates a series of UblxCmds which disable the given message type on all bus types
-func cmdDisableNmeaMsg(msg string) CommandList {
-	result := make(CommandList, len(nmeaBusTypes))
-	for i, bus := range nmeaBusTypes {
+func cmdMsgoutAllBusses(prefix, msg string, val int) CommandList {
+	result := make(CommandList, len(ublxBusTypes))
+	for i, bus := range ublxBusTypes {
 		result[i] = Command{
-			Args: []string{"-z", fmt.Sprintf("CFG-MSGOUT-NMEA_ID_%s_%s,0", msg, bus)},
+			Args: []string{"-z", fmt.Sprintf("CFG-MSGOUT-%s_%s_%s,%d", prefix, msg, bus, val)},
 		}
 	}
 	return result
 }
 
+// Generates a series of UblxCmds which disable the given message type on all bus types
+func cmdDisableNmeaMsg(msg string) CommandList {
+	return cmdMsgoutAllBusses("NMEA_ID", msg, 0)
+}
+
+// Generate a series of commands to enable the given b8nary command on all bus types
+func cmdEnableNavMsg(msg string) CommandList {
+	return cmdMsgoutAllBusses("UBX_NAV", msg, 1)
+}
+
 // Return the default set of commands we need to set at initialization
 func defaultUblxCmds() CommandList {
-	// Begin by disabling all binary commands, then re-adding only NAV-CLOCK and NAV-STATUS
-	cmds := CommandList{
-		disableBinary, enableBinaryNavClock, enableBinaryNavStatus,
+	// Begin by disabling all binary commands, then re-adding the ones we need
+	cmds := CommandList{disableBinary}
+	// Re-enable required b8nary commands
+	for _, msg := range navEnableMsg {
+		cmds = append(cmds, cmdEnableNavMsg(msg)...)
 	}
+
 	// Next, enable all NMEA commands, but prune out any we don't need:
-	cmds = append(
-		cmds,
-		enableNMEA, disableSA, disableSv,
-	)
+	cmds = append(cmds, enableNMEA)
 	// More pruning of all bus-specific NMEA messages
 	for _, msg := range nmeaDisableMsg {
 		cmds = append(cmds, cmdDisableNmeaMsg(msg)...)
