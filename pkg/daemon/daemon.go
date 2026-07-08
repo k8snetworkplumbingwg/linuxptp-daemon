@@ -439,7 +439,8 @@ type Daemon struct {
 	processManager *ProcessManager
 	readyTracker   *ReadyTracker
 
-	hwconfigs *[]ptpv1.HwConfig
+	hwconfigs   *[]ptpv1.HwConfig
+	hwconfigsMu sync.Mutex // protects hwconfigs from concurrent GPSD goroutine writes
 
 	// Hardware config manager handles hardware configurations from HardwareConfig CRs
 	hardwareConfigManager *hardwareconfig.HardwareConfigManager
@@ -774,7 +775,9 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// only apply when nodeProfile changes
 
 	// clear hwconfig before updating
+	dn.hwconfigsMu.Lock()
 	*dn.hwconfigs = []ptpv1.HwConfig{}
+	dn.hwconfigsMu.Unlock()
 
 	glog.Infof("updating NodePTPProfiles to:")
 	runID := 0
@@ -889,7 +892,9 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 			break
 		}
 	}
+	dn.hwconfigsMu.Lock()
 	dn.pluginManager.PopulateHwConfig(dn.hwconfigs)
+	dn.hwconfigsMu.Unlock()
 	*dn.refreshNodePtpDevice = true
 	dn.readyTracker.setConfig(true)
 	return dn.sendSidecarRestart()
@@ -1246,19 +1251,41 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				if output.gnss_serial_port == "" {
 					output.gnss_serial_port = GPSPIPE_SERIALPORT
 				}
-				// TODO: move this to plugin or call it from hwplugin or leave it here and remove Hardcoded
 				gmInterface := dprocess.ifaces.GetLeadingInterface().Name
 
+				// Record ublox init results (MON-HW, etc.) to NodePtpDevice status.
+				// Replaces any previous "gnss" entries to avoid duplicates on re-init.
+				gnssResultsFn := func(results []string) {
+					dn.hwconfigsMu.Lock()
+					defer dn.hwconfigsMu.Unlock()
+					// Remove previous gnss entries
+					filtered := (*dn.hwconfigs)[:0]
+					for _, hw := range *dn.hwconfigs {
+						if hw.DeviceID != "gnss" {
+							filtered = append(filtered, hw)
+						}
+					}
+					// Add current results
+					for _, result := range results {
+						filtered = append(filtered, ptpv1.HwConfig{
+							DeviceID: "gnss",
+							Status:   result,
+						})
+					}
+					*dn.hwconfigs = filtered
+				}
+
 				gpsDaemon := &GPSD{
-					name:        GPSD_PROCESSNAME,
-					execMutex:   sync.Mutex{},
-					cmd:         nil,
-					serialPort:  output.gnss_serial_port,
-					exitCh:      make(chan struct{}),
-					gmInterface: gmInterface,
-					stopped:     false,
-					messageTag:  messageTag,
-					ublxTool:    nil,
+					name:          GPSD_PROCESSNAME,
+					execMutex:     sync.Mutex{},
+					cmd:           nil,
+					serialPort:    output.gnss_serial_port,
+					exitCh:        make(chan struct{}),
+					gmInterface:   gmInterface,
+					stopped:       false,
+					messageTag:    messageTag,
+					ublxTool:      nil,
+					gnssResultsFn: gnssResultsFn,
 				}
 				gpsDaemon.CmdInit()
 				gpsDaemon.cmdLine = addScheduling(nodeProfile, gpsDaemon.cmdLine)

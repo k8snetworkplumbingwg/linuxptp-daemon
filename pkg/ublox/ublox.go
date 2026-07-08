@@ -43,6 +43,11 @@ var (
 	ublxBusTypes = []string{
 		"I2C", "UART1", "UART2", "USB", "SPI",
 	}
+
+	monHW = Command{
+		Args:         []string{"-w", QueryTimeout, "-p", "MON-HW"},
+		ReportOutput: true,
+	}
 )
 
 func cmdMsgoutAllBusses(prefix, msg string, val int) CommandList {
@@ -81,8 +86,6 @@ func defaultUblxCmds() CommandList {
 		cmds = append(cmds, cmdDisableNmeaMsg(msg)...)
 	}
 
-	// Finally, save the state
-	cmds = append(cmds, SaveCommand)
 	return cmds
 }
 
@@ -91,6 +94,7 @@ type UBlox struct {
 	status       int
 	statusMutex  sync.Mutex
 	protoVersion string
+	initResults  []string // recorded output from extra init commands with ReportOutput=true
 	mockExp      func(cmdStr string) ([]string, error)
 	cmd          *exec.Cmd
 	reader       *bufio.Reader
@@ -100,28 +104,53 @@ type UBlox struct {
 	buffermutex  sync.Mutex
 }
 
-// NewUblox creates and initializes a new Ublox monitoring object
-// Returns an error if the underlying gps channel is not available or the protocol version could not be detected
-func NewUblox() (*UBlox, error) {
+// InitResults returns recorded output from extra init commands that had
+// ReportOutput set to true. Returns nil if no extra commands were provided
+// or none had ReportOutput set.
+func (u *UBlox) InitResults() []string {
+	return u.initResults
+}
+
+// NewUblox creates and initializes a new Ublox monitoring object.
+// Optional extraCmds are run after the default initialization commands
+// but before SAVE (e.g., GNSS configuration from HardwareConfig).
+// Returns an error if the underlying gps channel is not available or the protocol version could not be detected.
+func NewUblox(extraCmds ...Command) (*UBlox, error) {
 	u := UBlox{}
-	if err := u.Init(); err != nil {
+	if err := u.Init(extraCmds...); err != nil {
 		return nil, err
 	}
 	return &u, nil
 }
 
-// Init detects the protocol version and sets up the core message types we require for both GNSS monitoring and ts2phc
-func (u *UBlox) Init() error {
+// Init detects the protocol version and sets up the core message types
+// we require for both GNSS monitoring and ts2phc. Optional extraCmds
+// are run after the defaults but before the final SAVE.
+func (u *UBlox) Init(extraCmds ...Command) error {
 	runner, err := NewCommandRunner()
 	if err != nil {
 		return fmt.Errorf("no version detected: %w", err)
 	}
 	u.protoVersion = runner.protoVersion
 	glog.Infof("UBX protocol version detected: %s", u.protoVersion)
+
+	// Build the full init sequence: defaults → extras → MON-HW → SAVE
+	var cmds CommandList
+	cmds = append(cmds, defaultUblxCmds()...)
+	cmds = append(cmds, extraCmds...)
+	cmds = append(cmds, monHW, SaveCommand)
+
 	var errs []error
-	for _, cmd := range defaultUblxCmds() {
-		_, runErr := runner.Run(cmd)
+	for _, cmd := range cmds {
+		output, runErr := runner.Run(cmd)
 		errs = append(errs, runErr)
+		if cmd.ReportOutput {
+			if runErr != nil {
+				u.initResults = append(u.initResults, runErr.Error())
+			} else {
+				u.initResults = append(u.initResults, output)
+			}
+		}
 	}
 	return errors.Join(errs...)
 }
