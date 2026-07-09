@@ -887,12 +887,14 @@ func TestLoadBehaviorProfile_TGM(t *testing.T) {
 	loader := NewBoardLabelMapLoader(fakeClient, "default")
 
 	tests := []struct {
-		name  string
-		hwDef string
+		name           string
+		hwDef          string
+		gnssBoardLabel string
 	}{
-		{"intel/e825", HwDefIntelE825},
-		{"dell/XR8720t", HwDefDellXR8720t},
-		{"hpe/EL140-Gen12", HwDefHPEEL140Gen12},
+		{HwDefIntelE810, HwDefIntelE810, "GNSS-1PPS"},
+		{HwDefIntelE825, HwDefIntelE825, "GNSS_1PPS_IN"},
+		{HwDefDellXR8720t, HwDefDellXR8720t, "GNSS_1PPS_IN"},
+		{HwDefHPEEL140Gen12, HwDefHPEEL140Gen12, "GNSS_1PPS_IN"},
 	}
 
 	for _, tt := range tests {
@@ -907,9 +909,7 @@ func TestLoadBehaviorProfile_TGM(t *testing.T) {
 			assert.NotEmpty(t, template.Sources)
 			assert.Equal(t, testSourceGNSS, template.Sources[0].Name)
 			assert.Equal(t, ptpv2alpha1.SourceTypeGNSS, template.Sources[0].SourceType)
-
-			// GNSS boardLabel should be hardcoded (no pinRoles indirection for T-GM)
-			assert.Equal(t, "GNSS_1PPS_IN", template.Sources[0].BoardLabel)
+			assert.Equal(t, tt.gnssBoardLabel, template.Sources[0].BoardLabel)
 
 			// Should have init condition
 			assert.NotEmpty(t, template.Conditions)

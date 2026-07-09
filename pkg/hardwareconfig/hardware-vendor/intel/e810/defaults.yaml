@@ -41,44 +41,6 @@ pinDefaults:
     pps:
       priority: 9
 
-connectorCommands:
-  outputs:
-    SMA1:
-      commands:
-      - type: FSWrite
-        path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA1
-        value: "2 1"
-    SMA2:
-      commands:
-      - type: FSWrite
-        path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA2
-        value: "2 2"
-        description: Enable SMA2 output
-  inputs:
-    SMA1:
-      commands:
-      - type: FSWrite
-        path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA1
-        value: "1 1"
-    SMA2:
-      commands:
-      - type: FSWrite
-        path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA2
-        value: "1 2"
-        description: Enable SMA2 input
-  disable:
-    SMA1:
-      commands:
-      - type: FSWrite
-        path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA1
-        value: "0 1"
-    SMA2:
-      commands:
-      - type: FSWrite
-        path: /sys/class/net/{interface}/device/ptp/ptp*/pins/SMA2
-        value: "0 2"
-
-
 internalDelays:
   partType: E810-XXVDA4T
   externalInputs:
@@ -132,3 +94,4 @@ pinEsyncCommands:
       type: DPLLWrite
       arguments:
         - eSyncFrequency
+

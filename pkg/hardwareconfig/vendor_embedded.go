@@ -37,6 +37,9 @@ var hpeEL140Gen12DefaultsYAML []byte
 //go:embed hardware-vendor/intel/e830/defaults.yaml
 var intelE830DefaultsYAML []byte
 
+//go:embed hardware-vendor/intel/e810/behavior-profiles.yaml
+var intelE810BehaviorProfilesYAML []byte
+
 //go:embed hardware-vendor/intel/e825/behavior-profiles.yaml
 var intelE825BehaviorProfilesYAML []byte
 
@@ -67,6 +70,7 @@ var embeddedDefaults = map[string][]byte{
 
 // embeddedBehaviorProfiles maps hwDefPath -> raw YAML contents for behavior profiles.
 var embeddedBehaviorProfiles = map[string][]byte{
+	HwDefIntelE810:     intelE810BehaviorProfilesYAML,
 	HwDefIntelE825:     intelE825BehaviorProfilesYAML,
 	HwDefDellXR8720t:   dellXR8720tBehaviorProfilesYAML,
 	HwDefHPEEL140Gen12: hpeEL140Gen12BehaviorProfilesYAML,

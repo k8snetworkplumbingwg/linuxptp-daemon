@@ -2101,3 +2101,108 @@ func TestGetInterfaceNameFromSources_GNSSSource(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+func TestTranslateConnectorCommands(t *testing.T) {
+	const (
+		connSMA1    = "SMA1"
+		connSMA2    = "SMA2"
+		cmdFSWrite  = "FSWrite"
+		sma1PinPath = "/sys/class/net/{interface}/device/ptp/ptp*/pins/SMA1"
+		sma2PinPath = "/sys/class/net/{interface}/device/ptp/ptp*/pins/SMA2"
+		testIfaceCC = "ens7f0"
+	)
+
+	// Set up mock PTP device resolver so ptp* glob paths resolve
+	mockDevices := map[string][]string{
+		"/sys/class/net/" + testIfaceCC + "/device/ptp/ptp*/pins/SMA1": {
+			"/sys/class/net/" + testIfaceCC + "/device/ptp/ptp0/pins/SMA1",
+		},
+		"/sys/class/net/" + testIfaceCC + "/device/ptp/ptp*/pins/SMA2": {
+			"/sys/class/net/" + testIfaceCC + "/device/ptp/ptp0/pins/SMA2",
+		},
+	}
+	SetupMockPtpDeviceResolverWithDevices(mockDevices)
+	defer TeardownMockPtpDeviceResolver()
+
+	hcm := newHardwareConfigManagerForTests()
+
+	commands := &ConnectorCommands{
+		Outputs: map[string]ConnectorAction{
+			connSMA1: {Commands: []ConnectorCommand{
+				{Type: cmdFSWrite, Path: sma1PinPath, Value: "2 1"},
+			}},
+			connSMA2: {Commands: []ConnectorCommand{
+				{Type: cmdFSWrite, Path: sma2PinPath, Value: "2 2", Description: "Enable SMA2 output"},
+			}},
+		},
+		Inputs: map[string]ConnectorAction{
+			connSMA1: {Commands: []ConnectorCommand{
+				{Type: cmdFSWrite, Path: sma1PinPath, Value: "1 1"},
+			}},
+		},
+		Disable: map[string]ConnectorAction{
+			connSMA1: {Commands: []ConnectorCommand{
+				{Type: cmdFSWrite, Path: sma1PinPath, Value: "0 1"},
+			}},
+			connSMA2: {Commands: []ConnectorCommand{
+				{Type: cmdFSWrite, Path: sma2PinPath, Value: "0 2"},
+			}},
+		},
+	}
+
+	t.Run("output_connectors", func(t *testing.T) {
+		outputMap := map[string]struct{}{connSMA1: {}, connSMA2: {}}
+		result, err := hcm.translateConnectorCommands(commands, testIfaceCC, "leader", nil, outputMap)
+		assert.NoError(t, err)
+		// SMA1 + SMA2 as outputs; neither used as input so no disable
+		assert.Len(t, result, 2, "Should have 2 output commands")
+		for _, cmd := range result {
+			assert.Contains(t, cmd.Path, "ptp0", "ptp* should be resolved")
+			assert.NotContains(t, cmd.Path, "{interface}", "interface should be substituted")
+		}
+	})
+
+	t.Run("input_connectors", func(t *testing.T) {
+		inputMap := map[string]struct{}{connSMA1: {}}
+		result, err := hcm.translateConnectorCommands(commands, testIfaceCC, "leader", inputMap, nil)
+		assert.NoError(t, err)
+		// SMA1 as input + SMA2 disabled (unused connector with disable command)
+		assert.Len(t, result, 2, "Should have input + disable commands")
+	})
+
+	t.Run("disable_unused_connectors", func(t *testing.T) {
+		// No connectors used at all → both SMA1 and SMA2 get disabled
+		result, err := hcm.translateConnectorCommands(commands, testIfaceCC, "leader", nil, nil)
+		assert.NoError(t, err)
+		assert.Len(t, result, 2, "Should disable both unused connectors")
+		for _, cmd := range result {
+			assert.Contains(t, cmd.Value, "0 ", "Should be disable value")
+		}
+	})
+
+	t.Run("nil_commands", func(t *testing.T) {
+		result, err := hcm.translateConnectorCommands(nil, testIfaceCC, "leader", nil, nil)
+		assert.NoError(t, err)
+		assert.Nil(t, result)
+	})
+
+	t.Run("empty_interface", func(t *testing.T) {
+		result, err := hcm.translateConnectorCommands(commands, "", "leader", nil, nil)
+		assert.NoError(t, err)
+		assert.Nil(t, result, "Should skip when no interface")
+	})
+
+	t.Run("unsupported_command_type", func(t *testing.T) {
+		badCmds := &ConnectorCommands{
+			Outputs: map[string]ConnectorAction{
+				connSMA1: {Commands: []ConnectorCommand{
+					{Type: "ExecCmd", Path: "/bin/echo", Value: "hello"},
+				}},
+			},
+		}
+		outputMap := map[string]struct{}{connSMA1: {}}
+		result, err := hcm.translateConnectorCommands(badCmds, testIfaceCC, "leader", nil, outputMap)
+		assert.NoError(t, err)
+		assert.Empty(t, result, "Unsupported command types should be skipped")
+	})
+}
