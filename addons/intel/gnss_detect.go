@@ -6,13 +6,13 @@ import (
 
 	"github.com/bigkevmcd/go-configparser"
 	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
 const (
-	nmeaSerialPortKey       = "ts2phc.nmea_serialport"
-	ts2phcMasterKey         = "ts2phc.master"
-	gnssDeviceSysfsTemplate = "/sys/class/net/%s/device/gnss"
+	nmeaSerialPortKey = "ts2phc.nmea_serialport"
+	ts2phcMasterKey   = "ts2phc.master"
 )
 
 var knownNonInterfaceSections = map[string]bool{
@@ -69,23 +69,6 @@ func findLeadingInterface(ts2phcConf string) (string, bool) {
 	return candidates[0], true
 }
 
-// gnssDeviceFromInterface resolves the GNSS device path for a given network interface
-// by reading the sysfs directory /sys/class/net/<iface>/device/gnss/.
-func gnssDeviceFromInterface(iface string) (string, error) {
-	gnssDir := fmt.Sprintf(gnssDeviceSysfsTemplate, iface)
-	entries, err := filesystem.ReadDir(gnssDir)
-	if err != nil {
-		return "", fmt.Errorf("no GNSS device found for interface %s: %w", iface, err)
-	}
-	if len(entries) == 0 {
-		return "", fmt.Errorf("GNSS sysfs directory %s is empty", gnssDir)
-	}
-	if len(entries) > 1 {
-		glog.Warningf("multiple GNSS devices found for %s, using %s", iface, entries[0].Name())
-	}
-	return fmt.Sprintf("/dev/%s", entries[0].Name()), nil
-}
-
 // autoDetectGNSSSerialPort attempts to auto-detect the GNSS serial port
 // from the ts2phcConf and patch it into the node profile if needed.
 func autoDetectGNSSSerialPort(nodeProfile *ptpv1.PtpProfile) {
@@ -96,7 +79,7 @@ func autoDetectGNSSSerialPort(nodeProfile *ptpv1.PtpProfile) {
 	if !found {
 		return
 	}
-	gnssPath, err := gnssDeviceFromInterface(leadingIface)
+	gnssPath, err := ublox.GNSSDeviceFromInterface(leadingIface)
 	if err != nil {
 		glog.Warningf("could not auto-detect GNSS device for %s: %v", leadingIface, err)
 		return
