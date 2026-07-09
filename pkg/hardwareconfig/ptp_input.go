@@ -1,8 +1,6 @@
 package hardwareconfig
 
 import (
-	"strings"
-
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
@@ -45,29 +43,21 @@ func (psd *PTPStateDetector) DetectStateChange(logLine string) (portName string,
 		return "", ""
 	}
 
-	portName = psd.extractPortName(logLine)
-	if portName == "" {
+	portName = event.Iface
+	if portName == "" || !psd.monitoredPorts[portName] {
 		return "", ""
 	}
 
-	if !psd.monitoredPorts[portName] {
-		return "", ""
-	}
-
-	switch event.Role {
-	case constants.PortRoleSlave:
+	switch {
+	case event.Role == constants.PortRoleSlave:
 		return portName, ConditionTypeLocked
+	case event.PreviousRole == constants.PortRoleSlave:
+		// The port was SLAVE immediately before this transition and is no
+		// longer, i.e. it just lost sync (regardless of what it became).
+		return portName, ConditionTypeLost
 	default:
-		if strings.Contains(event.Raw, "SLAVE to ") {
-			return portName, ConditionTypeLost
-		}
 		return "", ""
 	}
-}
-
-// extractPortName extracts the port name from a PTP4L log line using the parser
-func (psd *PTPStateDetector) extractPortName(logLine string) string {
-	return psd.ExtractPortName(logLine)
 }
 
 // ExtractPortName extracts the port name from a PTP4L log line using the parser package
