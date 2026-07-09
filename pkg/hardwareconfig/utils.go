@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/golang/glog"
 	"github.com/mdlayher/netlink"
@@ -659,18 +658,16 @@ func BatchPinSet(commands []dpll.PinParentDeviceCtl) error {
 			glog.Error("failed to send pin command: ", err)
 			return err
 		}
+		// Read back the pin to confirm the command was applied, and log it as a
+		// table (see LogPinConfirmation) since LogPinTable never shows output
+		// pins and reflects state as of the next notification, not this write.
 		info, getErr := conn.DoPinGet(dpll.DoPinGetRequest{ID: command.ID})
 		if getErr != nil {
 			glog.Error("failed to get pin: ", getErr)
 			//TODO: handle properly after RHEL-137801 is fixed
 			return nil
 		}
-		reply, replyErr := dpll.GetPinInfoHR(info, time.Now())
-		if replyErr != nil {
-			glog.Error("failed to convert pin reply to human readable: ", replyErr)
-			return replyErr
-		}
-		glog.Info("pin reply: ", string(reply))
+		dpll.LogPinConfirmation(info)
 	}
 	return nil
 }
