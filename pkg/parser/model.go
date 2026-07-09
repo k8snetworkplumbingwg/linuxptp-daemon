@@ -10,11 +10,17 @@ type StatusMetric struct {
 
 // PTPEvent represents an event extracted from a log line.
 type PTPEvent struct {
-	PortID     int                   `json:"portid"`
-	Iface      string                `json:"iface"`
-	Role       constants.PTPPortRole `json:"role"`       // e.g. SLAVE, MASTER, FAULTY
-	ClockState constants.ClockState  `json:"clockstate"` // Clock class value for clock class change events
-	Raw        string                `json:"raw"`        // original line
+	PortID int                   `json:"portid"`
+	Iface  string                `json:"iface"`
+	Role   constants.PTPPortRole `json:"role"` // e.g. SLAVE, MASTER, FAULTY
+	// PreviousRole is the role the port held immediately before this
+	// transition (e.g. "SLAVE to MASTER ..." -> PortRoleSlave), parsed
+	// directly from the log line's own "<FROM> to <TO>" text. It is
+	// constants.PortRoleUnknown when the line has no explicit "X to Y"
+	// transition (e.g. FAULT_DETECTED) or the FROM state isn't recognized.
+	PreviousRole constants.PTPPortRole `json:"previousrole"`
+	ClockState   constants.ClockState  `json:"clockstate"` // Clock class value for clock class change events
+	Raw          string                `json:"raw"`        // original line
 }
 
 // Note: metrics should be float64 values for as thatis the type expected by the prometheus client library.

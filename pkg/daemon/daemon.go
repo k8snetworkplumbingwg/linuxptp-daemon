@@ -24,6 +24,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
@@ -1701,30 +1702,33 @@ func (p *ptpProcess) processTBCTransitionHardwareConfig(output string) {
 	})
 }
 
-// processTBCTransitionLegacy is the original implementation as ultimate fallback
+// tbcPTP4LExtractor is a shared ptp4l log-line extractor used by the legacy T-BC
+// path to turn raw ptp4l output into a structured parser.PTPEvent, instead of
+// matching substrings directly against the output. Reused across calls since it
+// holds only compiled regexes and is safe for concurrent read-only use.
+var tbcPTP4LExtractor = parser.NewPTP4LExtractor()
+
+// processTBCTransitionLegacy is the original implementation as ultimate fallback.
+// It derives port role transitions from the structured parser.PTPEvent produced
+// by the shared ptp4l parser (the same one used elsewhere in the log-processing
+// pipeline), rather than performing its own ad hoc string matching on the raw
+// ptp4l output.
 func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.PluginManager) {
-	portMatched := false
-	for _, iface := range p.tBCAttributes.trIfaceNames {
-		if strings.Contains(output, iface) {
-			portMatched = true
-			break
-		}
+	_, ptpEvent, err := tbcPTP4LExtractor.Extract(output)
+	if err != nil {
+		glog.Warningf("T-BC legacy: failed to parse ptp4l port event %q: %v", output, err)
 	}
-	if portMatched {
-		if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
-			portName := parser.ExtractPortName(output)
-			if portName != "" {
-				if len(p.tBCAttributes.trIfaceNames) > 1 && !slices.Contains(p.tBCAttributes.trIfaceNames, portName) {
-					glog.Warningf("Ignoring non-TR port in legacy MASTER_CLOCK_SELECTED event: %s", portName)
-				} else {
-					p.tBCAttributes.activePort = portName
-					glog.Infof("T-BC active upstream port: %s", portName)
-				}
-			}
+
+	if ptpEvent != nil && ptpEvent.Iface != "" && slices.Contains(p.tBCAttributes.trIfaceNames, ptpEvent.Iface) {
+		switch {
+		case ptpEvent.Role == parserconstants.PortRoleSlave:
+			// Port became (or remains) the active upstream time-receiver port.
+			p.tBCAttributes.activePort = ptpEvent.Iface
+			glog.Infof("T-BC active upstream port: %s", ptpEvent.Iface)
 			p.tBCAttributes.lastReportedState = event.PTP_LOCKED
 			p.tBCAttributes.offsetFilter = utils.NewWindow(offsetFilterSize)
-		} else if strings.Contains(output, "to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES") ||
-			strings.Contains(output, "SLAVE to") {
+		case ptpEvent.PreviousRole == parserconstants.PortRoleSlave:
+			// Port is no longer a slave indicating it lost sync
 			pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-entry")
 			p.tBCAttributes.lastReportedState = event.PTP_FREERUN
 			glog.Info("T-BC MOVE TO HOLDOVER")

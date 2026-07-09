@@ -4,11 +4,52 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/stretchr/testify/assert"
 )
 
 func _ptr[T any](x T) *T {
 	return &x
+}
+
+// TestPreviousRole locks in previousRole()'s exact mapping from the "<FROM>
+// to <TO> ..." portion of a ptp4l event string to the FROM role. This is the
+// primitive that lets stateless consumers (e.g. hardwareconfig's
+// DetectStateChange) determine "did this port just leave SLAVE" from a
+// single log line, without needing their own cross-call memory.
+func TestPreviousRole(t *testing.T) {
+	tests := []struct {
+		name     string
+		event    string
+		expected constants.PTPPortRole
+	}{
+		{"from SLAVE", "SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", constants.PortRoleSlave},
+		{"from SLAVE to GRAND_MASTER", "SLAVE to GRAND_MASTER", constants.PortRoleSlave},
+		{"from SLAVE to PASSIVE", "SLAVE to PASSIVE on RS_PASSIVE", constants.PortRoleSlave},
+		{"from SLAVE to LISTENING", "SLAVE to LISTENING", constants.PortRoleSlave},
+		{"from SLAVE to UNCALIBRATED", "SLAVE to UNCALIBRATED", constants.PortRoleSlave},
+		{"from MASTER", "MASTER to PASSIVE on RS_PASSIVE", constants.PortRoleMaster},
+		{"from MASTER to UNCALIBRATED", "MASTER to UNCALIBRATED on RS_SLAVE", constants.PortRoleMaster},
+		{"from PASSIVE", "PASSIVE to MASTER on RS_MASTER", constants.PortRolePassive},
+		{"from LISTENING to MASTER", "LISTENING to MASTER on RS_MASTER", constants.PortRoleListening},
+		{"from LISTENING to MASTER via timeout", "LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", constants.PortRoleListening},
+		{"from LISTENING to PASSIVE", "LISTENING to PASSIVE on RS_PASSIVE", constants.PortRoleListening},
+		{"from LISTENING to UNCALIBRATED", "LISTENING to UNCALIBRATED on RS_SLAVE", constants.PortRoleListening},
+		{"from UNCALIBRATED (not a recognized FROM role)", "UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", constants.PortRoleUnknown},
+		{"from UNCALIBRATED to MASTER", "UNCALIBRATED to MASTER on RS_MASTER", constants.PortRoleUnknown},
+		{"from INITIALIZING (not a recognized FROM role)", "INITIALIZING to LISTENING", constants.PortRoleUnknown},
+		{"from FAULTY (not a recognized FROM role)", "FAULTY to LISTENING", constants.PortRoleUnknown},
+		{"no transition text at all", "FAULT_DETECTED", constants.PortRoleUnknown},
+		{"no transition text (synchronization fault)", "SYNCHRONIZATION_FAULT", constants.PortRoleUnknown},
+		{"unrecognized diagnostic line", "delay timeout", constants.PortRoleUnknown},
+		{"empty string", "", constants.PortRoleUnknown},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, previousRole(tt.event))
+		})
+	}
 }
 
 func TestPTP4LParser(t *testing.T) {

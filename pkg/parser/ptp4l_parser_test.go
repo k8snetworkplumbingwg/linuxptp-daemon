@@ -8,6 +8,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// testIfaceName is the interface name used across the "with interface name"
+// PTPEvent test cases below (locked/left-SLAVE/cold-start/benign-diagnostic).
+const testIfaceName = "ens4f0"
+
 func TestPTP4LParser(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -99,10 +103,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to SLAVE on MASTER",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRoleSlave,
-				ClockState: constants.ClockStateFreeRun,
-				Raw:        "ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to SLAVE on MASTER",
+				PortID:       1,
+				Role:         constants.PortRoleSlave,
+				PreviousRole: constants.PortRoleUnknown,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to SLAVE on MASTER",
 			},
 		},
 		{
@@ -110,10 +115,71 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[412707.219]: [ptp4l.0.config:5] port 11 (ens8f2): LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     11,
-				Role:       constants.PortRoleMaster,
-				ClockState: constants.ClockStateFreeRun,
-				Raw:        "ptp4l[412707.219]: [ptp4l.0.config:5] port 11 (ens8f2): LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
+				PortID:       11,
+				Iface:        "ens8f2",
+				Role:         constants.PortRoleMaster,
+				PreviousRole: constants.PortRoleListening,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[412707.219]: [ptp4l.0.config:5] port 11 (ens8f2): LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
+			},
+		},
+		{
+			name:       "Port that just locked to SLAVE, with interface name",
+			configName: "ptp4l.0.config",
+			logLine:    "ptp4l[412708.219]: [ptp4l.0.config:5] port 1 (" + testIfaceName + "): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
+			expectedEvent: &parser.PTPEvent{
+				PortID: 1,
+				Iface:  testIfaceName,
+				Role:   constants.PortRoleSlave,
+				// UNCALIBRATED has no PortRole equivalent, so PreviousRole
+				// is Unknown here -- this is the expected/documented case,
+				// not a bug: consumers only care about PreviousRole ==
+				// PortRoleSlave (departing SLAVE), not the general case.
+				PreviousRole: constants.PortRoleUnknown,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[412708.219]: [ptp4l.0.config:5] port 1 (" + testIfaceName + "): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
+			},
+		},
+		{
+			name:       "Port that just left SLAVE, with interface name",
+			configName: "ptp4l.0.config",
+			logLine:    "ptp4l[412709.219]: [ptp4l.0.config:5] port 1 (" + testIfaceName + "): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
+			expectedEvent: &parser.PTPEvent{
+				PortID:       1,
+				Iface:        testIfaceName,
+				Role:         constants.PortRoleMaster,
+				PreviousRole: constants.PortRoleSlave,
+				ClockState:   constants.ClockStateHoldover,
+				Raw:          "ptp4l[412709.219]: [ptp4l.0.config:5] port 1 (" + testIfaceName + "): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
+			},
+		},
+		{
+			name:       "Cold-start BMCA self-election, with interface name",
+			configName: "ptp4l.0.config",
+			logLine:    "ptp4l[412710.219]: [ptp4l.0.config:5] port 1 (" + testIfaceName + "): UNCALIBRATED to MASTER on RS_MASTER",
+			expectedEvent: &parser.PTPEvent{
+				PortID:       1,
+				Iface:        testIfaceName,
+				Role:         constants.PortRoleMaster,
+				PreviousRole: constants.PortRoleUnknown,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[412710.219]: [ptp4l.0.config:5] port 1 (" + testIfaceName + "): UNCALIBRATED to MASTER on RS_MASTER",
+			},
+		},
+		{
+			name:       "Benign diagnostic line, with interface name",
+			configName: "ptp4l.0.config",
+			logLine:    "ptp4l[412711.219]: [ptp4l.0.config:5] port 1 (" + testIfaceName + "): delay timeout",
+			expectedEvent: &parser.PTPEvent{
+				// PortID is zeroed for unrecognized/PortRoleUnknown events,
+				// but Iface is still populated -- callers must not assume
+				// PortID == 0 implies Iface == "" too.
+				PortID:       0,
+				Iface:        testIfaceName,
+				Role:         constants.PortRoleUnknown,
+				PreviousRole: constants.PortRoleUnknown,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[412711.219]: [ptp4l.0.config:5] port 1 (" + testIfaceName + "): delay timeout",
 			},
 		},
 		{
@@ -121,10 +187,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to PASSIVE on RS_PASSIVE",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRolePassive,
-				ClockState: constants.ClockStateFreeRun,
-				Raw:        "ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to PASSIVE on RS_PASSIVE",
+				PortID:       1,
+				Role:         constants.PortRolePassive,
+				PreviousRole: constants.PortRoleUnknown,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to PASSIVE on RS_PASSIVE",
 			},
 		},
 		{
@@ -132,10 +199,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to MASTER on RS_MASTER",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRoleMaster,
-				ClockState: constants.ClockStateFreeRun,
-				Raw:        "ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to MASTER on RS_MASTER",
+				PortID:       1,
+				Role:         constants.PortRoleMaster,
+				PreviousRole: constants.PortRoleUnknown,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to MASTER on RS_MASTER",
 			},
 		},
 		{
@@ -143,10 +211,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[4268779.809]: [ptp4l.0.config] port 1: FAULT_DETECTED",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRoleFaulty,
-				ClockState: constants.ClockStateHoldover,
-				Raw:        "ptp4l[4268779.809]: [ptp4l.0.config] port 1: FAULT_DETECTED",
+				PortID:       1,
+				Role:         constants.PortRoleFaulty,
+				PreviousRole: constants.PortRoleUnknown,
+				ClockState:   constants.ClockStateHoldover,
+				Raw:          "ptp4l[4268779.809]: [ptp4l.0.config] port 1: FAULT_DETECTED",
 			},
 		},
 		{
@@ -154,10 +223,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to LISTENING on RS_LISTENING",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRoleListening,
-				ClockState: constants.ClockStateFreeRun,
-				Raw:        "ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to LISTENING on RS_LISTENING",
+				PortID:       1,
+				Role:         constants.PortRoleListening,
+				PreviousRole: constants.PortRoleUnknown,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to LISTENING on RS_LISTENING",
 			},
 		},
 		{
@@ -165,10 +235,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[5000.000]: [ptp4l.0.config] port 2: SLAVE to PASSIVE on RS_PASSIVE",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     2,
-				Role:       constants.PortRolePassive,
-				ClockState: constants.ClockStateFreeRun,
-				Raw:        "ptp4l[5000.000]: [ptp4l.0.config] port 2: SLAVE to PASSIVE on RS_PASSIVE",
+				PortID:       2,
+				Role:         constants.PortRolePassive,
+				PreviousRole: constants.PortRoleSlave,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[5000.000]: [ptp4l.0.config] port 2: SLAVE to PASSIVE on RS_PASSIVE",
 			},
 		},
 		{
@@ -176,10 +247,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[5001.000]: [ptp4l.0.config] port 1: MASTER to PASSIVE on RS_PASSIVE",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRolePassive,
-				ClockState: constants.ClockStateFreeRun,
-				Raw:        "ptp4l[5001.000]: [ptp4l.0.config] port 1: MASTER to PASSIVE on RS_PASSIVE",
+				PortID:       1,
+				Role:         constants.PortRolePassive,
+				PreviousRole: constants.PortRoleMaster,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[5001.000]: [ptp4l.0.config] port 1: MASTER to PASSIVE on RS_PASSIVE",
 			},
 		},
 		{
@@ -187,10 +259,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[5002.000]: [ptp4l.0.config] port 1: LISTENING to PASSIVE on RS_PASSIVE",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRolePassive,
-				ClockState: constants.ClockStateFreeRun,
-				Raw:        "ptp4l[5002.000]: [ptp4l.0.config] port 1: LISTENING to PASSIVE on RS_PASSIVE",
+				PortID:       1,
+				Role:         constants.PortRolePassive,
+				PreviousRole: constants.PortRoleListening,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[5002.000]: [ptp4l.0.config] port 1: LISTENING to PASSIVE on RS_PASSIVE",
 			},
 		},
 		{
@@ -198,10 +271,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[5003.000]: [ptp4l.0.config] port 1: SYNCHRONIZATION_FAULT",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRoleFaulty,
-				ClockState: constants.ClockStateHoldover,
-				Raw:        "ptp4l[5003.000]: [ptp4l.0.config] port 1: SYNCHRONIZATION_FAULT",
+				PortID:       1,
+				Role:         constants.PortRoleFaulty,
+				PreviousRole: constants.PortRoleUnknown,
+				ClockState:   constants.ClockStateHoldover,
+				Raw:          "ptp4l[5003.000]: [ptp4l.0.config] port 1: SYNCHRONIZATION_FAULT",
 			},
 		},
 		{
@@ -209,10 +283,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[5004.000]: [ptp4l.0.config] port 1: SLAVE to UNCALIBRATED",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRoleFaulty,
-				ClockState: constants.ClockStateHoldover,
-				Raw:        "ptp4l[5004.000]: [ptp4l.0.config] port 1: SLAVE to UNCALIBRATED",
+				PortID:       1,
+				Role:         constants.PortRoleFaulty,
+				PreviousRole: constants.PortRoleSlave,
+				ClockState:   constants.ClockStateHoldover,
+				Raw:          "ptp4l[5004.000]: [ptp4l.0.config] port 1: SLAVE to UNCALIBRATED",
 			},
 		},
 		{
@@ -220,10 +295,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[5005.000]: [ptp4l.0.config] port 1: MASTER to UNCALIBRATED on RS_SLAVE",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRoleFaulty,
-				ClockState: constants.ClockStateHoldover,
-				Raw:        "ptp4l[5005.000]: [ptp4l.0.config] port 1: MASTER to UNCALIBRATED on RS_SLAVE",
+				PortID:       1,
+				Role:         constants.PortRoleFaulty,
+				PreviousRole: constants.PortRoleMaster,
+				ClockState:   constants.ClockStateHoldover,
+				Raw:          "ptp4l[5005.000]: [ptp4l.0.config] port 1: MASTER to UNCALIBRATED on RS_SLAVE",
 			},
 		},
 		{
@@ -231,10 +307,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[5006.000]: [ptp4l.0.config] port 1: LISTENING to UNCALIBRATED on RS_SLAVE",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRoleFaulty,
-				ClockState: constants.ClockStateHoldover,
-				Raw:        "ptp4l[5006.000]: [ptp4l.0.config] port 1: LISTENING to UNCALIBRATED on RS_SLAVE",
+				PortID:       1,
+				Role:         constants.PortRoleFaulty,
+				PreviousRole: constants.PortRoleListening,
+				ClockState:   constants.ClockStateHoldover,
+				Raw:          "ptp4l[5006.000]: [ptp4l.0.config] port 1: LISTENING to UNCALIBRATED on RS_SLAVE",
 			},
 		},
 		{
@@ -242,10 +319,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[5007.000]: [ptp4l.0.config] port 1: SLAVE to MASTER",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRoleMaster,
-				ClockState: constants.ClockStateHoldover,
-				Raw:        "ptp4l[5007.000]: [ptp4l.0.config] port 1: SLAVE to MASTER",
+				PortID:       1,
+				Role:         constants.PortRoleMaster,
+				PreviousRole: constants.PortRoleSlave,
+				ClockState:   constants.ClockStateHoldover,
+				Raw:          "ptp4l[5007.000]: [ptp4l.0.config] port 1: SLAVE to MASTER",
 			},
 		},
 		{
@@ -253,10 +331,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[5008.000]: [ptp4l.0.config] port 1: SLAVE to GRAND_MASTER",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRoleMaster,
-				ClockState: constants.ClockStateHoldover,
-				Raw:        "ptp4l[5008.000]: [ptp4l.0.config] port 1: SLAVE to GRAND_MASTER",
+				PortID:       1,
+				Role:         constants.PortRoleMaster,
+				PreviousRole: constants.PortRoleSlave,
+				ClockState:   constants.ClockStateHoldover,
+				Raw:          "ptp4l[5008.000]: [ptp4l.0.config] port 1: SLAVE to GRAND_MASTER",
 			},
 		},
 		{
@@ -264,10 +343,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[5009.000]: [ptp4l.0.config] port 1: SLAVE to LISTENING",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRoleListening,
-				ClockState: constants.ClockStateHoldover,
-				Raw:        "ptp4l[5009.000]: [ptp4l.0.config] port 1: SLAVE to LISTENING",
+				PortID:       1,
+				Role:         constants.PortRoleListening,
+				PreviousRole: constants.PortRoleSlave,
+				ClockState:   constants.ClockStateHoldover,
+				Raw:          "ptp4l[5009.000]: [ptp4l.0.config] port 1: SLAVE to LISTENING",
 			},
 		},
 		{
@@ -275,10 +355,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[5010.000]: [ptp4l.0.config] port 1: FAULTY to LISTENING",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRoleListening,
-				ClockState: constants.ClockStateFreeRun,
-				Raw:        "ptp4l[5010.000]: [ptp4l.0.config] port 1: FAULTY to LISTENING",
+				PortID:       1,
+				Role:         constants.PortRoleListening,
+				PreviousRole: constants.PortRoleUnknown,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[5010.000]: [ptp4l.0.config] port 1: FAULTY to LISTENING",
 			},
 		},
 		{
@@ -286,10 +367,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[5011.000]: [ptp4l.0.config] port 1: INITIALIZING to LISTENING",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     1,
-				Role:       constants.PortRoleListening,
-				ClockState: constants.ClockStateFreeRun,
-				Raw:        "ptp4l[5011.000]: [ptp4l.0.config] port 1: INITIALIZING to LISTENING",
+				PortID:       1,
+				Role:         constants.PortRoleListening,
+				PreviousRole: constants.PortRoleUnknown,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[5011.000]: [ptp4l.0.config] port 1: INITIALIZING to LISTENING",
 			},
 		},
 		{
@@ -297,10 +379,11 @@ func TestPTP4LEventParser(t *testing.T) {
 			configName: "ptp4l.0.config",
 			logLine:    "ptp4l[4268779.809]: [ptp4l.0.config] port 1: INVALID_STATE",
 			expectedEvent: &parser.PTPEvent{
-				PortID:     0,
-				Role:       constants.PortRoleUnknown,
-				ClockState: constants.ClockStateFreeRun,
-				Raw:        "ptp4l[4268779.809]: [ptp4l.0.config] port 1: INVALID_STATE",
+				PortID:       0,
+				Role:         constants.PortRoleUnknown,
+				PreviousRole: constants.PortRoleUnknown,
+				ClockState:   constants.ClockStateFreeRun,
+				Raw:          "ptp4l[4268779.809]: [ptp4l.0.config] port 1: INVALID_STATE",
 			},
 		},
 	}
@@ -319,7 +402,10 @@ func TestPTP4LEventParser(t *testing.T) {
 			if tt.expectedEvent != nil {
 				assert.NotNil(t, event)
 				assert.Equal(t, tt.expectedEvent.PortID, event.PortID)
+				assert.Equal(t, tt.expectedEvent.Iface, event.Iface)
 				assert.Equal(t, tt.expectedEvent.Role, event.Role)
+				assert.Equal(t, tt.expectedEvent.PreviousRole, event.PreviousRole)
+				assert.Equal(t, tt.expectedEvent.ClockState, event.ClockState)
 				assert.Equal(t, tt.expectedEvent.Raw, event.Raw)
 			}
 		})

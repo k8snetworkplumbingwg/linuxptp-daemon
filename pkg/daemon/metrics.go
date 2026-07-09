@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 
 	"github.com/golang/glog"
@@ -654,53 +655,26 @@ func deleteProcessStatusMetrics(config, process string) {
 		"process": process, "node": NodeName, "config": config})
 
 }
-func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
-	replacer := strings.NewReplacer("[", " ", "]", " ", ":", " ")
-	output = replacer.Replace(output)
 
-	//ptp4l 4268779.809 ptp4l.o.config port 2: LISTENING to PASSIVE on RS_PASSIVE
-	//ptp4l 4268779.809 ptp4l.o.config port 1: delay timeout
-	index := strings.Index(output, " port ")
-	if index == -1 {
-		return
+// ptp4lEventStateExtractor is the shared ptp4l parser used to derive port role
+// information from raw ptp4l output. Reused across calls since it only holds
+// compiled regexes and is safe for concurrent read-only use.
+var ptp4lEventStateExtractor = parser.NewPTP4LExtractor()
+
+// extractPTP4lEventState parses a ptp4l port state change log line and returns
+// the port ID and role, based on the structured parser.PTPEvent produced by the
+// shared ptp4l parser (the same one used elsewhere in the log-processing
+// pipeline), rather than performing ad hoc string matching on the raw output.
+func extractPTP4lEventState(output string) (portID int, role ptpPortRole) {
+	_, ptpEvent, err := ptp4lEventStateExtractor.Extract(output)
+	if err != nil {
+		glog.Errorf("failed to parse ptp4l port event %q: %v", output, err)
+		return 0, UNKNOWN
 	}
-
-	output = output[index:]
-	fields := strings.Fields(output)
-
-	//port 1: delay timeout
-	if len(fields) < 2 {
-		glog.Errorf("failed to parse output %s: unexpected number of fields", output)
-		return
+	if ptpEvent == nil {
+		return 0, UNKNOWN
 	}
-
-	portIndex := fields[1]
-	role = UNKNOWN
-
-	var e error
-	portId, e = strconv.Atoi(portIndex)
-	if e != nil {
-		glog.Errorf("error parsing port id %s", e)
-		portId = 0
-		return
-	}
-
-	if strings.Contains(output, "UNCALIBRATED to SLAVE") {
-		role = SLAVE
-	} else if strings.Contains(output, "UNCALIBRATED to PASSIVE") || strings.Contains(output, "MASTER to PASSIVE") ||
-		strings.Contains(output, "SLAVE to PASSIVE") {
-		role = PASSIVE
-	} else if strings.Contains(output, "UNCALIBRATED to MASTER") || strings.Contains(output, "LISTENING to MASTER") {
-		role = MASTER
-	} else if strings.Contains(output, "FAULT_DETECTED") || strings.Contains(output, "SYNCHRONIZATION_FAULT") {
-		role = FAULTY
-	} else if strings.Contains(output, "UNCALIBRATED to LISTENING") || strings.Contains(output, "SLAVE to LISTENING") ||
-		strings.Contains(output, "INITIALIZING to LISTENING") {
-		role = LISTENING
-	} else {
-		portId = 0
-	}
-	return
+	return ptpEvent.PortID, convertParserRoleToMetricsRole(ptpEvent.Role)
 }
 
 func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf, stdoutToSocket bool) {
