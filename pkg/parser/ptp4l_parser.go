@@ -170,6 +170,8 @@ func NewPTP4LExtractor() *BaseMetricsExtractor[*ptp4lParsed] {
 		},
 	}
 }
+
+// extractEventPTP4l builds a PTPEvent (port ID, interface, role, previous role, clock state) from a parsed ptp4l port state-change log line.
 func extractEventPTP4l(parsed *ptp4lParsed) (*PTPEvent, error) {
 	if parsed.PortID == nil {
 		return nil, fmt.Errorf("port id not found")

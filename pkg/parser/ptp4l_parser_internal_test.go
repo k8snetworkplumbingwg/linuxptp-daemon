@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// _ptr returns a pointer to its argument, used to build expected ptp4lParsed struct literals whose numeric fields are pointers.
 func _ptr[T any](x T) *T {
 	return &x
 }
@@ -52,6 +53,7 @@ func TestPreviousRole(t *testing.T) {
 	}
 }
 
+// TestPTP4LParser verifies the low-level parseLine/Populate behavior for the ptp4l summary, regular, and port-event regexes against valid, invalid, and empty input.
 func TestPTP4LParser(t *testing.T) {
 	tests := []struct {
 		name           string
