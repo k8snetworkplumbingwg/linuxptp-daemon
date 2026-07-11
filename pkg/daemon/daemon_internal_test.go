@@ -1426,6 +1426,7 @@ func TestTBCLegacy_HoldoverDetectionPrecision(t *testing.T) {
 	vTbcHasHardwareConfig = false
 	defer func() { vTbcHasHardwareConfig = oldValue }()
 
+	// newProcess returns a fresh ptpProcess with a single TR interface (ens4f0), the starting point for each subtest below.
 	newProcess := func() *ptpProcess {
 		return &ptpProcess{
 			tBCAttributes: tBCProcessAttributes{

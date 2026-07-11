@@ -1702,18 +1702,9 @@ func (p *ptpProcess) processTBCTransitionHardwareConfig(output string) {
 	})
 }
 
-// tbcPTP4LExtractor is a shared ptp4l log-line extractor used by the legacy T-BC
-// path to turn raw ptp4l output into a structured parser.PTPEvent, instead of
-// matching substrings directly against the output. Reused across calls since it
-// holds only compiled regexes and is safe for concurrent read-only use.
-var tbcPTP4LExtractor = parser.NewPTP4LExtractor()
-
-// processTBCTransitionLegacy is the original implementation as ultimate fallback.
-// It derives port role transitions from the structured parser.PTPEvent produced
-// by the shared ptp4l parser (the same one used elsewhere in the log-processing
-// pipeline), rather than performing its own ad hoc string matching on the raw
-// ptp4l output.
+// processTBCTransitionLegacy is the ultimate T-BC fallback: it derives port role transitions from the structured parser.PTPEvent instead of matching substrings on raw ptp4l output.
 func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.PluginManager) {
+	tbcPTP4LExtractor := parser.NewPTP4LExtractor()
 	_, ptpEvent, err := tbcPTP4LExtractor.Extract(output)
 	if err != nil {
 		glog.Warningf("T-BC legacy: failed to parse ptp4l port event %q: %v", output, err)

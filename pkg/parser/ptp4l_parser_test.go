@@ -12,6 +12,7 @@ import (
 // PTPEvent test cases below (locked/left-SLAVE/cold-start/benign-diagnostic).
 const testIfaceName = "ens4f0"
 
+// TestPTP4LParser verifies that NewPTP4LExtractor extracts correct parser.Metrics from both the summary and regular ptp4l metric log line formats.
 func TestPTP4LParser(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -90,6 +91,7 @@ func TestPTP4LParser(t *testing.T) {
 	}
 }
 
+// TestPTP4LEventParser verifies that NewPTP4LExtractor derives a correct parser.PTPEvent (PortID, Iface, Role, PreviousRole, ClockState) from every kind of ptp4l port state-change log line.
 func TestPTP4LEventParser(t *testing.T) {
 	tests := []struct {
 		name          string

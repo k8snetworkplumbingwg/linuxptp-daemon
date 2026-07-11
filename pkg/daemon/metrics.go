@@ -656,16 +656,9 @@ func deleteProcessStatusMetrics(config, process string) {
 
 }
 
-// ptp4lEventStateExtractor is the shared ptp4l parser used to derive port role
-// information from raw ptp4l output. Reused across calls since it only holds
-// compiled regexes and is safe for concurrent read-only use.
-var ptp4lEventStateExtractor = parser.NewPTP4LExtractor()
-
-// extractPTP4lEventState parses a ptp4l port state change log line and returns
-// the port ID and role, based on the structured parser.PTPEvent produced by the
-// shared ptp4l parser (the same one used elsewhere in the log-processing
-// pipeline), rather than performing ad hoc string matching on the raw output.
+// extractPTP4lEventState parses a ptp4l port state change log line into a port ID and role using the structured parser.PTPEvent instead of ad hoc string matching on the raw output.
 func extractPTP4lEventState(output string) (portID int, role ptpPortRole) {
+	ptp4lEventStateExtractor := parser.NewPTP4LExtractor()
 	_, ptpEvent, err := ptp4lEventStateExtractor.Extract(output)
 	if err != nil {
 		glog.Errorf("failed to parse ptp4l port event %q: %v", output, err)
