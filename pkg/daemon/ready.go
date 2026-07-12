@@ -104,6 +104,13 @@ func (h metricHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		}
 		return
 	}
+
+	if h.tracker.processManager.ShouldSuppressEvent("ts2phc", EventTypeClockClassChange) {
+		glog.V(14).Info("/emit-logs: skipping replay during process suppression window")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 
 	// Emit replay data synchronously so the live gate is only opened after

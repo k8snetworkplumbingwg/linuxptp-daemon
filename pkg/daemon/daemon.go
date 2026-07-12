@@ -3,6 +3,7 @@ package daemon
 import (
 	"bufio"
 	"cmp"
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -167,6 +168,7 @@ type ProcessManager struct {
 	eventChannel    chan event.Event
 	ptpEventHandler *event.EventHandler
 	daemon          *Daemon
+	suppressionGate *EventSuppressionGate
 }
 
 // findProcessesByName returns a list of processes with the given name
@@ -263,6 +265,9 @@ func (p *ProcessManager) UpdateSynceConfig(config *synce.Relations) {
 // managed connection with reconnection support.
 func (p *ProcessManager) EmitProcessStatusLogs() {
 	for _, proc := range p.process {
+		if p.ShouldSuppressEvent(orchestratorProcessName(proc), EventTypeClockClassChange) {
+			continue
+		}
 		status := PtpProcessUp
 		if proc.Stopped() {
 			status = PtpProcessDown
@@ -283,6 +288,15 @@ func (p *ProcessManager) EmitClockClassLogs() {
 			}
 		}
 	}
+}
+
+// ShouldSuppressEvent checks whether a process-level event should be suppressed
+// based on the orchestrator's failure semantics and downtime thresholds.
+func (p *ProcessManager) ShouldSuppressEvent(processName string, eventType string) bool {
+	if p.suppressionGate == nil {
+		return false
+	}
+	return p.suppressionGate.ShouldSuppressEvent(processName, eventType)
 }
 
 type tBCProcessAttributes struct {
@@ -466,6 +480,9 @@ type Daemon struct {
 
 	delayedPhc2sys   atomic.Bool
 	delayedPhc2sysMu sync.Mutex // protects skipInitialStartup on phc2sys processes
+
+	processOrchestrator       *ProcessOrchestrator
+	processOrchestratorCancel context.CancelFunc
 }
 
 type initialStateSyncer interface{ SyncInitialState() }
@@ -877,53 +894,61 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// Reset the live gate BEFORE starting processes so that socket-writers
 	// block until /emit-logs completes replay after the sidecar restart.
 	dn.liveGate.Reset()
-	// Start all the process
-	for _, p := range dn.processManager.process {
-		if p != nil {
-			p.eventCh = dn.processManager.eventChannel
-			for _, d := range p.depProcess {
-				if d != nil {
-					time.Sleep(3 * time.Second)
-					glog.Infof("Starting %s", d.Name())
-					go d.CmdRun(false)
-					time.Sleep(3 * time.Second)
-					dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, d.Name())
-					d.MonitorProcess(config.ProcessConfig{
-						ClockType:    p.clockType,
-						ConfigName:   p.configName,
-						EventChannel: dn.processManager.eventChannel,
-						GMThreshold: config.Threshold{
-							Max:             p.ptpClockThreshold.MaxOffsetThreshold,
-							Min:             p.ptpClockThreshold.MinOffsetThreshold,
-							HoldOverTimeout: p.ptpClockThreshold.HoldOverTimeout,
-						},
-						InitialPTPState: event.PTP_FREERUN,
-					})
-					// Pre-populate event state immediately after the EventChannel
-					// is set up so that hardware-slaved DPLLs (e.g. E830 CF) are
-					// present in the event data before the async monitoring goroutine
-					// completes its own initial dump.
-					if syncer, ok := d.(initialStateSyncer); ok {
-						syncer.SyncInitialState()
+
+	orchestratedClockType := dn.detectOrchestratedClockType()
+	if orchestratedClockType != event.ClockUnset {
+		glog.Infof("Using process orchestrator for clock type %s", orchestratedClockType)
+		dn.processOrchestrator = dn.buildOrchestrator(orchestratedClockType)
+		ctx, cancel := context.WithCancel(context.Background())
+		dn.processOrchestratorCancel = cancel
+		dn.startProcessesWithOrchestrator(ctx)
+	} else {
+		// Flat start loop for non-telecom profiles (OC, unconfigured, etc.)
+		for _, p := range dn.processManager.process {
+			if p != nil {
+				p.eventCh = dn.processManager.eventChannel
+				for _, d := range p.depProcess {
+					if d != nil {
+						time.Sleep(3 * time.Second)
+						glog.Infof("Starting %s", d.Name())
+						go d.CmdRun(false)
+						time.Sleep(3 * time.Second)
+						dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, d.Name())
+						d.MonitorProcess(config.ProcessConfig{
+							ClockType:    p.clockType,
+							ConfigName:   p.configName,
+							EventChannel: dn.processManager.eventChannel,
+							GMThreshold: config.Threshold{
+								Max:             p.ptpClockThreshold.MaxOffsetThreshold,
+								Min:             p.ptpClockThreshold.MinOffsetThreshold,
+								HoldOverTimeout: p.ptpClockThreshold.HoldOverTimeout,
+							},
+							InitialPTPState: event.PTP_FREERUN,
+						})
+						// Pre-populate event state immediately after the EventChannel
+						// is set up so that hardware-slaved DPLLs (e.g. E830 CF) are
+						// present in the event data before the async monitoring goroutine
+						// completes its own initial dump.
+						if syncer, ok := d.(initialStateSyncer); ok {
+							syncer.SyncInitialState()
+						}
+						glog.Infof("enabling dep process %s with Max %d Min %d Holdover %d", d.Name(), p.ptpClockThreshold.MaxOffsetThreshold, p.ptpClockThreshold.MinOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
 					}
-					glog.Infof("enabling dep process %s with Max %d Min %d Holdover %d", d.Name(), p.ptpClockThreshold.MaxOffsetThreshold, p.ptpClockThreshold.MinOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
 				}
+				if p.skipInitialStartup != "" {
+					glog.Infof("Delaying %s startup: %s", p.name, p.skipInitialStartup)
+					continue
+				}
+				go p.cmdRun(dn.stdoutToSocket, &dn.pluginManager)
+				dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, p.name)
 			}
-			if p.skipInitialStartup != "" {
-				glog.Infof("Delaying %s startup: %s", p.name, p.skipInitialStartup)
-				continue
-			}
-			go p.cmdRun(dn.stdoutToSocket, &dn.pluginManager)
-			dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, p.name)
 		}
-	}
-	// Arm the delayed-phc2sys flag now that the startup loop is complete.
-	// Keeping it false during the loop ensures HandleDelayedPhc2sysStartup
-	// cannot clear skipInitialStartup and race with the loop's skip check.
-	for _, p := range dn.processManager.process {
-		if p != nil && p.skipInitialStartup != "" {
-			dn.delayedPhc2sys.Store(true)
-			break
+		// Arm the delayed-phc2sys flag for the flat loop path.
+		for _, p := range dn.processManager.process {
+			if p != nil && p.skipInitialStartup != "" {
+				dn.delayedPhc2sys.Store(true)
+				break
+			}
 		}
 	}
 	dn.hwconfigsMu.Lock()
@@ -1030,26 +1055,8 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 	ptpHAEnabled := len(listHaProfiles(nodeProfile)) > 0
 
-	var clockType event.ClockType
-	profileClockType, found := (*nodeProfile).PtpSettings["clockType"]
-	var leadingNic string
-	var upstreamPorts []string
-	if found {
-		switch profileClockType {
-		case TGM:
-			clockType = event.GM
-		case TBC:
-			clockType = event.BC
-			leadingNic = (*nodeProfile).PtpSettings["leadingInterface"]
-			if portsStr, ok := (*nodeProfile).PtpSettings["upstreamPort"]; ok {
-				upstreamPorts = strings.Split(portsStr, ",")
-			}
-		default:
-			clockType = event.ClockUnset
-		}
-	} else {
-		clockType = event.ClockUnset
-	}
+	profileClockType := (*nodeProfile).PtpSettings["clockType"]
+	clockType, leadingNic, upstreamPorts := resolveProfileClockType((*nodeProfile).PtpSettings)
 
 	// If unset default to clock type inferred from ptp4l
 	if clockType == event.ClockUnset {
@@ -1901,21 +1908,38 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 			err = cmd.Start()
 			if err != nil {
 				glog.Errorf("CmdRun() error starting %s: %v", p.name, err)
+			} else if p.dn != nil && p.dn.processOrchestrator != nil {
+				orchName := orchestratorProcessName(p)
+				result := p.dn.processOrchestrator.OnProcessRestart(orchName, time.Now())
+				if p.dn.processManager.suppressionGate != nil {
+					p.dn.processManager.suppressionGate.OnProcessRestarted(orchName, result)
+				}
 			}
 
 			<-doneCh
 			err = cmd.Wait()
 
 			glog.Infof("done waiting for %s...", p.name)
+			if p.dn != nil && p.dn.processOrchestrator != nil && !p.Stopped() {
+				orchName := orchestratorProcessName(p)
+				// Failure semantics (EnterHoldover, FlipSyncDirection) are handled by the
+				// existing T-BC state machine via port-loss detection, not by the orchestrator directly.
+				p.dn.processOrchestrator.OnProcessExit(orchName, time.Now())
+				if p.dn.processManager.suppressionGate != nil {
+					p.dn.processManager.suppressionGate.OnProcessFailed(orchName)
+				}
+			}
 			if err != nil {
 				glog.Errorf("CmdRun() error waiting for %s: %v", p.name, err)
 			}
-			if stdoutToSocket && p.c != nil {
-				glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via socket", p.name)
-				processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
-			} else {
-				glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via prometheus", p.name)
-				processStatus(nil, p.name, p.messageTag, PtpProcessDown)
+			if !p.dn.processManager.ShouldSuppressEvent(orchestratorProcessName(p), EventTypeClockClassChange) {
+				if stdoutToSocket && p.c != nil {
+					glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via socket", p.name)
+					processStatus(p.c, p.name, p.messageTag, PtpProcessDown)
+				} else {
+					glog.V(14).Infof("cmdRun[%s]: process ended, sending DOWN via prometheus", p.name)
+					processStatus(nil, p.name, p.messageTag, PtpProcessDown)
+				}
 			}
 			p.updateGMStatusOnProcessDown(p.name)
 		}
@@ -2045,9 +2069,10 @@ func (p *ptpProcess) cmdSetEnabled(enabled bool) {
 func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
 	if nodeProfile.PtpClockThreshold != nil {
 		return &ptpv1.PtpClockThreshold{
-			HoldOverTimeout:    nodeProfile.PtpClockThreshold.HoldOverTimeout,
-			MaxOffsetThreshold: nodeProfile.PtpClockThreshold.MaxOffsetThreshold,
-			MinOffsetThreshold: nodeProfile.PtpClockThreshold.MinOffsetThreshold,
+			HoldOverTimeout:           nodeProfile.PtpClockThreshold.HoldOverTimeout,
+			MaxOffsetThreshold:        nodeProfile.PtpClockThreshold.MaxOffsetThreshold,
+			MinOffsetThreshold:        nodeProfile.PtpClockThreshold.MinOffsetThreshold,
+			ProcessDowntimeThresholds: nodeProfile.PtpClockThreshold.ProcessDowntimeThresholds,
 		}
 	} else {
 		return &ptpv1.PtpClockThreshold{
@@ -2060,6 +2085,326 @@ func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {
 
 func (p *ptpProcess) MonitorEvent(offset float64, clockState string) {
 	// not implemented
+}
+
+// resolveProfileClockType determines the clock type, leading NIC, and upstream ports
+// from the profile's PtpSettings["clockType"] declaration.
+func resolveProfileClockType(settings map[string]string) (clockType event.ClockType, leadingNic string, upstreamPorts []string) {
+	profileClockType, found := settings["clockType"]
+	if !found {
+		return event.ClockUnset, "", nil
+	}
+	switch profileClockType {
+	case TBC:
+		clockType = event.BC
+		leadingNic = settings["leadingInterface"]
+		if portsStr, ok := settings["upstreamPort"]; ok {
+			upstreamPorts = strings.Split(portsStr, ",")
+		}
+	case TGM:
+		clockType = event.GM
+	default:
+		clockType = event.ClockUnset
+	}
+	return
+}
+
+// detectOrchestratedClockType scans the node profiles to determine if we have
+// a T-BC configuration that should use the orchestrator.
+// T-GM orchestration is not yet enabled — T-GM profiles use the flat start loop.
+func (dn *Daemon) detectOrchestratedClockType() event.ClockType {
+	for _, profile := range dn.ptpUpdate.NodeProfiles {
+		ct, _, _ := resolveProfileClockType(profile.PtpSettings)
+		if ct == event.BC {
+			return event.BC
+		}
+	}
+	return event.ClockUnset
+}
+
+// bcStateAdapter provides BCStateObserver by reading the T-BC FSM state from
+// the ptp4l-TR process's lastAppliedState. S2 (PTP_LOCKED) means the offset
+// filter passed and the T-BC is synchronized.
+type bcStateAdapter struct {
+	proc *ptpProcess
+}
+
+func (a *bcStateAdapter) CurrentState() event.PTPState {
+	if a.proc == nil {
+		return event.PTP_FREERUN
+	}
+	state := a.proc.tBCAttributes.lastAppliedState
+	if state == event.PTP_NOTSET {
+		return event.PTP_FREERUN
+	}
+	return state
+}
+
+// findPTPSourceAdapter locates the PTP source process (ptp4l-TR for T-BC, ts2phc for T-GM)
+// and returns a ptpSourceAdapter for it. This provides servo state and offset data
+// to preconditions that gate downstream processes.
+func (dn *Daemon) findPTPSourceAdapter(clockType event.ClockType) *ptpSourceAdapter {
+	for _, p := range dn.processManager.process {
+		if p == nil {
+			continue
+		}
+		switch clockType {
+		case event.BC:
+			if p.name == ptp4lProcessName && len(p.tBCAttributes.trIfaceNames) > 0 {
+				return &ptpSourceAdapter{proc: p}
+			}
+		case event.GM:
+			if p.name == ts2phcProcessName {
+				return &ptpSourceAdapter{proc: p}
+			}
+		}
+	}
+	return &ptpSourceAdapter{}
+}
+
+// findBCStateAdapter locates the ptp4l-TR process and returns a bcStateAdapter.
+func (dn *Daemon) findBCStateAdapter() *bcStateAdapter {
+	for _, p := range dn.processManager.process {
+		if p == nil {
+			continue
+		}
+		if p.name == ptp4lProcessName && len(p.tBCAttributes.trIfaceNames) > 0 {
+			return &bcStateAdapter{proc: p}
+		}
+	}
+	return &bcStateAdapter{}
+}
+
+// orchestratorProcessName maps a ptpProcess to its orchestrator plan name.
+// For T-BC: ptp4l with upstream ports is "ptp4l-tr", ptp4l with controllingProfile is "ptp4l-tt".
+// For T-GM: processes use their binary name directly.
+func orchestratorProcessName(p *ptpProcess) string {
+	if p.name == ptp4lProcessName {
+		if len(p.tBCAttributes.trIfaceNames) > 0 {
+			return "ptp4l-tr"
+		}
+		if cp := p.nodeProfile.PtpSettings["controllingProfile"]; cp != "" {
+			return "ptp4l-tt"
+		}
+	}
+	if p.name == syncEProcessName {
+		return syncEProcessName
+	}
+	return p.name
+}
+
+// orchestratorStateAdapter bridges the circular dependency between the startup plan
+// (which needs a ProcessStateProvider) and the orchestrator (which is created from
+// the plan but itself implements ProcessStateProvider via IsRunning).
+type orchestratorStateAdapter struct {
+	orch *ProcessOrchestrator
+}
+
+func (a *orchestratorStateAdapter) IsRunning(name string) bool {
+	if a.orch == nil {
+		return false
+	}
+	return a.orch.IsRunning(name)
+}
+
+// ptpSourceAdapter provides PTPSourceStateProvider by reading servo state and
+// offset from a ptpProcess at runtime. Until the process reports data, it
+// returns FREERUN and max offset (never qualified).
+type ptpSourceAdapter struct {
+	proc *ptpProcess
+}
+
+func (a *ptpSourceAdapter) ServoState() event.PTPState {
+	if a.proc == nil {
+		return event.PTP_FREERUN
+	}
+	if a.proc.tBCAttributes.lastReportedState == event.PTP_NOTSET {
+		return event.PTP_FREERUN
+	}
+	return a.proc.tBCAttributes.lastReportedState
+}
+
+func (a *ptpSourceAdapter) CurrentOffset() float64 {
+	if a.proc == nil {
+		return 999999999
+	}
+	return a.proc.offset
+}
+
+// buildOrchestrator constructs a ProcessOrchestrator for the given clock type
+// and registers all processes from the ProcessManager with their start/stop callbacks.
+func (dn *Daemon) buildOrchestrator(clockType event.ClockType) *ProcessOrchestrator {
+	processAdapter := &orchestratorStateAdapter{}
+	sourceAdapter := dn.findPTPSourceAdapter(clockType)
+
+	offsetThreshold, requiredSamples := dn.findOrchestratorPreconditionParams(clockType)
+
+	var plan *StartupPlan
+	switch clockType {
+	case event.BC:
+		plan = NewTBCStartupPlan(sourceAdapter, processAdapter, dn.findBCStateAdapter(), offsetThreshold, requiredSamples)
+	case event.GM:
+		plan = NewTGMStartupPlan(sourceAdapter, processAdapter, offsetThreshold, requiredSamples)
+	default:
+		return nil
+	}
+
+	orch := NewProcessOrchestrator(plan)
+	processAdapter.orch = orch
+
+	for _, p := range dn.processManager.process {
+		if p == nil {
+			continue
+		}
+		orchName := orchestratorProcessName(p)
+		proc := p
+		orch.RegisterProcess(orchName,
+			func() error {
+				return dn.startManagedProcess(proc)
+			},
+			func() {
+				proc.cmdStop()
+			},
+		)
+	}
+
+	if plan.FailureSemantics != nil {
+		dn.processManager.suppressionGate = NewEventSuppressionGate(orch.downtime, plan.FailureSemantics)
+	}
+
+	if crdThresholds := dn.findCRDDowntimeThresholds(); crdThresholds != nil {
+		orch.downtime.SetThresholds(crdThresholds)
+	}
+
+	if dn.processManager.ptpEventHandler != nil {
+		pm := dn.processManager
+		srcAdapter := sourceAdapter
+		dn.processManager.ptpEventHandler.ShouldSuppressHoldover = func(ptpLost, dpllLost bool) bool {
+			if dpllLost {
+				return false
+			}
+			if ptpLost && srcAdapter.ServoState() != event.PTP_LOCKED {
+				return false
+			}
+			return pm.ShouldSuppressEvent("ts2phc", EventTypeClockClassChange)
+		}
+	}
+
+	return orch
+}
+
+// findOrchestratorPreconditionParams reads the offset threshold and required samples
+// from the CRD config for use in PTPSourceQualified preconditions.
+// For T-BC it reads from the ptp4l-TR process; for T-GM from ts2phc.
+func (dn *Daemon) findOrchestratorPreconditionParams(clockType event.ClockType) (offsetThreshold float64, requiredSamples int) {
+	offsetThreshold = 100
+	requiredSamples = 3
+
+	for _, p := range dn.processManager.process {
+		if p == nil {
+			continue
+		}
+		switch clockType {
+		case event.BC:
+			if p.name != ptp4lProcessName || len(p.tBCAttributes.trIfaceNames) == 0 {
+				continue
+			}
+		case event.GM:
+			if p.name != ts2phcProcessName {
+				continue
+			}
+		default:
+			return
+		}
+
+		if p.tBCAttributes.offsetThreshold > 0 {
+			offsetThreshold = p.tBCAttributes.offsetThreshold
+		} else if p.ptpClockThreshold != nil && p.ptpClockThreshold.MaxOffsetThreshold > 0 {
+			offsetThreshold = float64(p.ptpClockThreshold.MaxOffsetThreshold)
+		}
+		if s, ok := p.nodeProfile.PtpSettings["inSyncConditionTimes"]; ok {
+			if v, err := strconv.Atoi(s); err == nil && v > 0 {
+				requiredSamples = v
+			}
+		}
+		return
+	}
+	return
+}
+
+// findCRDDowntimeThresholds reads the ProcessDowntimeThresholds from the first
+// ptpProcess that has them configured and maps them to orchestrator process names.
+func (dn *Daemon) findCRDDowntimeThresholds() map[string]time.Duration {
+	for _, p := range dn.processManager.process {
+		if p == nil || p.ptpClockThreshold == nil || p.ptpClockThreshold.ProcessDowntimeThresholds == nil {
+			continue
+		}
+		pdt := p.ptpClockThreshold.ProcessDowntimeThresholds
+		thresholds := make(map[string]time.Duration)
+		if pdt.Ptp4l != nil {
+			d := time.Duration(*pdt.Ptp4l) * time.Second
+			thresholds[orchPtp4lTR] = d
+			thresholds[orchPtp4lTT] = d
+			thresholds[ptp4lProcessName] = d
+		}
+		if pdt.Phc2sys != nil {
+			thresholds[phc2sysProcessName] = time.Duration(*pdt.Phc2sys) * time.Second
+		}
+		if pdt.Ts2phc != nil {
+			thresholds[ts2phcProcessName] = time.Duration(*pdt.Ts2phc) * time.Second
+		}
+		if pdt.Synce4l != nil {
+			thresholds[syncEProcessName] = time.Duration(*pdt.Synce4l) * time.Second
+		}
+		return thresholds
+	}
+	return nil
+}
+
+// startManagedProcess starts a single ptpProcess including its dependency processes.
+// This reproduces the per-process logic from the flat start loop.
+func (dn *Daemon) startManagedProcess(p *ptpProcess) error {
+	p.eventCh = dn.processManager.eventChannel
+	for _, d := range p.depProcess {
+		if d == nil {
+			continue
+		}
+		time.Sleep(3 * time.Second)
+		glog.Infof("orchestrator: starting dep %s for %s", d.Name(), p.name)
+		go d.CmdRun(false)
+		time.Sleep(3 * time.Second)
+		dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, d.Name())
+		d.MonitorProcess(config.ProcessConfig{
+			ClockType:    p.clockType,
+			ConfigName:   p.configName,
+			EventChannel: dn.processManager.eventChannel,
+			GMThreshold: config.Threshold{
+				Max:             p.ptpClockThreshold.MaxOffsetThreshold,
+				Min:             p.ptpClockThreshold.MinOffsetThreshold,
+				HoldOverTimeout: p.ptpClockThreshold.HoldOverTimeout,
+			},
+			InitialPTPState: event.PTP_FREERUN,
+		})
+		if syncer, ok := d.(initialStateSyncer); ok {
+			syncer.SyncInitialState()
+		}
+		glog.Infof("orchestrator: dep %s started (Max %d Min %d Holdover %d)",
+			d.Name(), p.ptpClockThreshold.MaxOffsetThreshold,
+			p.ptpClockThreshold.MinOffsetThreshold, p.ptpClockThreshold.HoldOverTimeout)
+	}
+	go p.cmdRun(dn.stdoutToSocket, &dn.pluginManager)
+	dn.pluginManager.AfterRunPTPCommand(&p.nodeProfile, p.name)
+	return nil
+}
+
+// startProcessesWithOrchestrator uses the ProcessOrchestrator to start processes
+// in the correct precondition-gated order for T-BC or T-GM profiles.
+func (dn *Daemon) startProcessesWithOrchestrator(ctx context.Context) {
+	go func() {
+		if err := dn.processOrchestrator.Start(ctx); err != nil {
+			glog.Errorf("orchestrator startup failed: %v", err)
+		}
+	}()
 }
 
 // HandleDelayedPhc2sysStartup checks if phc2sys was delayed and if the current offset is within the 1s threshold, starts it.
@@ -2346,6 +2691,12 @@ func (p *ptpProcess) replaceClockID(input string) (output string) {
 func (p *ptpProcess) updateGMStatusOnProcessDown(process string) {
 	// need to update GM status for  following process kill for  ts2phc
 	if process == ts2phcProcessName {
+		// When the orchestrator is suppressing holdover (ts2phc silent restart),
+		// do NOT reset event data — the DPLL and ptp4l windows must remain intact
+		// so getLargestOffset doesn't return FaultyPhaseOffset.
+		if p.dn != nil && p.dn.processManager.ShouldSuppressEvent("ts2phc", EventTypeClockClassChange) {
+			return
+		}
 		// ts2phc process dead should update GM-STATUS
 		// Reset the entire event subsystem
 		// (this nullifies the remaining pieces in the event data if ts2phc was killed during ptp profile change)
@@ -2502,6 +2853,11 @@ func (p *ptpProcess) SyncEDeviceByName(name string) *synce.Config {
 }
 
 func (dn *Daemon) stopAllProcesses() {
+	if dn.processOrchestratorCancel != nil {
+		dn.processOrchestratorCancel()
+		dn.processOrchestratorCancel = nil
+		dn.processOrchestrator = nil
+	}
 	for _, p := range dn.processManager.process {
 		if p != nil {
 			glog.Infof("stopping process.... %s", p.name)

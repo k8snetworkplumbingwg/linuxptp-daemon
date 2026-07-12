@@ -3656,18 +3656,18 @@ func TestDelayedPhc2sysStartup_HAProfile(t *testing.T) {
 func TestFindProcessesByName(t *testing.T) {
 	pm := &ProcessManager{
 		process: []*ptpProcess{
-			{name: "ptp4l"},
-			{name: "phc2sys"},
-			{name: "ptp4l"},
+			{name: ptp4lProcessName},
+			{name: phc2sysProcessName},
+			{name: ptp4lProcessName},
 		},
 	}
 
-	procs := pm.findProcessesByName("ptp4l")
+	procs := pm.findProcessesByName(ptp4lProcessName)
 	assert.Equal(t, 2, len(procs))
-	assert.Equal(t, "ptp4l", procs[0].name)
-	assert.Equal(t, "ptp4l", procs[1].name)
+	assert.Equal(t, ptp4lProcessName, procs[0].name)
+	assert.Equal(t, ptp4lProcessName, procs[1].name)
 
-	procs = pm.findProcessesByName("phc2sys")
+	procs = pm.findProcessesByName(phc2sysProcessName)
 	assert.Equal(t, 1, len(procs))
 
 	procs = pm.findProcessesByName("nonexistent")

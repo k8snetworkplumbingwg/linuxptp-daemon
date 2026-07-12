@@ -99,6 +99,9 @@ func (pmc *PMCProcess) getAndSetStopped(val bool) bool {
 // CmdStop signals the process to stop.
 func (pmc *PMCProcess) CmdStop() {
 	pmc.getAndSetStopped(true)
+	if pmc.exitCh == nil {
+		return
+	}
 	select {
 	case <-pmc.exitCh:
 	default:

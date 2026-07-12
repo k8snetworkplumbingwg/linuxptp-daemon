@@ -136,10 +136,10 @@ func (e *EventHandler) updateBCState(event Event) (clockSyncState, bool, bool) {
 
 	isTTSC := (e.LeadingClockData.clockID != "" && e.LeadingClockData.controlledPortsConfig == "")
 
-	glog.Info("current BC state: ", e.clkSyncState[cfgName].state)
+	glog.V(14).Info("current BC state: ", e.clkSyncState[cfgName].state)
 	switch e.clkSyncState[cfgName].state {
 	case PTP_NOTSET, PTP_FREERUN:
-		if !e.isSourceLostBC(cfgName) && e.inSyncCondition(cfgName) {
+		if sourceLost, _, _ := e.isSourceLostBC(cfgName); !sourceLost && e.inSyncCondition(cfgName) {
 			e.clkSyncState[cfgName].state = PTP_LOCKED
 			glog.Info("BC FSM: FREERUN to LOCKED")
 			e.LeadingClockData.lastInSpec = true
@@ -151,12 +151,16 @@ func (e *EventHandler) updateBCState(event Event) (clockSyncState, bool, bool) {
 			e.clkSyncState[cfgName].clockClass = protocol.ClockClassFreerun
 			glog.Info("BC FSM: LOCKED to FREERUN")
 			updateDownstreamData = true
-		} else if e.isSourceLostBC(cfgName) {
-			e.clkSyncState[cfgName].state = PTP_HOLDOVER
-			e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClass(135)
-			glog.Info("BC FSM: LOCKED to HOLDOVER")
-			e.LeadingClockData.lastInSpec = true
-			updateDownstreamData = true
+		} else if sourceLost, ptpLost, dpllLost := e.isSourceLostBC(cfgName); sourceLost {
+			if e.ShouldSuppressHoldover != nil && e.ShouldSuppressHoldover(ptpLost, dpllLost) {
+				glog.Info("BC FSM: suppressing LOCKED->HOLDOVER (process restart within threshold)")
+			} else {
+				e.clkSyncState[cfgName].state = PTP_HOLDOVER
+				e.clkSyncState[cfgName].clockClass = fbprotocol.ClockClass(135)
+				glog.Info("BC FSM: LOCKED to HOLDOVER")
+				e.LeadingClockData.lastInSpec = true
+				updateDownstreamData = true
+			}
 		} else {
 			if *e.LeadingClockData.upstreamTimeProperties != *e.LeadingClockData.downstreamTimeProperties {
 				e.LeadingClockData.downstreamTimeProperties = e.LeadingClockData.upstreamTimeProperties
@@ -181,7 +185,7 @@ func (e *EventHandler) updateBCState(event Event) (clockSyncState, bool, bool) {
 			e.clkSyncState[cfgName].clockClass = protocol.ClockClassFreerun
 			glog.Info("BC FSM: HOLDOVER to FREERUN")
 			updateDownstreamData = true
-		case e.inSyncCondition(cfgName) && !e.isSourceLostBC(cfgName):
+		case func() bool { lost, _, _ := e.isSourceLostBC(cfgName); return e.inSyncCondition(cfgName) && !lost }():
 			e.clkSyncState[cfgName].state = PTP_LOCKED
 			glog.Info("BC FSM: HOLDOVER to LOCKED")
 			updateDownstreamData = true
@@ -498,9 +502,9 @@ func (e *EventHandler) inSyncCondition(cfgName string) bool {
 	return false
 }
 
-func (e *EventHandler) isSourceLostBC(cfgName string) bool {
-	ptpLost := true
-	dpllLost := false
+func (e *EventHandler) isSourceLostBC(cfgName string) (lost bool, ptpLost bool, dpllLost bool) {
+	ptpLost = true
+	dpllLost = false
 	dpllLostIface := ""
 	if data, ok := e.data[cfgName]; ok {
 		for _, d := range data {
@@ -512,9 +516,9 @@ func (e *EventHandler) isSourceLostBC(cfgName string) bool {
 				}
 			}
 			if d.ProcessName == DPLL {
-				glog.Infof("isSourceLostBC[%s]", cfgName)
+				glog.V(14).Infof("isSourceLostBC[%s]", cfgName)
 				for _, dd := range d.Details {
-					glog.Infof("  DPLL detail: iface=%s state=%s signalSource=%s sourceLost=%t offset=%d time=%d metrics=%+v", dd.IFace, dd.State, dd.signalSource, dd.sourceLost, dd.Offset, dd.time, dd.Metrics)
+					glog.V(14).Infof("  DPLL detail: iface=%s state=%s signalSource=%s sourceLost=%t offset=%d time=%d metrics=%+v", dd.IFace, dd.State, dd.signalSource, dd.sourceLost, dd.Offset, dd.time, dd.Metrics)
 					if dd.State != PTP_LOCKED {
 						dpllLost = true
 						dpllLostIface = dd.IFace
@@ -524,14 +528,15 @@ func (e *EventHandler) isSourceLostBC(cfgName string) bool {
 			}
 		}
 	}
+	lost = ptpLost || dpllLost
 	glog.Infof("Source %s: ptpLost %t, dpllLost %t %s",
 		func() string {
-			if dpllLost || ptpLost {
+			if lost {
 				return "LOST"
 			}
 			return "NOT LOST"
 		}(), ptpLost, dpllLost, dpllLostIface)
-	return ptpLost || dpllLost
+	return
 }
 
 func (e *EventHandler) getLargestOffset(cfgName string) int64 {
@@ -647,7 +652,7 @@ func (e *EventHandler) convergeConfig(event Event) Event {
 	if event.Source == PTP4lProcessName {
 		iface := event.IFace
 		ifacePhc := alias.GetPhcGroup(iface)
-		glog.Infof("convergeConfig: ptp4l iface=%s phcGroup=%q original cfgName=%s", iface, ifacePhc, event.CfgName)
+		glog.V(14).Infof("convergeConfig: ptp4l iface=%s phcGroup=%q original cfgName=%s", iface, ifacePhc, event.CfgName)
 		for cfg, dd := range e.data {
 			for _, item := range dd {
 				if item.ProcessName != DPLL {
@@ -657,12 +662,12 @@ func (e *EventHandler) convergeConfig(event Event) Event {
 					dpPhc := alias.GetPhcGroup(dp.IFace)
 					aliasMatch := alias.GetAlias(dp.IFace) == alias.GetAlias(iface)
 					samePhc := dpPhc != "" && dpPhc == ifacePhc
-					glog.Infof("convergeConfig: checking DPLL iface=%s phcGroup=%q alias=%q vs ptp4l alias=%q aliasMatch=%v samePhc=%v",
+					glog.V(14).Infof("convergeConfig: checking DPLL iface=%s phcGroup=%q alias=%q vs ptp4l alias=%q aliasMatch=%v samePhc=%v",
 						dp.IFace, dpPhc, alias.GetAlias(dp.IFace), alias.GetAlias(iface), aliasMatch, samePhc)
 					if aliasMatch || samePhc {
 						// We want to process ptp4l having a separate config with ts2phc and dpll events having ts2phc config
 						// so in the rare occurrence of ptp4l state change we modify the event.CfgName
-						glog.Infof("convergeConfig: remapping ptp4l event cfgName %s -> %s (iface %s matched DPLL iface %s)",
+						glog.V(14).Infof("convergeConfig: remapping ptp4l event cfgName %s -> %s (iface %s matched DPLL iface %s)",
 							event.CfgName, cfg, iface, dp.IFace)
 						event.CfgName = cfg
 					}

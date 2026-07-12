@@ -158,27 +158,28 @@ type clockSyncState struct {
 // EventHandler ... event handler to process events
 type EventHandler struct {
 	sync.Mutex
-	nodeName           string
-	stdoutSocket       string
-	stdoutToSocket     bool
-	processChannel     <-chan Event
-	closeCh            chan bool
-	conn               net.Conn   // event socket connection, guarded by connMu
-	connMu             sync.Mutex // separate mutex for conn to avoid deadlocks with embedded sync.Mutex
-	reconnectMu        sync.Mutex // serializes reconnection attempts to prevent leaked connections
-	data               map[string][]*Data
-	offsetMetric       *prometheus.GaugeVec
-	clockMetric        *prometheus.GaugeVec
-	clockClassMetric   *prometheus.GaugeVec
-	clockClass         fbprotocol.ClockClass
-	clockAccuracy      fbprotocol.ClockAccuracy
-	clkSyncState       map[string]*clockSyncState
-	downstreamCancel   map[string]context.CancelFunc // cancels in-flight downstream update goroutines per config
-	outOfSpec          bool                          // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
-	frequencyTraceable bool                          // will be tru if synce is traceable
-	ReduceLog          bool                          // reduce logs for every announce
-	LeadingClockData   *LeadingClockParams
-	portRole           map[string]map[string]*parser.PTPEvent
+	nodeName               string
+	stdoutSocket           string
+	stdoutToSocket         bool
+	processChannel         <-chan Event
+	closeCh                chan bool
+	conn                   net.Conn   // event socket connection, guarded by connMu
+	connMu                 sync.Mutex // separate mutex for conn to avoid deadlocks with embedded sync.Mutex
+	reconnectMu            sync.Mutex // serializes reconnection attempts to prevent leaked connections
+	data                   map[string][]*Data
+	offsetMetric           *prometheus.GaugeVec
+	clockMetric            *prometheus.GaugeVec
+	clockClassMetric       *prometheus.GaugeVec
+	clockClass             fbprotocol.ClockClass
+	clockAccuracy          fbprotocol.ClockAccuracy
+	clkSyncState           map[string]*clockSyncState
+	downstreamCancel       map[string]context.CancelFunc // cancels in-flight downstream update goroutines per config
+	outOfSpec              bool                          // is offset out of spec, used for Lost Source,In Spec and OPut of Spec state transitions
+	frequencyTraceable     bool                          // will be tru if synce is traceable
+	ReduceLog              bool                          // reduce logs for every announce
+	LeadingClockData       *LeadingClockParams
+	portRole               map[string]map[string]*parser.PTPEvent
+	ShouldSuppressHoldover func(ptpLost, dpllLost bool) bool // set by daemon when orchestrator is active; suppresses LOCKED->HOLDOVER only for ts2phc-related stale data
 }
 
 // getConn returns the current event socket connection under lock.

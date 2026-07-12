@@ -776,7 +776,9 @@ func TestIsSourceLostBC_StaleDetailFixed(t *testing.T) {
 			},
 		}
 
-		assert.False(t, e.isSourceLostBC("cfg"), "before source-lost event, ptpLost should be false")
+		// Before source-lost event: PTP source should NOT be lost
+		lost, _, _ := e.isSourceLostBC("cfg")
+		assert.False(t, lost, "before source-lost event, ptpLost should be false")
 
 		ptp4lData.AddEvent(Event{
 			Source: PTP4l,
@@ -788,7 +790,8 @@ func TestIsSourceLostBC_StaleDetailFixed(t *testing.T) {
 		// Without cross-hardware propagation, the stale LOCKED detail on
 		// eno8903 is not overwritten, so isSourceLostBC still sees a LOCKED
 		// port and returns false.
-		assert.False(t, e.isSourceLostBC("cfg"), "stale LOCKED detail on other iface prevents ptpLost")
+		lost2, _, _ := e.isSourceLostBC("cfg")
+		assert.False(t, lost2, "stale LOCKED detail on other iface prevents ptpLost")
 	})
 
 	t.Run("single LOCKED detail keeps source as not lost", func(t *testing.T) {
@@ -810,7 +813,8 @@ func TestIsSourceLostBC_StaleDetailFixed(t *testing.T) {
 				"cfg": {ptp4lData, dpllData},
 			},
 		}
-		assert.False(t, e.isSourceLostBC("cfg"))
+		lost, _, _ := e.isSourceLostBC("cfg")
+		assert.False(t, lost)
 	})
 }
 
