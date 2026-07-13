@@ -13,6 +13,12 @@ const (
 	HwDefHPEEL140Gen12 = "hpe/EL140-Gen12"
 )
 
+// Clock type constants matching the values defined in the ptp-operator API.
+const (
+	ClockTypeTGM = "T-GM"
+	ClockTypeTBC = "T-BC"
+)
+
 // Embedded hardware-vendor defaults baked into the binary.
 // Add new hardware models here as needed.
 

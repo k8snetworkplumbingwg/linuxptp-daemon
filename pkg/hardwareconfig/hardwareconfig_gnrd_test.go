@@ -680,7 +680,7 @@ func TestLoadBehaviorProfile_DellXR8720t(t *testing.T) {
 	fakeClient := fake.NewClientset()
 	loader := NewBoardLabelMapLoader(fakeClient, "default")
 
-	template, err := LoadBehaviorProfile("dell/XR8720t", "T-BC", loader)
+	template, err := LoadBehaviorProfile("dell/XR8720t", ClockTypeTBC, loader)
 	assert.NoError(t, err, "Should load dell/XR8720t T-BC behavior profile")
 	assert.NotNil(t, template, "Behavior template should not be nil")
 	if template == nil {
@@ -734,13 +734,13 @@ func TestLoadBehaviorProfile_MultiVendor(t *testing.T) {
 	}{
 		{
 			hwDefPath:         HwDefIntelE825,
-			clockType:         "T-BC",
+			clockType:         ClockTypeTBC,
 			expectedPtpInput:  "GNR-D_SDP0",
 			expectedGnssInput: "GNSS_1PPS_IN",
 		},
 		{
 			hwDefPath:         "dell/XR8720t",
-			clockType:         "T-BC",
+			clockType:         ClockTypeTBC,
 			expectedPtpInput:  "ETH01_SDP_TIMESYNC_0",
 			expectedGnssInput: "GNSS_1PPS_IN",
 		},
@@ -897,7 +897,7 @@ func TestLoadBehaviorProfile_TGM(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			template, err := LoadBehaviorProfile(tt.hwDef, "T-GM", loader)
+			template, err := LoadBehaviorProfile(tt.hwDef, testClockTypeTGM, loader)
 			assert.NoError(t, err)
 			if !assert.NotNil(t, template, "T-GM behavior template should exist for %s", tt.name) {
 				return
@@ -925,7 +925,7 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 	fakeClient := fake.NewClientset()
 	hcm := NewHardwareConfigManager(fakeClient, "default", nil)
 
-	clockType := "T-GM"
+	clockType := testClockTypeTGM
 	subsystemName := testSubsystemLeader
 
 	// User provides only gnssConfig on the GNSS source — the template
@@ -1082,7 +1082,7 @@ func TestDeriveBehavior_NoUserBehavior(t *testing.T) {
 	fakeClient := fake.NewClientset()
 	hcm := NewHardwareConfigManager(fakeClient, "default", nil)
 
-	clockType := "T-GM"
+	clockType := testClockTypeTGM
 
 	// No user behavior — everything from template
 	hwConfig := &ptpv2alpha1.HardwareConfig{

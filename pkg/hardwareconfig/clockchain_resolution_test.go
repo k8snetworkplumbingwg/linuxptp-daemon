@@ -293,6 +293,104 @@ func TestClockChainResolution(t *testing.T) {
 	}
 }
 
+// TestClockChainResolution_TGM verifies that a T-GM HardwareConfig skips
+// upstream port derivation (no PTP time receivers), PhaseInputs derivation,
+// and Ethernet derivation — none of which apply for grandmaster operation.
+func TestClockChainResolution_TGM(t *testing.T) {
+	hwConfig, err := loadHardwareConfigFromFile("testdata/gnrd-hwconfig-minimal-tgm.yaml")
+	require.NoError(t, err)
+	require.NotNil(t, hwConfig)
+
+	assert.Equal(t, ClockTypeTGM, *hwConfig.Spec.Profile.ClockType)
+	subsystem := hwConfig.Spec.Profile.ClockChain.Structure[0]
+	assert.Equal(t, testSubsystemLeader, subsystem.Name)
+	assert.Equal(t, HwDefIntelE825, subsystem.HardwareSpecificDefinitions)
+
+	// T-GM provides networkInterface directly (no upstream port derivation)
+	assert.Equal(t, testIfaceEns7f0, subsystem.DPLL.NetworkInterface)
+
+	ptpConfig, err := loadPtpConfigFromFile("testdata/tgm-gnrd.yaml")
+	require.NoError(t, err)
+	require.NotNil(t, ptpConfig)
+
+	// T-GM ptpconfig should have no upstream ports (all masterOnly=1)
+	var ptpProfile *ptpv1.PtpProfile
+	for i := range ptpConfig.Spec.Profile {
+		if ptpConfig.Spec.Profile[i].Name != nil &&
+			ProfileNamesMatch(*ptpConfig.Spec.Profile[i].Name, hwConfig.Spec.RelatedPtpProfileName) {
+			ptpProfile = &ptpConfig.Spec.Profile[i]
+			break
+		}
+	}
+	require.NotNil(t, ptpProfile)
+	upstreamPorts := extractUpstreamPortsFromPtpProfile(ptpProfile)
+	assert.Empty(t, upstreamPorts, "T-GM should have no upstream ports")
+
+	fakeClient := fake.NewClientset()
+	hcm := NewHardwareConfigManager(fakeClient, "default", nil)
+	resolvedConfig, err := hcm.ResolveClockChain(hwConfig, ptpConfig)
+	require.NoError(t, err)
+	require.NotNil(t, resolvedConfig)
+
+	resolved := resolvedConfig.Spec.Profile.ClockChain.Structure[0]
+
+	// NetworkInterface should be preserved (not derived from upstream)
+	assert.Equal(t, testIfaceEns7f0, resolved.DPLL.NetworkInterface)
+
+	// T-GM should NOT derive PTP-related PhaseInputs or Ethernet from upstream ports.
+	// (PhaseInputs may still contain pins from delay compensation injection.)
+	if len(resolved.DPLL.PhaseInputs) > 0 {
+		_, hasPtpInput := resolved.DPLL.PhaseInputs["GNR-D_SDP0"]
+		assert.False(t, hasPtpInput, "T-GM should not derive PTP input pin GNR-D_SDP0")
+	}
+	assert.Empty(t, resolved.Ethernet, "T-GM should not derive Ethernet ports")
+
+	// Behavior should still be derived from template
+	assert.NotNil(t, resolvedConfig.Spec.Profile.ClockChain.Behavior)
+	behavior := resolvedConfig.Spec.Profile.ClockChain.Behavior
+	assert.NotEmpty(t, behavior.Sources)
+
+	// Should have GNSS source (not PTP)
+	var gnssSource *ptpv2alpha1.SourceConfig
+	for i, s := range behavior.Sources {
+		if s.SourceType == ptpv2alpha1.SourceTypeGNSS {
+			gnssSource = &behavior.Sources[i]
+			break
+		}
+	}
+	assert.NotNil(t, gnssSource, "T-GM should have GNSS source")
+	if gnssSource != nil {
+		assert.Equal(t, "GNSS_1PPS_IN", gnssSource.BoardLabel)
+	}
+
+	// Should have Initialize T-GM condition
+	initCondition := findConditionByName(behavior.Conditions, "Initialize T-GM")
+	assert.NotNil(t, initCondition, "T-GM should have Initialize T-GM condition")
+}
+
+// TestClockChainResolution_TGM_DeriveNetworkInterface verifies that a T-GM
+// config without networkInterface auto-derives it from any interface in the
+// PTP config, using the same leading-interface resolution as T-BC.
+// TestClockChainResolution_TGM_MissingNetworkInterface verifies that a T-GM
+// config without networkInterface returns a clear error, since T-GM cannot
+// derive it from upstream ports.
+func TestClockChainResolution_TGM_MissingNetworkInterface(t *testing.T) {
+	hwConfig, err := loadHardwareConfigFromFile("testdata/gnrd-hwconfig-minimal-tgm.yaml")
+	require.NoError(t, err)
+
+	// Remove networkInterface to trigger the validation
+	hwConfig.Spec.Profile.ClockChain.Structure[0].DPLL.NetworkInterface = ""
+
+	ptpConfig, err := loadPtpConfigFromFile("testdata/tgm-gnrd.yaml")
+	require.NoError(t, err)
+
+	fakeClient := fake.NewClientset()
+	hcm := NewHardwareConfigManager(fakeClient, "default", nil)
+	_, err = hcm.ResolveClockChain(hwConfig, ptpConfig)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "networkInterface is required for T-GM subsystem")
+}
+
 // TestClockChainResolution_DualUpstream verifies that a minimal HardwareConfig
 // paired with a PTP config containing two masterOnly=0 ports correctly derives
 // both upstream ports into PTPTimeReceivers and Ethernet.

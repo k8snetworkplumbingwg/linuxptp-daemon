@@ -26,7 +26,7 @@ const (
 	testIfaceEns7f0     = "ens7f0"
 	testSubsystemLeader = "leader"
 	testDevPtp0         = "/dev/ptp0"
-	testClockTypeTGM    = "T-GM"
+	testClockTypeTGM    = ClockTypeTGM
 	testSurveyInArgs    = "SURVEYIN,600,50000"
 	testMonHW           = "MON-HW"
 	testCfgMsg          = "CFG-MSG,1,38,248"

@@ -93,20 +93,20 @@ func extractUpstreamPortsFromPtpProfile(ptpProfile *ptpv1.PtpProfile) []string {
 	return upstreamPorts
 }
 
-// findLeadingInterfaceFromUpstreamPort finds the leading interface (for DPLL clock ID) from an upstream port.
+// findLeadingInterfaceFromPort finds the leading interface (for DPLL clock ID) from any network port.
 // Steps:
-// 1. Get PHC index from upstream port (ethtool -T)
+// 1. Get PHC index from port (ethtool -T)
 // 2. Find PCI address from PHC symlink (/sys/class/ptp/ptp{N}/device)
 // 3. Find leading interface from PCI address (/sys/bus/pci/devices/{pci}/net/)
-func findLeadingInterfaceFromUpstreamPort(upstreamPort string) (string, error) {
-	return findLeadingInterfaceFromUpstreamPortWithResolver(upstreamPort, leadingInterfaceResolver)
+func findLeadingInterfaceFromPort(port string) (string, error) {
+	return findLeadingInterfaceFromPortWithResolver(port, leadingInterfaceResolver)
 }
 
-// findLeadingInterfaceFromUpstreamPortWithResolver is the internal implementation that accepts a resolver
-// This allows for dependency injection and testing
-func findLeadingInterfaceFromUpstreamPortWithResolver(upstreamPort string, resolver LeadingInterfaceResolver) (string, error) {
-	if upstreamPort == "" {
-		return "", fmt.Errorf("upstreamPort is empty")
+// findLeadingInterfaceFromPortWithResolver is the internal implementation that accepts a resolver.
+// This allows for dependency injection and testing.
+func findLeadingInterfaceFromPortWithResolver(port string, resolver LeadingInterfaceResolver) (string, error) {
+	if port == "" {
+		return "", fmt.Errorf("port is empty")
 	}
 
 	if resolver == nil {
@@ -114,9 +114,9 @@ func findLeadingInterfaceFromUpstreamPortWithResolver(upstreamPort string, resol
 	}
 
 	// Step 1: Get PHC index using resolver
-	phcID := resolver.GetPhcID(upstreamPort)
+	phcID := resolver.GetPhcID(port)
 	if phcID == "" {
-		return "", fmt.Errorf("failed to get PHC ID for upstream port %s", upstreamPort)
+		return "", fmt.Errorf("failed to get PHC ID for port %s", port)
 	}
 
 	// Extract PHC index from /dev/ptp{N} format
@@ -151,8 +151,8 @@ func findLeadingInterfaceFromUpstreamPortWithResolver(upstreamPort string, resol
 
 	// Return the first interface found (there should typically be only one)
 	leadingInterface := entries[0].Name()
-	glog.Infof("Found leading interface %s for upstream port %s (PHC: %s, PCI: %s)",
-		leadingInterface, upstreamPort, phcID, pciAddress)
+	glog.Infof("Found leading interface %s for port %s (PHC: %s, PCI: %s)",
+		leadingInterface, port, phcID, pciAddress)
 
 	return leadingInterface, nil
 }
@@ -305,20 +305,22 @@ func (hcm *HardwareConfigManager) deriveSubsystemStructure(subsystem *ptpv2alpha
 
 	// Extract upstream ports from ptpconfig (PTP time receivers for event detection)
 	upstreamPorts := extractUpstreamPortsFromPtpProfile(ptpProfile)
-	if len(upstreamPorts) == 0 {
-		return fmt.Errorf("no upstream ports found in ptpconfig")
-	}
-
-	// Find leading interface from first upstream port (for DPLL clock ID)
-	var leadingInterface string
-	if subsystem.DPLL.NetworkInterface == "" {
-		var err error
-		leadingInterface, err = findLeadingInterfaceFromUpstreamPort(upstreamPorts[0])
-		if err != nil {
-			return fmt.Errorf("failed to find leading interface from upstream port %s: %w", upstreamPorts[0], err)
+	if clockType != ClockTypeTGM {
+		if len(upstreamPorts) == 0 {
+			return fmt.Errorf("no upstream ports found in ptpconfig")
 		}
-		subsystem.DPLL.NetworkInterface = leadingInterface
-		glog.Infof("Derived NetworkInterface: %s (from upstream port %s)", leadingInterface, upstreamPorts[0])
+
+		// Find leading interface from first upstream port (for DPLL clock ID)
+		if subsystem.DPLL.NetworkInterface == "" {
+			leadingInterface, err := findLeadingInterfaceFromPort(upstreamPorts[0])
+			if err != nil {
+				return fmt.Errorf("failed to find leading interface from upstream port %s: %w", upstreamPorts[0], err)
+			}
+			subsystem.DPLL.NetworkInterface = leadingInterface
+			glog.Infof("Derived NetworkInterface: %s (from upstream port %s)", leadingInterface, upstreamPorts[0])
+		}
+	} else if subsystem.DPLL.NetworkInterface == "" {
+		return fmt.Errorf("networkInterface is required for T-GM subsystem %s (no upstream port to derive it from)", subsystem.Name)
 	}
 
 	// Load behavior profile to get pin roles
@@ -330,32 +332,34 @@ func (hcm *HardwareConfigManager) deriveSubsystemStructure(subsystem *ptpv2alpha
 		return fmt.Errorf("no behavior profile found for %s/%s", hwDefPath, clockType)
 	}
 
-	// Derive PhaseInputs from pinRoles
-	if len(subsystem.DPLL.PhaseInputs) == 0 {
-		ptpInputPin := behaviorTemplate.PinRoles["ptpInputPin"]
-		if ptpInputPin == "" {
-			return fmt.Errorf("ptpInputPin not found in pinRoles for %s/%s", hwDefPath, clockType)
+	if clockType != ClockTypeTGM {
+		// Derive PhaseInputs from pinRoles
+		if len(subsystem.DPLL.PhaseInputs) == 0 {
+			ptpInputPin := behaviorTemplate.PinRoles["ptpInputPin"]
+			if ptpInputPin == "" {
+				return fmt.Errorf("ptpInputPin not found in pinRoles for %s/%s", hwDefPath, clockType)
+			}
+
+			if subsystem.DPLL.PhaseInputs == nil {
+				subsystem.DPLL.PhaseInputs = make(map[string]ptpv2alpha1.PinConfig)
+			}
+			freq := int64(1) // 1 PPS for PTP
+			subsystem.DPLL.PhaseInputs[ptpInputPin] = ptpv2alpha1.PinConfig{
+				Frequency:   &freq,
+				Description: "PTP time receiver input",
+			}
+			glog.Infof("Derived PhaseInputs: %s (frequency: %d Hz)", ptpInputPin, freq)
 		}
 
-		if subsystem.DPLL.PhaseInputs == nil {
-			subsystem.DPLL.PhaseInputs = make(map[string]ptpv2alpha1.PinConfig)
+		// Derive Ethernet ports (all upstream ports)
+		if len(subsystem.Ethernet) == 0 {
+			subsystem.Ethernet = []ptpv2alpha1.Ethernet{
+				{
+					Ports: upstreamPorts,
+				},
+			}
+			glog.Infof("Derived Ethernet ports: %v", upstreamPorts)
 		}
-		freq := int64(1) // 1 PPS for PTP
-		subsystem.DPLL.PhaseInputs[ptpInputPin] = ptpv2alpha1.PinConfig{
-			Frequency:   &freq,
-			Description: "PTP time receiver input",
-		}
-		glog.Infof("Derived PhaseInputs: %s (frequency: %d Hz)", ptpInputPin, freq)
-	}
-
-	// Derive Ethernet ports (all upstream ports)
-	if len(subsystem.Ethernet) == 0 {
-		subsystem.Ethernet = []ptpv2alpha1.Ethernet{
-			{
-				Ports: upstreamPorts,
-			},
-		}
-		glog.Infof("Derived Ethernet ports: %v", upstreamPorts)
 	}
 
 	return nil
