@@ -630,14 +630,18 @@ func (hcm *HardwareConfigManager) resolveClockChainBehavior(hwConfig ptpv2alpha1
 			return nil, nil, fmt.Errorf("failed to resolve DPLL pin commands for condition %s: %w", condition.Name, err)
 		}
 		glog.Infof("    Condition '%s': resolved %d DPLL commands", condition.Name, len(pinCommands))
-		pinCommandsPerCondition[condition.Name] = pinCommands
+		if len(pinCommands) > 0 {
+			pinCommandsPerCondition[condition.Name] = pinCommands
+		}
 
 		sysFSCommands, err := hcm.resolveSysFSCommands(condition, clockChain)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to resolve sysFS commands for condition %s: %w", condition.Name, err)
 		}
 		glog.Infof("    Condition '%s': resolved %d sysfs commands", condition.Name, len(sysFSCommands))
-		sysFSCommandsPerCondition[condition.Name] = sysFSCommands
+		if len(sysFSCommands) > 0 {
+			sysFSCommandsPerCondition[condition.Name] = sysFSCommands
+		}
 	}
 	return pinCommandsPerCondition, sysFSCommandsPerCondition, nil
 }
