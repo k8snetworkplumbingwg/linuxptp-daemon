@@ -13,6 +13,7 @@ import (
 	"github.com/golang/glog"
 	dpllcfg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"k8s.io/client-go/kubernetes"
 
 	// loader is part of this package (vendor_loader.go)
@@ -217,14 +218,15 @@ type HardwareConfigManager struct {
 	// current PtpConfig used for resolving clock chains (optional)
 	ptpConfig *ptpv1.PtpConfig
 	// ConfigMap loader for board label remapping (optional, can be nil)
-	configMapLoader *BoardLabelMapLoader
-	mu              sync.RWMutex
-	cond            *sync.Cond
-	ready           bool
+	configMapLoader   *BoardLabelMapLoader
+	interfaceResolver *network.InterfaceResolver
+	mu                sync.RWMutex
+	cond              *sync.Cond
+	ready             bool
 }
 
 // NewHardwareConfigManager creates a new hardware config manager.
-func NewHardwareConfigManager(kubeClient kubernetes.Interface, namespace string) *HardwareConfigManager {
+func NewHardwareConfigManager(kubeClient kubernetes.Interface, namespace string, resolver *network.InterfaceResolver) *HardwareConfigManager {
 	hcm := &HardwareConfigManager{
 		hardwareConfigs: make([]enrichedHardwareConfig, 0),
 		pinApplier:      func(cmds []dpll.PinParentDeviceCtl) error { return BatchPinSet(cmds) },
@@ -238,6 +240,7 @@ func NewHardwareConfigManager(kubeClient kubernetes.Interface, namespace string)
 			return os.WriteFile(path, []byte(value), 0o644)
 		},
 	}
+	hcm.interfaceResolver = resolver
 	hcm.cond = sync.NewCond(&hcm.mu)
 
 	// Set up ConfigMap loader for board label remapping
@@ -285,6 +288,14 @@ func (hcm *HardwareConfigManager) UpdateHardwareConfig(hwConfigs []ptpv2alpha1.H
 
 	// Clear clock ID cache for new hardware config processing
 	hcm.clockIDCache = make(map[string]uint64)
+
+	// Resolve RHEL 10 npN interface name changes in hardware configs
+	if hcm.interfaceResolver != nil {
+		if err := hcm.interfaceResolver.Refresh(); err != nil {
+			glog.Warningf("Failed to refresh interface resolver for hardware config, name resolution may use stale data: %v", err)
+		}
+		hcm.interfaceResolver.ResolveHardwareConfigInterfaces(hwConfigs)
+	}
 
 	// Detect removed hardwareconfigs before updating
 	removedConfigs := hcm.detectRemovedHardwareConfigs(hwConfigs)

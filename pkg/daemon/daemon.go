@@ -465,6 +465,8 @@ type Daemon struct {
 
 	delayedPhc2sys   atomic.Bool
 	delayedPhc2sysMu sync.Mutex // protects skipInitialStartup on phc2sys processes
+
+	interfaceResolver *ptpnetwork.InterfaceResolver
 }
 
 type initialStateSyncer interface{ SyncInitialState() }
@@ -626,24 +628,25 @@ func New(
 	}
 
 	dn := &Daemon{
-		nodeName:              nodeName,
-		namespace:             namespace,
-		stdoutToSocket:        stdoutToSocket,
-		kubeClient:            kubeClient,
-		ptpClient:             ptpClient,
-		ptpUpdate:             ptpUpdate,
-		pluginManager:         pluginManager,
-		unknownPlugins:        unknownPlugins,
-		hwconfigs:             hwconfigs,
-		hardwareConfigManager: hardwareconfig.NewHardwareConfigManager(kubeClient, namespace),
-		refreshNodePtpDevice:  refreshNodePtpDevice,
-		pmcPollInterval:       pmcPollInterval,
-		processManager:        pm,
-		readyTracker:          tracker,
-		stopCh:                stopCh,
-		saFileWatcher:         saFileWatch,
-		liveGate:              &liveGate{},
+		nodeName:             nodeName,
+		namespace:            namespace,
+		stdoutToSocket:       stdoutToSocket,
+		kubeClient:           kubeClient,
+		ptpClient:            ptpClient,
+		ptpUpdate:            ptpUpdate,
+		pluginManager:        pluginManager,
+		unknownPlugins:       unknownPlugins,
+		hwconfigs:            hwconfigs,
+		interfaceResolver:    ptpnetwork.NewInterfaceResolver(),
+		refreshNodePtpDevice: refreshNodePtpDevice,
+		pmcPollInterval:      pmcPollInterval,
+		processManager:       pm,
+		readyTracker:         tracker,
+		stopCh:               stopCh,
+		saFileWatcher:        saFileWatch,
+		liveGate:             &liveGate{},
 	}
+	dn.hardwareConfigManager = hardwareconfig.NewHardwareConfigManager(kubeClient, namespace, dn.interfaceResolver)
 	pm.daemon = dn
 	return dn
 }
@@ -833,6 +836,11 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 		dn.hardwareConfigManager.SetPtpConfig(ptpConfig)
 		glog.Infof("Updated PtpConfig in hardware config manager with %d profiles (after sorting and reconciliation)", len(dn.ptpUpdate.NodeProfiles))
 	}
+	// Refresh interface resolver so RHEL 10 npN name mapping uses current system state
+	if err := dn.interfaceResolver.Refresh(); err != nil {
+		glog.Warningf("Failed to refresh interface resolver, name resolution may use stale data: %v", err)
+	}
+
 	// TODO: resolve clock IDs, clockType, leadingInterface and upstreamPort from hardware config
 	// (needed to keep code compatibility elsewhere and allow it to work both with hardware config and plugins)
 	for _, profile := range dn.ptpUpdate.NodeProfiles {
@@ -859,6 +867,8 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 		if controlledID, ok := relations[*profile.Name]; ok {
 			profile.PtpSettings["controlledId"] = strconv.Itoa(controlledID)
 		}
+
+		dn.interfaceResolver.ResolveProfileInterfaces(&profile)
 
 		glog.Infof("Calling applyNodePtpProfile for profile %s with runID %d", *profile.Name, runID)
 		err := dn.applyNodePtpProfile(runID, &profile)
@@ -1144,6 +1154,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			printNodeProfile(nodeProfile)
 			return err
 		}
+		output.ResolveInterfaceNames(dn.interfaceResolver)
 
 		if configOpts == nil || *configOpts == "" {
 			glog.Infof("configOpts empty for profile %s, skipping process: %s", *nodeProfile.Name, pProcess)

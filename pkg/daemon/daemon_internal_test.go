@@ -23,6 +23,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
@@ -51,7 +52,7 @@ func NewDaemonForTests(tracker *ReadyTracker, processManager *ProcessManager) *D
 	return &Daemon{
 		readyTracker:          tracker,
 		processManager:        processManager,
-		hardwareConfigManager: hardwareconfig.NewHardwareConfigManager(fakeClient, "default"),
+		hardwareConfigManager: hardwareconfig.NewHardwareConfigManager(fakeClient, "default", nil),
 		liveGate:              &liveGate{},
 	}
 }
@@ -680,7 +681,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 
 		// Create a mock Daemon with hardwareConfigManager and set up hardware config
 		fakeClient := fake.NewClientset()
-		hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
+		hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default", nil)
 		err := setupHardwareConfigForTest(hcm, "test-profile", "ens4f0")
 		assert.NoError(t, err, "Should be able to set up hardware config")
 		mockDaemon := &Daemon{
@@ -763,7 +764,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 
 		// Create a mock Daemon with hardwareConfigManager and set up hardware config
 		fakeClient := fake.NewClientset()
-		hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
+		hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default", nil)
 		err := setupHardwareConfigForTest(hcm, "test-profile", "ens4f0")
 		assert.NoError(t, err, "Should be able to set up hardware config")
 		mockDaemon := &Daemon{
@@ -1011,7 +1012,7 @@ func setupHardwareConfigForTest(hcm *hardwareconfig.HardwareConfigManager, profi
 func createMockPTPStateDetectorForHardwareConfig() *hardwareconfig.PTPStateDetector {
 	// Create a detector using the normal constructor - this properly initializes ptp4lExtractor
 	fakeClient := fake.NewClientset()
-	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
+	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default", nil)
 	_ = setupHardwareConfigForTest(hcm, "test-profile", "ens4f0")
 
 	// Create detector - it will automatically populate monitoredPorts from the hardware config
@@ -1070,7 +1071,7 @@ func TestProcessTBCTransitionHardwareConfig_HardwareConfigIntegration(t *testing
 
 	// Create hardware config manager and verify it works with our config
 	fakeClient := fake.NewClientset()
-	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
+	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default", nil)
 	err = hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{hwConfig})
 	assert.NoError(t, err, "Should be able to update hardware config")
 
@@ -1144,7 +1145,7 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 
 	// Create hardware config manager and initialize it
 	fakeClient := fake.NewClientset()
-	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
+	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default", nil)
 	err = hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{hwConfig})
 	assert.NoError(t, err, "Should be able to update hardware config")
 
@@ -1457,7 +1458,7 @@ func TestTBCDualUpstream_PortALost_PortBTakesOver(t *testing.T) {
 	defer func() { vTbcHasHardwareConfig = oldValue }()
 
 	fakeClient := fake.NewClientset()
-	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
+	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default", nil)
 	err := setupDualUpstreamHardwareConfig(hcm, "test-profile", "eno2", "eno3")
 	assert.NoError(t, err)
 	mockDaemon := &Daemon{hardwareConfigManager: hcm}
@@ -1522,7 +1523,7 @@ func TestTBCDualUpstream_BothPortsLost(t *testing.T) {
 	defer func() { vTbcHasHardwareConfig = oldValue }()
 
 	fakeClient := fake.NewClientset()
-	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
+	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default", nil)
 	err := setupDualUpstreamHardwareConfig(hcm, "test-profile", "eno2", "eno3")
 	assert.NoError(t, err)
 	mockDaemon := &Daemon{hardwareConfigManager: hcm}
@@ -1573,7 +1574,7 @@ func TestTBCDualUpstream_RecoveryAfterBothLost(t *testing.T) {
 	defer func() { vTbcHasHardwareConfig = oldValue }()
 
 	fakeClient := fake.NewClientset()
-	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default")
+	hcm := hardwareconfig.NewHardwareConfigManager(fakeClient, "default", nil)
 	err := setupDualUpstreamHardwareConfig(hcm, "test-profile", "eno2", "eno3")
 	assert.NoError(t, err)
 	mockDaemon := &Daemon{hardwareConfigManager: hcm}
@@ -3672,4 +3673,63 @@ func TestFindProcessesByName(t *testing.T) {
 
 	procs = pm.findProcessesByName("nonexistent")
 	assert.Equal(t, 0, len(procs))
+}
+
+func TestPtp4lConf_ResolveInterfaceNames(t *testing.T) {
+	resolver := network.NewInterfaceResolverWithInterfaces([]string{"ens5f0np0", "ens5f1np1"})
+
+	t.Run("resolves interface sections", func(t *testing.T) {
+		conf := &Ptp4lConf{}
+		config := "[global]\ndomainNumber 24\n[ens5f0]\nmasterOnly 1\n[ens5f1]\nmasterOnly 0"
+		err := conf.PopulatePtp4lConf(&config, nil)
+		assert.NoError(t, err)
+
+		conf.ResolveInterfaceNames(resolver)
+
+		for _, section := range conf.sections {
+			if section.sectionName == "[ens5f0]" || section.sectionName == "[ens5f1]" {
+				t.Errorf("section %s should have been resolved", section.sectionName)
+			}
+		}
+		// Verify resolved names exist
+		found := map[string]bool{}
+		for _, section := range conf.sections {
+			found[section.sectionName] = true
+		}
+		assert.True(t, found["[ens5f0np0]"], "should have [ens5f0np0] section")
+		assert.True(t, found["[ens5f1np1]"], "should have [ens5f1np1] section")
+		assert.True(t, found[GlobalSectionName], "should keep [global] section")
+	})
+
+	t.Run("skips known sections", func(t *testing.T) {
+		conf := &Ptp4lConf{}
+		config := "[global]\ndomainNumber 24\n[nmea]\nts2phc.master 1"
+		err := conf.PopulatePtp4lConf(&config, nil)
+		assert.NoError(t, err)
+
+		conf.ResolveInterfaceNames(resolver)
+
+		found := map[string]bool{}
+		for _, section := range conf.sections {
+			found[section.sectionName] = true
+		}
+		assert.True(t, found[GlobalSectionName], "should keep [global]")
+		assert.True(t, found[NmeaSectionName], "should keep [nmea]")
+	})
+
+	t.Run("no-op when names exist", func(t *testing.T) {
+		noChangeResolver := network.NewInterfaceResolverWithInterfaces([]string{"ens5f0", "ens5f1"})
+		conf := &Ptp4lConf{}
+		config := "[global]\n[ens5f0]\nmasterOnly 1"
+		err := conf.PopulatePtp4lConf(&config, nil)
+		assert.NoError(t, err)
+
+		conf.ResolveInterfaceNames(noChangeResolver)
+
+		found := map[string]bool{}
+		for _, section := range conf.sections {
+			found[section.sectionName] = true
+		}
+		assert.True(t, found["[ens5f0]"], "should keep [ens5f0] unchanged")
+	})
 }
