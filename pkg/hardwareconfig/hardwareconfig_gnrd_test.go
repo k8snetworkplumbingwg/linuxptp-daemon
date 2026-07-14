@@ -696,7 +696,7 @@ func TestLoadBehaviorProfile_DellXR8720t(t *testing.T) {
 	// Verify sources template
 	assert.NotEmpty(t, template.Sources, "Sources should not be empty")
 	assert.Equal(t, "PTP", template.Sources[0].Name, "First source should be PTP")
-	assert.Equal(t, "ptpTimeReceiver", template.Sources[0].SourceType)
+	assert.Equal(t, ptpv2alpha1.SourceTypePTP, template.Sources[0].SourceType)
 
 	// Verify conditions template
 	assert.NotEmpty(t, template.Conditions, "Conditions should not be empty")

@@ -242,7 +242,7 @@ func TestClockChainResolution(t *testing.T) {
 			if ptpSource == nil {
 				t.Fatal("PTP source should be present")
 			}
-			assert.Equal(t, "ptpTimeReceiver", ptpSource.SourceType)
+			assert.Equal(t, ptpv2alpha1.SourceTypePTP, ptpSource.SourceType)
 			assert.Equal(t, "leader", ptpSource.Subsystem, "Subsystem should be resolved")
 			assert.Equal(t, tc.expectedPtpInput, ptpSource.BoardLabel, "BoardLabel should be resolved from pinRoles")
 			assert.Equal(t, upstreamPorts, ptpSource.PTPTimeReceivers,
@@ -380,7 +380,7 @@ func TestClockChainResolution_DualUpstream(t *testing.T) {
 	if !assert.NotNil(t, ptpSource, "PTP source should exist") {
 		t.Fatal()
 	}
-	assert.Equal(t, "ptpTimeReceiver", ptpSource.SourceType)
+	assert.Equal(t, ptpv2alpha1.SourceTypePTP, ptpSource.SourceType)
 	assert.Equal(t, "leader", ptpSource.Subsystem)
 	assert.Equal(t, "ETH01_SDP_TIMESYNC_0", ptpSource.BoardLabel)
 	assert.Equal(t, upstreamPorts, ptpSource.PTPTimeReceivers,
