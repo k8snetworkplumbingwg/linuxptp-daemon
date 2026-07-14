@@ -171,6 +171,7 @@ func extractTS2PHCOffset(parsed *ts2phcParsed) (*Metrics, error) {
 		Offset:     *parsed.Offset,
 		MaxOffset:  *parsed.Offset,
 		ClockState: clockState,
+		ServoState: parsed.ServoState,
 		FreqAdj:    *parsed.FreqAdj,
 		Source:     constants.Master,
 	}, nil
@@ -202,6 +203,7 @@ func extractTS2PHCnmeaStatus(parsed *ts2phcParsed) (*Metrics, error) {
 		Offset:     *parsed.Offset,
 		MaxOffset:  *parsed.Offset,
 		ClockState: clockState,
+		ServoState: parsed.ServoState,
 		Source:     constants.NmeaStatus,
 		Status:     statusMetrics,
 	}, nil

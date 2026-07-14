@@ -44,6 +44,7 @@ func TestPhc2SysParser(t *testing.T) {
 				FreqAdj:    -6990,
 				Delay:      502,
 				ClockState: constants.ClockStateLocked,
+				ServoState: "s2",
 				Source:     constants.Phc,
 			},
 		},
@@ -57,6 +58,7 @@ func TestPhc2SysParser(t *testing.T) {
 				FreqAdj:    -6990,
 				Delay:      502,
 				ClockState: constants.ClockStateLocked,
+				ServoState: "s2",
 				Source:     constants.Sys,
 			},
 		},
@@ -70,6 +72,21 @@ func TestPhc2SysParser(t *testing.T) {
 				FreqAdj:    8956,
 				Delay:      508,
 				ClockState: constants.ClockStateLocked,
+				ServoState: "s2",
+				Source:     constants.Phc,
+			},
+		},
+		{
+			name:    "Valid regular metrics with s0 servo state (unlocked, freerun)",
+			logLine: "phc2sys[1823126.732]: [ptp4l.0.config] CLOCK_REALTIME phc offset       -10 s0 freq   +8956 delay    508",
+			expectedMetric: &parser.Metrics{
+				Iface:      "CLOCK_REALTIME",
+				Offset:     -10,
+				MaxOffset:  -10,
+				FreqAdj:    8956,
+				Delay:      508,
+				ClockState: constants.ClockStateFreeRun,
+				ServoState: "s0",
 				Source:     constants.Phc,
 			},
 		},
@@ -97,6 +114,7 @@ func TestPhc2SysParser(t *testing.T) {
 				assert.Equal(t, tt.expectedMetric.FreqAdj, metric.FreqAdj)
 				assert.Equal(t, tt.expectedMetric.Delay, metric.Delay)
 				assert.Equal(t, tt.expectedMetric.ClockState, metric.ClockState)
+				assert.Equal(t, tt.expectedMetric.ServoState, metric.ServoState)
 				assert.Equal(t, tt.expectedMetric.Source, metric.Source)
 			}
 		})

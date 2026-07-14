@@ -24,6 +24,7 @@ func TestTS2PHCParser(t *testing.T) {
 				MaxOffset:  2345,
 				FreqAdj:    -16642,
 				ClockState: constants.ClockStateLocked,
+				ServoState: "s2",
 				Source:     constants.Master,
 			},
 		},
@@ -36,6 +37,7 @@ func TestTS2PHCParser(t *testing.T) {
 				MaxOffset:  3152778,
 				FreqAdj:    -6083928,
 				ClockState: constants.ClockStateLocked,
+				ServoState: "s2",
 				Source:     constants.Master,
 			},
 		},
@@ -48,6 +50,7 @@ func TestTS2PHCParser(t *testing.T) {
 				MaxOffset:  -1,
 				FreqAdj:    -3972,
 				ClockState: constants.ClockStateHoldover,
+				ServoState: "s2",
 				Source:     constants.Master,
 			},
 		},
@@ -59,6 +62,7 @@ func TestTS2PHCParser(t *testing.T) {
 				Offset:     0,
 				MaxOffset:  0,
 				ClockState: constants.ClockStateLocked,
+				ServoState: "s2",
 				Source:     constants.NmeaStatus,
 				Status: []parser.StatusMetric{
 					{Subtype: "nmea_status", Status: 1.0},
@@ -73,6 +77,7 @@ func TestTS2PHCParser(t *testing.T) {
 				Offset:     999999,
 				MaxOffset:  999999,
 				ClockState: constants.ClockStateFreeRun,
+				ServoState: "s0",
 				Source:     constants.NmeaStatus,
 				Status: []parser.StatusMetric{
 					{Subtype: "nmea_status", Status: 0.0},
@@ -88,6 +93,7 @@ func TestTS2PHCParser(t *testing.T) {
 				MaxOffset:  3,
 				FreqAdj:    4,
 				ClockState: constants.ClockStateFreeRun,
+				ServoState: "s0",
 				Source:     constants.Master,
 			},
 		},
@@ -112,6 +118,7 @@ func TestTS2PHCParser(t *testing.T) {
 				assert.Equal(t, tt.expectedMetric.MaxOffset, metric.MaxOffset)
 				assert.Equal(t, tt.expectedMetric.FreqAdj, metric.FreqAdj)
 				assert.Equal(t, tt.expectedMetric.ClockState, metric.ClockState)
+				assert.Equal(t, tt.expectedMetric.ServoState, metric.ServoState)
 				assert.Equal(t, tt.expectedMetric.Source, metric.Source)
 				for _, expectedStatus := range tt.expectedMetric.Status {
 					found := false

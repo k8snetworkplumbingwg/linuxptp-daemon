@@ -79,7 +79,10 @@ type Metrics struct {
     MaxOffset  float64 // Maximum time offset
     FreqAdj    float64 // Frequency adjustment
     Delay      float64 // Path delay
-    ClockState string  // Clock state (LOCKED, FREERUN, etc.)
+    ClockState string  // Clock state (LOCKED, FREERUN, etc.), collapsed from ServoState
+    ServoState string  // Raw linuxptp servo state token (s0, s1, s2, s3), e.g. from
+                        // "master offset -1 s2 freq +1 path delay 18481". Matches
+                        // upstream servo.h: s0=UNLOCKED, s1=JUMP, s2=LOCKED, s3=LOCKED_STABLE
     Source     string  // Source of the metrics (master, phc, sys, etc.)
 }
 ```

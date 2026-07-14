@@ -32,6 +32,7 @@ func TestPTP4LParser(t *testing.T) {
 				FreqAdj:    -16642,
 				Delay:      1089,
 				ClockState: "",
+				ServoState: "",
 				Source:     constants.Master,
 			},
 		},
@@ -46,6 +47,7 @@ func TestPTP4LParser(t *testing.T) {
 				FreqAdj:    -6083928,
 				Delay:      2791,
 				ClockState: "",
+				ServoState: "",
 				Source:     constants.Master,
 			},
 		},
@@ -60,6 +62,37 @@ func TestPTP4LParser(t *testing.T) {
 				FreqAdj:    -3972,
 				Delay:      89,
 				ClockState: constants.ClockStateLocked,
+				ServoState: "s2",
+				Source:     constants.Master,
+			},
+		},
+		{
+			name:       "Valid regular metrics carry the raw servo state distinct from the collapsed clock state",
+			configName: "ptp4l.1.config",
+			logLine:    "ptp4l[2330.162]: [ptp4l.1.config:6] master offset         -1 s2 freq      +1 path delay     18481",
+			expectedMetric: &parser.Metrics{
+				Iface:      constants.Master,
+				Offset:     -1,
+				MaxOffset:  -1,
+				FreqAdj:    1,
+				Delay:      18481,
+				ClockState: constants.ClockStateLocked,
+				ServoState: "s2",
+				Source:     constants.Master,
+			},
+		},
+		{
+			name:       "s0 regular metrics report raw servo state s0 while clock state collapses to FREERUN",
+			configName: "ptp4l.0.config",
+			logLine:    "ptp4l[365195.391]: [ptp4l.0.config] master offset -1 s0 freq -3972 path delay 89",
+			expectedMetric: &parser.Metrics{
+				Iface:      constants.Master,
+				Offset:     -1,
+				MaxOffset:  -1,
+				FreqAdj:    -3972,
+				Delay:      89,
+				ClockState: constants.ClockStateFreeRun,
+				ServoState: "s0",
 				Source:     constants.Master,
 			},
 		},
@@ -85,6 +118,7 @@ func TestPTP4LParser(t *testing.T) {
 				assert.Equal(t, tt.expectedMetric.FreqAdj, metric.FreqAdj)
 				assert.Equal(t, tt.expectedMetric.Delay, metric.Delay)
 				assert.Equal(t, tt.expectedMetric.ClockState, metric.ClockState)
+				assert.Equal(t, tt.expectedMetric.ServoState, metric.ServoState)
 				assert.Equal(t, tt.expectedMetric.Source, metric.Source)
 			}
 		})

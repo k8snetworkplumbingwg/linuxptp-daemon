@@ -34,6 +34,13 @@ type Metrics struct {
 	FreqAdj    float64              `json:"freqadj"`
 	Delay      float64              `json:"delay"`
 	ClockState constants.ClockState `json:"clockstate"` // e.g. LOCKED, FREERUN, HOLDOVER
-	Source     string               `json:"source"`     // e.g. "phc", "sys", or "master"
-	Status     []StatusMetric       `json:"status"`     // List of status metrics with their subtypes
+	// ServoState is the raw servo state token as printed by linuxptp (e.g.
+	// "s0", "s1", "s2", "s3"), taken directly from the log line before it is
+	// collapsed into ClockState. It mirrors linuxptp's upstream servo.h enum:
+	// s0 = SERVO_UNLOCKED, s1 = SERVO_JUMP, s2 = SERVO_LOCKED, s3 =
+	// SERVO_LOCKED_STABLE. Empty when the log line carries no servo state
+	// (e.g. summary/rms lines).
+	ServoState string         `json:"servostate"`
+	Source     string         `json:"source"` // e.g. "phc", "sys", or "master"
+	Status     []StatusMetric `json:"status"` // List of status metrics with their subtypes
 }
