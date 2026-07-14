@@ -18,6 +18,17 @@ const (
 	ClockClassOutOfSpec     protocol.ClockClass = 140
 )
 
+// PMC field-name keys for ExternalGrandmasterProperties, shared across
+// ValueRegEx/Keys/Update (and reused by tests) to avoid duplicate literals.
+const (
+	keyGMIdentity   = "gmIdentity"
+	keyStepsRemoved = "stepsRemoved"
+)
+
+// clock identities are an 8-octet EUI-64 value formatted as three hex groups (e.g.
+// 507c6f.fffe.1fb16c).
+const clockIdentityPattern = `[0-9a-fA-F]+\.[0-9a-fA-F]+\.[0-9a-fA-F]+`
+
 // DataSet is an interface for PTP data sets that can be parsed from PMC output.
 type DataSet interface {
 	Keys() []string
@@ -257,7 +268,9 @@ func stou32h(s string) uint32 {
 // ValueRegEx provides the regex method for the ParentDS values matching
 func (p *ParentDataSet) ValueRegEx() map[string]string {
 	return map[string]string{
-		"parentPortIdentity":                    `.*`,
+		// parentPortIdentity is a clockIdentity plus a "-<portNumber>" suffix,
+		// e.g. c45ab1.ffff.545c05-21.
+		"parentPortIdentity":                    clockIdentityPattern + `-\d+`,
 		"parentStats":                           `\d+`,
 		"observedParentOffsetScaledLogVariance": `0x[\da-f]+`,
 		"observedParentClockPhaseChangeRate":    `0x[\da-f]+`,
@@ -266,7 +279,7 @@ func (p *ParentDataSet) ValueRegEx() map[string]string {
 		"gm.ClockAccuracy":                      `0x[\da-f]+`,
 		"gm.OffsetScaledLogVariance":            `0x[\da-f]+`,
 		"grandmasterPriority2":                  `\d+`,
-		"grandmasterIdentity":                   `.*`,
+		"grandmasterIdentity":                   clockIdentityPattern,
 	}
 }
 
@@ -364,8 +377,8 @@ func (p *ParentDataSet) Equal(other *ParentDataSet) bool {
 // ValueRegEx provides the regex method for the ExternalGrandmasterProperties values matching
 func (e *ExternalGrandmasterProperties) ValueRegEx() map[string]string {
 	return map[string]string{
-		"gmIdentity":   `\d*\.\d*\.\d*`,
-		"stepsRemoved": `\d+`,
+		keyGMIdentity:   clockIdentityPattern,
+		keyStepsRemoved: `\d+`,
 	}
 }
 
@@ -381,15 +394,15 @@ func (e *ExternalGrandmasterProperties) MonitorRegEx() string {
 
 // Keys provides the keys method for the ExternalGrandmasterProperties values
 func (e *ExternalGrandmasterProperties) Keys() []string {
-	return []string{"gmIdentity", "stepsRemoved"}
+	return []string{keyGMIdentity, keyStepsRemoved}
 }
 
 // Update provides the Update method for the ExternalGrandmasterProperties values
 func (e *ExternalGrandmasterProperties) Update(key string, value string) {
 	switch key {
-	case "gmIdentity":
+	case keyGMIdentity:
 		e.GrandmasterIdentity = value
-	case "stepsRemoved":
+	case keyStepsRemoved:
 		e.StepsRemoved = stou16(value)
 	}
 }
