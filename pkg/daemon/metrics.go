@@ -139,6 +139,18 @@ var (
 			Help:      "0 = FREERUN, 1 = LOCKED, 2 = HOLDOVER",
 		}, []string{"process", "node", "iface"})
 
+	// ServoState metrics to show the raw linuxptp servo state (s0-s3) as
+	// printed in ptp4l/phc2sys/ts2phc offset log lines (e.g. "master offset
+	// -1 s2 freq +1 path delay 18481"), independent of the collapsed
+	// ClockState metric above.
+	ServoState = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: PTPNamespace,
+			Subsystem: PTPSubsystem,
+			Name:      "servo_state",
+			Help:      "raw linuxptp servo state: 0 = UNLOCKED (s0), 1 = JUMP (s1), 2 = LOCKED (s2), 3 = LOCKED_STABLE (s3)",
+		}, []string{"process", "node", "iface"})
+
 	// ClockClassMetrics metrics to show current clock class
 	ClockClassMetrics = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -212,6 +224,7 @@ func RegisterMetrics(nodeName string) {
 		prometheus.MustRegister(Delay)
 		prometheus.MustRegister(InterfaceRole)
 		prometheus.MustRegister(ClockState)
+		prometheus.MustRegister(ServoState)
 		prometheus.MustRegister(ProcessStatus)
 		prometheus.MustRegister(ProcessRestartCount)
 		prometheus.MustRegister(ClockClassMetrics)
@@ -539,6 +552,39 @@ func updateClockStateMetrics(process, iface string, state string) {
 	}
 }
 
+// updateServoStateMetrics sets the ServoState gauge from the raw "sN" servo
+// state token captured by the parser (e.g. "s2"). No-ops on an empty or
+// unrecognized token, leaving any previously reported value in place.
+func updateServoStateMetrics(process, iface, servoState string) {
+	if !utils.CheckMetricSanity("ServoState", process, iface) {
+		return
+	}
+	value, ok := parseServoState(servoState)
+	if !ok {
+		glog.Warningf("updateServoStateMetrics: unrecognized servo state %q for process=%s iface=%s", servoState, process, iface)
+		return
+	}
+	glog.V(14).Infof("updateServoStateMetrics: process=%s iface=%s state=%s", process, iface, servoState)
+	ServoState.With(prometheus.Labels{
+		"process": process, "node": NodeName, "iface": iface}).Set(value)
+}
+
+// parseServoState converts a raw "sN" servo state token as printed by
+// linuxptp into its numeric enum value from upstream's servo.h (s0..s3 map
+// to 0..3: SERVO_UNLOCKED, SERVO_JUMP, SERVO_LOCKED, SERVO_LOCKED_STABLE).
+// Returns false if servoState isn't a recognized "sN" token.
+func parseServoState(servoState string) (float64, bool) {
+	digits, ok := strings.CutPrefix(servoState, "s")
+	if !ok {
+		return 0, false
+	}
+	value, err := strconv.Atoi(digits)
+	if err != nil {
+		return 0, false
+	}
+	return float64(value), true
+}
+
 func UpdateInterfaceRoleMetrics(process string, iface string, role ptpPortRole) {
 	if !utils.CheckMetricSanity("InterfaceRole", process, iface) {
 		return
@@ -602,6 +648,8 @@ func deleteSyncEMetrics(process, configName string, relations *synce.Relations) 
 
 			ClockState.Delete(prometheus.Labels{
 				"process": process, "node": NodeName, "iface": iface})
+			ServoState.Delete(prometheus.Labels{
+				"process": process, "node": NodeName, "iface": iface})
 		}
 	}
 }
@@ -620,6 +668,8 @@ func deleteMetrics(ifaces config.IFaces, haProfiles map[string][]string, process
 	for _, iface := range masterOffsetIface.iface {
 		ClockState.Delete(prometheus.Labels{
 			"process": process, "node": NodeName, "iface": iface.alias})
+		ServoState.Delete(prometheus.Labels{
+			"process": process, "node": NodeName, "iface": iface.alias})
 		Delay.Delete(prometheus.Labels{
 			"from": master, "process": process, "node": NodeName, "iface": iface.alias})
 		FrequencyAdjustment.Delete(prometheus.Labels{
@@ -633,6 +683,8 @@ func deleteMetrics(ifaces config.IFaces, haProfiles map[string][]string, process
 
 func deleteOsClockStateMetrics(profiles map[string][]string) {
 	ClockState.Delete(prometheus.Labels{
+		"process": phc2sysProcessName, "node": NodeName, "iface": clockRealTime})
+	ServoState.Delete(prometheus.Labels{
 		"process": phc2sysProcessName, "node": NodeName, "iface": clockRealTime})
 	Delay.Delete(prometheus.Labels{
 		"from": phc, "process": phc2sysProcessName, "node": NodeName, "iface": clockRealTime})

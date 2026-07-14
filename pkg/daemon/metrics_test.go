@@ -3,6 +3,7 @@ package daemon
 import (
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -84,4 +85,67 @@ func TestExtractPTP4lEventState(t *testing.T) {
 			assert.Equal(t, tt.expectedRole, role)
 		})
 	}
+}
+
+// TestParseServoState locks in the mapping from the raw "sN" servo state
+// token linuxptp prints (e.g. in "master offset -1 s2 freq +1 path delay
+// 18481") to its numeric value, matching upstream's servo.h enum: s0 =
+// SERVO_UNLOCKED, s1 = SERVO_JUMP, s2 = SERVO_LOCKED, s3 = SERVO_LOCKED_STABLE.
+func TestParseServoState(t *testing.T) {
+	tests := []struct {
+		name          string
+		servoState    string
+		expectedValue float64
+		expectedOK    bool
+	}{
+		{name: "s0 unlocked", servoState: "s0", expectedValue: 0, expectedOK: true},
+		{name: "s1 jump", servoState: "s1", expectedValue: 1, expectedOK: true},
+		{name: "s2 locked", servoState: "s2", expectedValue: 2, expectedOK: true},
+		{name: "s3 locked stable", servoState: "s3", expectedValue: 3, expectedOK: true},
+		{name: "empty string is not recognized", servoState: "", expectedOK: false},
+		{name: "missing s prefix is not recognized", servoState: "2", expectedOK: false},
+		{name: "non-numeric suffix is not recognized", servoState: "sx", expectedOK: false},
+		{name: "garbage is not recognized", servoState: "not-a-servo-state", expectedOK: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, ok := parseServoState(tt.servoState)
+			assert.Equal(t, tt.expectedOK, ok)
+			if tt.expectedOK {
+				assert.Equal(t, tt.expectedValue, value)
+			}
+		})
+	}
+}
+
+// Prometheus label keys used by the metrics gauges under test, pulled into
+// constants (rather than repeating the raw string literals) to satisfy
+// goconst: metrics.go already uses "process"/"node"/"iface" as map keys
+// dozens of times each, so any new raw occurrence trips the linter.
+const (
+	labelProcess = "process"
+	labelNode    = "node"
+	labelIface   = "iface"
+)
+
+// TestUpdateServoStateMetrics verifies that updateServoStateMetrics sets the
+// ServoState gauge for recognized "sN" tokens and safely no-ops (without
+// panicking or touching the gauge) on empty/unrecognized ones.
+func TestUpdateServoStateMetrics(t *testing.T) {
+	const (
+		process = "ptp4l"
+		iface   = "ens1f0"
+	)
+
+	updateServoStateMetrics(process, iface, "s2")
+	gauge := ServoState.With(map[string]string{labelProcess: process, labelNode: NodeName, labelIface: iface})
+	assert.Equal(t, float64(2), testutil.ToFloat64(gauge))
+
+	updateServoStateMetrics(process, iface, "s0")
+	assert.Equal(t, float64(0), testutil.ToFloat64(gauge))
+
+	// An unrecognized token must not overwrite the last known good value.
+	updateServoStateMetrics(process, iface, "garbage")
+	assert.Equal(t, float64(0), testutil.ToFloat64(gauge))
 }
