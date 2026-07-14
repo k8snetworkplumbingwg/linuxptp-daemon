@@ -324,6 +324,26 @@ func (conf *Ptp4lConf) AddInterfaceSection(iface string) {
 	conf.setPtp4lConfOption(ifaceSectionName, "", "", false)
 }
 
+// ResolveInterfaceNames resolves interface section names using the given
+// resolver. Non-interface sections (global, nmea, unicast_master_table,
+// synce device sections) are left unchanged.
+func (conf *Ptp4lConf) ResolveInterfaceNames(resolver *network.InterfaceResolver) {
+	for i, section := range conf.sections {
+		name := section.sectionName
+		if name == GlobalSectionName || name == NmeaSectionName || name == UnicastSectionName {
+			continue
+		}
+		inner := getSectionName(name)
+		if strings.HasPrefix(inner, "<") || strings.HasPrefix(inner, "{") {
+			continue
+		}
+		resolved, remapped := resolver.Resolve(inner)
+		if remapped {
+			conf.sections[i].sectionName = fmt.Sprintf("[%s]", resolved)
+		}
+	}
+}
+
 func getSource(isTs2phcMaster string) event.EventSource {
 	if ts2phcMaster, err := strconv.ParseBool(strings.TrimSpace(isTs2phcMaster)); err == nil {
 		if ts2phcMaster {

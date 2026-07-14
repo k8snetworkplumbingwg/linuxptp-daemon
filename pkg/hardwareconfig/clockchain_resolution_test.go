@@ -202,7 +202,7 @@ func TestClockChainResolution(t *testing.T) {
 			defer ResetLeadingInterfaceResolver()
 
 			// Resolve clock chain (this is what we're testing)
-			hcm := NewHardwareConfigManager(fakeClient, "default")
+			hcm := NewHardwareConfigManager(fakeClient, "default", nil)
 			resolvedConfig, err := hcm.ResolveClockChain(hwConfig, ptpConfig)
 			assert.NoError(t, err)
 			assert.NotNil(t, resolvedConfig)
@@ -346,7 +346,7 @@ func TestClockChainResolution_DualUpstream(t *testing.T) {
 	defer ResetLeadingInterfaceResolver()
 
 	fakeClient := fake.NewClientset()
-	hcm := NewHardwareConfigManager(fakeClient, "default")
+	hcm := NewHardwareConfigManager(fakeClient, "default", nil)
 	resolvedConfig, err := hcm.ResolveClockChain(hwConfig, ptpConfig)
 	assert.NoError(t, err)
 	if !assert.NotNil(t, resolvedConfig) {
@@ -516,7 +516,7 @@ func TestClockChainResolutionWithE830(t *testing.T) {
 	defer ResetLeadingInterfaceResolver()
 
 	fakeClient := fake.NewClientset()
-	hcm := NewHardwareConfigManager(fakeClient, "default")
+	hcm := NewHardwareConfigManager(fakeClient, "default", nil)
 
 	resolvedConfig, err := hcm.ResolveClockChain(hwConfig, ptpConfig)
 	require.NoError(t, err, "ResolveClockChain should succeed with E830 subsystems")
