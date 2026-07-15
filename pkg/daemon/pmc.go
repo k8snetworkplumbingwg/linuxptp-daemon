@@ -12,6 +12,8 @@ import (
 	expect "github.com/google/goexpect"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	pmcPkg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
@@ -23,9 +25,20 @@ const (
 	pollTimeout    = 5 * time.Minute
 )
 
+// PortStateChangeCallback is called by PMCProcess when a port-state
+// notification is received and the role has actually changed.
+type PortStateChangeCallback func(iface string, role, previousRole constants.PTPPortRole)
+
+// PMCPortStateOpts groups the optional port-state monitoring parameters
+// for NewPMCProcess. When nil / zero-value, port-state monitoring is disabled.
+type PMCPortStateOpts struct {
+	PortIfaceMap map[int]string
+	OnChange     PortStateChangeCallback
+}
+
 // NewPMCProcess creates a new PMC process instance for monitoring PTP events.
-func NewPMCProcess(runID int, eventHandler *event.EventHandler, clockType string) *PMCProcess {
-	return &PMCProcess{
+func NewPMCProcess(runID int, eventHandler *event.EventHandler, clockType string, portStateOpts *PMCPortStateOpts) *PMCProcess {
+	p := &PMCProcess{
 		configFileName:    fmt.Sprintf("ptp4l.%d.config", runID),
 		messageTag:        fmt.Sprintf("[ptp4l.%d.config:{level}]", runID),
 		monitorParentData: true,
@@ -34,6 +47,14 @@ func NewPMCProcess(runID int, eventHandler *event.EventHandler, clockType string
 		clockType:         clockType,
 		getMonitorFn:      pmcPkg.GetPMCMontior,
 	}
+	if portStateOpts != nil && portStateOpts.OnChange != nil && len(portStateOpts.PortIfaceMap) > 0 {
+		p.monitorPortState = true
+		p.portDSCh = make(chan protocol.PortDataSet, 10)
+		p.portIfaceMap = portStateOpts.PortIfaceMap
+		p.lastPortRole = make(map[string]constants.PTPPortRole, len(portStateOpts.PortIfaceMap))
+		p.onPortStateChange = portStateOpts.OnChange
+	}
+	return p
 }
 
 // PMCProcess manages a PMC (PTP Management Client) process for monitoring PTP events.
@@ -47,11 +68,17 @@ type PMCProcess struct {
 	monitorCMLDS      bool
 	parentDS          *protocol.ParentDataSet
 	parentDSCh        chan protocol.ParentDataSet
+	portDSCh          chan protocol.PortDataSet
 	exitCh            chan struct{}
 	clockType         string
 	c                 net.Conn // guarded by lock
 	messageTag        string
 	eventHandler      *event.EventHandler
+
+	// Port-state monitoring fields (non-nil only when monitorPortState is true).
+	portIfaceMap      map[int]string
+	lastPortRole      map[string]constants.PTPPortRole
+	onPortStateChange PortStateChangeCallback
 
 	getMonitorFn func(string) (*expect.GExpect, <-chan error, error)
 }
@@ -224,6 +251,11 @@ func (pmc *PMCProcess) monitor(conn net.Conn) error {
 
 	go pmc.expectWorker(exp, pmc.parentDSCh, workerCh, doneCh)
 
+	portDSCh := pmc.portDSCh
+	if portDSCh == nil {
+		portDSCh = make(chan protocol.PortDataSet) // never fires
+	}
+
 	for {
 		select {
 		case <-r:
@@ -233,6 +265,8 @@ func (pmc *PMCProcess) monitor(conn net.Conn) error {
 			return nil
 		case parentDS := <-pmc.parentDSCh:
 			go pmc.handleParentDS(parentDS)
+		case portDS := <-portDSCh:
+			go pmc.handlePortDS(portDS)
 		case signal := <-workerCh:
 			if signal.restartProcess {
 				glog.Warningf("PMC process exited (%v)", signal.err)
@@ -253,7 +287,7 @@ func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- proto
 		}
 
 		go pmc.Poll() // Check if anything changed while handling the last message
-		_, matches, expectErr := exp.Expect(pmcPkg.GetMonitorRegex(pmc.monitorParentData), -1)
+		_, matches, expectErr := exp.Expect(pmcPkg.GetMonitorRegex(pmc.monitorParentData, pmc.monitorPortState), -1)
 
 		if expectErr != nil {
 			if _, ok := expectErr.(expect.TimeoutError); ok {
@@ -266,15 +300,36 @@ func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- proto
 			continue
 		}
 
-		if len(matches) > 0 && strings.Contains(matches[0], "PARENT_DATA_SET") {
-			processedMessage, procErr := protocol.ProcessMessage[protocol.ParentDataSet](matches)
+		if len(matches) == 0 {
+			continue
+		}
+
+		// matches comes from the combined parent|port alternation regex, so its
+		// capture-group positions include every group from both branches, with
+		// the non-participating branch's groups present as empty strings. Re-run
+		// the DataSet-specific regex against the matched text so submatch
+		// indices line up with that DataSet's own Keys() again.
+		header := matches[0]
+		switch {
+		case strings.Contains(header, "PARENT_DATA_SET"):
+			parentMatches := pmcPkg.ParentDataSetRegExp().FindStringSubmatch(header)
+			processedMessage, procErr := protocol.ProcessMessage[protocol.ParentDataSet](parentMatches)
 			if procErr != nil {
 				glog.Warningf("failed to process message for PARENT_DATA_SET: %s", procErr)
 			} else {
 				parentDSCh <- *processedMessage
 			}
-		}
 
+		case pmc.monitorPortState && pmc.portDSCh != nil &&
+			strings.Contains(header, "PORT_DATA_SET "):
+			portMatches := pmcPkg.PortDataSetRegExp().FindStringSubmatch(header)
+			processedMessage, procErr := protocol.ProcessMessage[protocol.PortDataSet](portMatches)
+			if procErr != nil {
+				glog.Warningf("failed to process message for PORT_DATA_SET: %s", procErr)
+			} else {
+				pmc.portDSCh <- *processedMessage
+			}
+		}
 	}
 }
 
@@ -297,6 +352,34 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 			pmc.configFileName,
 			event.ClockType(pmc.clockType),
 		)
+	}
+}
+
+func (pmc *PMCProcess) handlePortDS(portDS protocol.PortDataSet) {
+	portNum, err := portDS.PortNumber()
+	if err != nil {
+		glog.Warningf("PMC port-state: cannot extract port number: %v", err)
+		return
+	}
+
+	iface, ok := pmc.portIfaceMap[portNum]
+	if !ok {
+		glog.Warningf("PMC port-state: unknown port number %d (identity=%s)", portNum, portDS.PortIdentity)
+		return
+	}
+
+	role, _ := parser.PortStateToRole(portDS.PortState)
+	previousRole := pmc.lastPortRole[iface]
+	pmc.lastPortRole[iface] = role
+
+	if role == previousRole {
+		return
+	}
+
+	glog.Infof("PMC port-state: iface=%s state=%s role=%v previousRole=%v", iface, portDS.PortState, role, previousRole)
+
+	if pmc.onPortStateChange != nil {
+		pmc.onPortStateChange(iface, role, previousRole)
 	}
 }
 

@@ -119,16 +119,6 @@ func TestParseServoState(t *testing.T) {
 	}
 }
 
-// Prometheus label keys used by the metrics gauges under test, pulled into
-// constants (rather than repeating the raw string literals) to satisfy
-// goconst: metrics.go already uses "process"/"node"/"iface" as map keys
-// dozens of times each, so any new raw occurrence trips the linter.
-const (
-	labelProcess = "process"
-	labelNode    = "node"
-	labelIface   = "iface"
-)
-
 // TestUpdateServoStateMetrics verifies that updateServoStateMetrics sets the
 // ServoState gauge for recognized "sN" tokens and safely no-ops (without
 // panicking or touching the gauge) on empty/unrecognized ones.

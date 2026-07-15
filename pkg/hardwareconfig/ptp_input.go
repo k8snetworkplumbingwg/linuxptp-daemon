@@ -33,10 +33,23 @@ func NewPTPStateDetector(hcm *HardwareConfigManager) *PTPStateDetector {
 	return psd
 }
 
+// DetectStateChangeFromRole maps a port-role transition to a condition type.
+// This is the shared core that both log-scraping and PMC-based port-state
+// detection use. Returns ("", "") when the transition is not relevant.
+func DetectStateChangeFromRole(portName string, role, previousRole constants.PTPPortRole) (string, string) {
+	switch {
+	case role == constants.PortRoleSlave:
+		return portName, ConditionTypeLocked
+	case previousRole == constants.PortRoleSlave:
+		return portName, ConditionTypeLost
+	default:
+		return "", ""
+	}
+}
+
 // DetectStateChange processes a PTP4L log line and returns port-aware state change information.
 // Returns the port name and condition type ("locked", "lost") for the port that changed state.
 // Returns ("", "") when the log line contains no relevant state change or the port is not monitored.
-// TODO: replace by pmc state monitor
 func (psd *PTPStateDetector) DetectStateChange(logLine string) (portName string, conditionType string) {
 	_, event, err := psd.ptp4lExtractor.Extract(logLine)
 	if err != nil || event == nil {
@@ -48,16 +61,7 @@ func (psd *PTPStateDetector) DetectStateChange(logLine string) (portName string,
 		return "", ""
 	}
 
-	switch {
-	case event.Role == constants.PortRoleSlave:
-		return portName, ConditionTypeLocked
-	case event.PreviousRole == constants.PortRoleSlave:
-		// The port was SLAVE immediately before this transition and is no
-		// longer, i.e. it just lost sync (regardless of what it became).
-		return portName, ConditionTypeLost
-	default:
-		return "", ""
-	}
+	return DetectStateChangeFromRole(portName, event.Role, event.PreviousRole)
 }
 
 // ExtractPortName extracts the port name from a PTP4L log line using the parser package
