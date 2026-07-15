@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
+
 	dpllcfg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -546,6 +548,66 @@ func TestDetectStateChange_PreviousRolePrecision(t *testing.T) {
 		assert.Equal(t, "locked", conditionType)
 		assert.Equal(t, "ens4f1", portName)
 	})
+}
+
+func TestDetectStateChangeFromRole(t *testing.T) {
+	tests := []struct {
+		name              string
+		portName          string
+		role              constants.PTPPortRole
+		previousRole      constants.PTPPortRole
+		expectedPort      string
+		expectedCondition string
+	}{
+		{
+			name:              "becomes SLAVE -> locked",
+			portName:          "ens4f0",
+			role:              constants.PortRoleSlave,
+			previousRole:      constants.PortRoleUnknown,
+			expectedPort:      "ens4f0",
+			expectedCondition: ConditionTypeLocked,
+		},
+		{
+			name:              "was SLAVE now FAULTY -> lost",
+			portName:          "ens4f0",
+			role:              constants.PortRoleFaulty,
+			previousRole:      constants.PortRoleSlave,
+			expectedPort:      "ens4f0",
+			expectedCondition: ConditionTypeLost,
+		},
+		{
+			name:              "was SLAVE now MASTER -> lost",
+			portName:          "ens4f0",
+			role:              constants.PortRoleMaster,
+			previousRole:      constants.PortRoleSlave,
+			expectedPort:      "ens4f0",
+			expectedCondition: ConditionTypeLost,
+		},
+		{
+			name:              "MASTER to LISTENING -> no change",
+			portName:          "ens4f0",
+			role:              constants.PortRoleListening,
+			previousRole:      constants.PortRoleMaster,
+			expectedPort:      "",
+			expectedCondition: "",
+		},
+		{
+			name:              "unknown to unknown -> no change",
+			portName:          "ens4f0",
+			role:              constants.PortRoleUnknown,
+			previousRole:      constants.PortRoleUnknown,
+			expectedPort:      "",
+			expectedCondition: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			port, cond := DetectStateChangeFromRole(tt.portName, tt.role, tt.previousRole)
+			assert.Equal(t, tt.expectedPort, port)
+			assert.Equal(t, tt.expectedCondition, cond)
+		})
+	}
 }
 
 func TestNewPTPStateDetector(t *testing.T) {

@@ -3043,7 +3043,7 @@ func TestEmitClockClassLogs_EmitsWithNilParentDS(t *testing.T) {
 
 	// Create a PMC process with parentDS = nil (the bug condition).
 	// Before the fix, EmitClockClassLogs skipped the call when parentDS was nil.
-	pmcProc := NewPMCProcess(0, handler, "OC")
+	pmcProc := NewPMCProcess(0, handler, "OC", nil)
 	assert.Nil(t, pmcProc.parentDS, "parentDS should be nil for this test")
 
 	// Create a ptp4l process with the PMC as a dependent process

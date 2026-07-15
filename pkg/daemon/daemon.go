@@ -1269,7 +1269,18 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				if !clockTypeFound {
 					pmcClockType = string(clockType)
 				}
-				pmcProcess := NewPMCProcess(runID, dn.processManager.ptpEventHandler, pmcClockType)
+				var portStateOpts *PMCPortStateOpts
+				if pmcClockType == TBC && len(ifaces) > 0 {
+					portIfaceMap := make(map[int]string, len(ifaces))
+					for idx, ifc := range ifaces {
+						portIfaceMap[idx+1] = ifc.Name
+					}
+					portStateOpts = &PMCPortStateOpts{
+						PortIfaceMap: portIfaceMap,
+						OnChange:     dprocess.pmcPortStateChanged,
+					}
+				}
+				pmcProcess := NewPMCProcess(runID, dn.processManager.ptpEventHandler, pmcClockType, portStateOpts)
 				pmcProcess.CmdInit()
 				// TODO addScheduling
 				dprocess.depProcess = append(dprocess.depProcess, pmcProcess)
@@ -1733,6 +1744,16 @@ func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.Plugin
 		pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-exit")
 		p.sendPtp4lEvent()
 	})
+}
+
+// pmcPortStateChanged is the callback invoked by PMCProcess.handlePortDS when
+// a PORT_DATA_SET notification indicates a port role change. In Phase 1 this
+// logs the derived condition for comparison with the log-scraping path;
+// the actual T-BC state machine is still driven by log scraping.
+func (p *ptpProcess) pmcPortStateChanged(iface string, role, previousRole parserconstants.PTPPortRole) {
+	_, conditionType := hardwareconfig.DetectStateChangeFromRole(iface, role, previousRole)
+	glog.Infof("PMC port-state: iface=%s role=%v previousRole=%v condition=%q (config=%s)",
+		iface, role, previousRole, conditionType, p.configName)
 }
 
 // cmdRun runs given ptpProcess and restarts on errors
