@@ -354,7 +354,7 @@ func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxIn
 	// time to reach maxnInSpecOffset
 	d.timer = int64(math.Round(float64(d.MaxInSpecOffset) / d.slope))
 	glog.Infof("slope %f ns/s, in spec offset %f ns, in spec timer %d /sec Max timer %d /s",
-		d.slope, float64(d.MaxInSpecOffset), d.timer, int64(d.LocalHoldoverTimeout))
+		d.slope, float64(d.MaxInSpecOffset), d.timer, d.LocalHoldoverTimeout)
 	return d
 }
 
