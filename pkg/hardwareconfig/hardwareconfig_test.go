@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
+
 	dpllcfg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -448,6 +450,164 @@ func TestDetectStateChange(t *testing.T) {
 			t.Logf("ℹ️  No state changes detected in log file (this may be expected if log contains no relevant transitions)")
 		}
 	})
+}
+
+// TestDetectStateChange_PreviousRolePrecision locks in the precision of the
+// "lost" detection added when DetectStateChange was switched from
+// strings.Contains(event.Raw, "SLAVE to ") to event.PreviousRole ==
+// constants.PortRoleSlave. It specifically guards against two classes of
+// false positive that a looser check (e.g. matching on Role alone, or on
+// interface-name equality with a previously-locked port) would reintroduce:
+//   - benign non-transition log lines for an already-locked monitored port
+//   - benign cold-start BMCA self-election ("... to MASTER on RS_MASTER")
+//     on a port that was never SLAVE
+//
+// and it confirms every kind of genuine "left SLAVE" transition (to MASTER,
+// PASSIVE, LISTENING, UNCALIBRATED/FAULTY) is still reported as "lost".
+func TestDetectStateChange_PreviousRolePrecision(t *testing.T) {
+	SetupMockPtpDeviceResolver()
+	defer TeardownMockPtpDeviceResolver()
+
+	mockErr := SetupMockDpllPinsForTests()
+	if mockErr != nil {
+		t.Logf("Warning: Failed to setup mock DPLL pins: %v", mockErr)
+	}
+	defer TeardownMockDpllPinsForTests()
+
+	mockCmd := NewMockCommandExecutor()
+	mockCmd.SetResponse("ethtool", []string{"-i", "ens4f0"}, "driver: ice\nbus-info: 0000:17:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:17:00.0"}, "17:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
+	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:17:00.0"}, "serial_number 50-7c-6f-ff-ff-5c-4a-e8")
+	mockCmd.SetResponse("ethtool", []string{"-i", "ens8f0"}, "driver: ice\nbus-info: 0000:51:00.0")
+	mockCmd.SetResponse("lspci", []string{"-s", "0000:51:00.0"}, "51:00.0 Ethernet controller: Intel Corporation Ethernet Controller E810-C for backplane")
+	mockCmd.SetResponse("devlink", []string{"dev", "info", "pci/0000:51:00.0"}, "serial_number 50-7c-6f-ff-ff-1f-b1-b8")
+	SetCommandExecutor(mockCmd)
+	defer ResetCommandExecutor()
+
+	hwConfig, err := loadHardwareConfigFromFile("testdata/wpc-hwconfig.yaml")
+	assert.NoError(t, err)
+	hcm := newHardwareConfigManagerForTests()
+	assert.NoError(t, hcm.UpdateHardwareConfig([]ptpv2alpha1.HardwareConfig{*hwConfig}))
+
+	t.Run("benign non-transition line on an already-locked port is not lost", func(t *testing.T) {
+		psd := NewPTPStateDetector(hcm)
+
+		portName, conditionType := psd.DetectStateChange("ptp4l[100.000]: [ptp4l.1.config:5] port 1 (ens4f1): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED")
+		assert.Equal(t, "locked", conditionType)
+		assert.Equal(t, "ens4f1", portName)
+
+		for i := 0; i < 10; i++ {
+			portName, conditionType = psd.DetectStateChange("ptp4l[200.000]: [ptp4l.1.config:5] port 1 (ens4f1): some unrelated diagnostic message")
+			assert.Equal(t, "", conditionType, "iteration %d: unrelated line must not report lost/locked", i)
+			assert.Equal(t, "", portName, "iteration %d", i)
+		}
+	})
+
+	t.Run("benign cold-start BMCA self-election is not lost", func(t *testing.T) {
+		psd := NewPTPStateDetector(hcm)
+
+		portName, conditionType := psd.DetectStateChange("ptp4l[100.000]: [ptp4l.1.config:5] port 1 (ens4f1): UNCALIBRATED to MASTER on RS_MASTER")
+		assert.Equal(t, "", conditionType, "cold-start self-election on a never-locked port must not be reported as lost")
+		assert.Equal(t, "", portName)
+	})
+
+	t.Run("every kind of departure from SLAVE is reported as lost", func(t *testing.T) {
+		departures := []string{
+			"SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
+			"SLAVE to GRAND_MASTER",
+			"SLAVE to PASSIVE on RS_PASSIVE",
+			"SLAVE to LISTENING",
+			"SLAVE to UNCALIBRATED",
+			"SLAVE to FAULT_DETECTED on FAULT_DETECTED",
+		}
+		for _, transition := range departures {
+			t.Run(transition, func(t *testing.T) {
+				psd := NewPTPStateDetector(hcm)
+				// Establish SLAVE first so the scenario matches a real port
+				// that was actually locked before departing.
+				_, conditionType := psd.DetectStateChange("ptp4l[100.000]: [ptp4l.1.config:5] port 1 (ens4f1): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED")
+				assert.Equal(t, "locked", conditionType)
+
+				portName, conditionType := psd.DetectStateChange("ptp4l[200.000]: [ptp4l.1.config:5] port 1 (ens4f1): " + transition)
+				assert.Equal(t, "lost", conditionType)
+				assert.Equal(t, "ens4f1", portName)
+			})
+		}
+	})
+
+	t.Run("re-lock after a lost transition is detected", func(t *testing.T) {
+		psd := NewPTPStateDetector(hcm)
+
+		_, conditionType := psd.DetectStateChange("ptp4l[100.000]: [ptp4l.1.config:5] port 1 (ens4f1): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED")
+		assert.Equal(t, "locked", conditionType)
+
+		_, conditionType = psd.DetectStateChange("ptp4l[200.000]: [ptp4l.1.config:5] port 1 (ens4f1): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES")
+		assert.Equal(t, "lost", conditionType)
+
+		portName, conditionType := psd.DetectStateChange("ptp4l[300.000]: [ptp4l.1.config:5] port 1 (ens4f1): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED")
+		assert.Equal(t, "locked", conditionType)
+		assert.Equal(t, "ens4f1", portName)
+	})
+}
+
+func TestDetectStateChangeFromRole(t *testing.T) {
+	tests := []struct {
+		name              string
+		portName          string
+		role              constants.PTPPortRole
+		previousRole      constants.PTPPortRole
+		expectedPort      string
+		expectedCondition string
+	}{
+		{
+			name:              "becomes SLAVE -> locked",
+			portName:          "ens4f0",
+			role:              constants.PortRoleSlave,
+			previousRole:      constants.PortRoleUnknown,
+			expectedPort:      "ens4f0",
+			expectedCondition: ConditionTypeLocked,
+		},
+		{
+			name:              "was SLAVE now FAULTY -> lost",
+			portName:          "ens4f0",
+			role:              constants.PortRoleFaulty,
+			previousRole:      constants.PortRoleSlave,
+			expectedPort:      "ens4f0",
+			expectedCondition: ConditionTypeLost,
+		},
+		{
+			name:              "was SLAVE now MASTER -> lost",
+			portName:          "ens4f0",
+			role:              constants.PortRoleMaster,
+			previousRole:      constants.PortRoleSlave,
+			expectedPort:      "ens4f0",
+			expectedCondition: ConditionTypeLost,
+		},
+		{
+			name:              "MASTER to LISTENING -> no change",
+			portName:          "ens4f0",
+			role:              constants.PortRoleListening,
+			previousRole:      constants.PortRoleMaster,
+			expectedPort:      "",
+			expectedCondition: "",
+		},
+		{
+			name:              "unknown to unknown -> no change",
+			portName:          "ens4f0",
+			role:              constants.PortRoleUnknown,
+			previousRole:      constants.PortRoleUnknown,
+			expectedPort:      "",
+			expectedCondition: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			port, cond := DetectStateChangeFromRole(tt.portName, tt.role, tt.previousRole)
+			assert.Equal(t, tt.expectedPort, port)
+			assert.Equal(t, tt.expectedCondition, cond)
+		})
+	}
 }
 
 func TestNewPTPStateDetector(t *testing.T) {

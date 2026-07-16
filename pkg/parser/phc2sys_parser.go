@@ -197,6 +197,7 @@ func extractRegularPhc2Sys(parsed *phc2sysParsed) (*Metrics, error) {
 		FreqAdj:    *parsed.FreqAdj,
 		Delay:      delay,
 		ClockState: clockState,
+		ServoState: parsed.ServoState,
 		Source:     parsed.Source,
 	}, nil
 }

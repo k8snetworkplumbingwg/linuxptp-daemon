@@ -170,6 +170,8 @@ func NewPTP4LExtractor() *BaseMetricsExtractor[*ptp4lParsed] {
 		},
 	}
 }
+
+// extractEventPTP4l builds a PTPEvent (port ID, interface, role, previous role, clock state) from a parsed ptp4l port state-change log line.
 func extractEventPTP4l(parsed *ptp4lParsed) (*PTPEvent, error) {
 	if parsed.PortID == nil {
 		return nil, fmt.Errorf("port id not found")
@@ -181,13 +183,39 @@ func extractEventPTP4l(parsed *ptp4lParsed) (*PTPEvent, error) {
 		portID = 0
 	}
 
-	// TODO: Pass port name up if provided
 	return &PTPEvent{
-		PortID:     portID,
-		Role:       role,
-		ClockState: clockState,
-		Raw:        parsed.Raw,
+		PortID:       portID,
+		Iface:        parsed.PortName,
+		Role:         role,
+		PreviousRole: previousRole(parsed.Event),
+		ClockState:   clockState,
+		Raw:          parsed.Raw,
 	}, nil
+}
+
+// previousRole extracts the role the port held immediately before this
+// transition from a "<FROM> to <TO> ..." event string (e.g. "SLAVE to MASTER
+// on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES" -> PortRoleSlave). Returns
+// constants.PortRoleUnknown when the event has no explicit "X to Y"
+// transition (e.g. FAULT_DETECTED) or the FROM state isn't one of the
+// recognized port roles.
+func previousRole(event string) constants.PTPPortRole {
+	from, _, found := strings.Cut(event, " to ")
+	if !found {
+		return constants.PortRoleUnknown
+	}
+	switch from {
+	case "SLAVE":
+		return constants.PortRoleSlave
+	case "MASTER":
+		return constants.PortRoleMaster
+	case "PASSIVE":
+		return constants.PortRolePassive
+	case "LISTENING":
+		return constants.PortRoleListening
+	default:
+		return constants.PortRoleUnknown
+	}
 }
 
 // ExtractPortName extracts the port name from a PTP4L event log line
@@ -271,6 +299,7 @@ func extractRegularPTP4l(parsed *ptp4lParsed) (*Metrics, error) {
 		FreqAdj:    *parsed.FreqAdj,
 		Delay:      delay,
 		ClockState: clockState,
+		ServoState: parsed.ServoState,
 		Source:     constants.Master,
 	}, nil
 }

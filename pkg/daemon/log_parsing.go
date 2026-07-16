@@ -94,6 +94,11 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		updateClockStateMetrics(process.name, iface, string(ptpMetrics.ClockState))
 	}
 
+	// Update the raw servo state (s0-s3) metric if available
+	if ptpMetrics.ServoState != "" {
+		updateServoStateMetrics(process.name, iface, ptpMetrics.ServoState)
+	}
+
 	configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
 	if configName != "" {
 		configName = strings.Split(configName, MessageTagSuffixSeperator)[0]
@@ -185,6 +190,12 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 				updatePTPMetrics(master, process.name, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
 				updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
 				updateClockStateMetrics(process.name, masterOffsetIface.get(configName).alias, FREERUN)
+				// The port lost sync, so the servo can no longer be considered
+				// locked either. Force it back to UNLOCKED (s0); otherwise
+				// servo_state would keep reporting the last real sN value from
+				// before the fault, since no further offset lines will arrive
+				// to refresh it while the port stays faulty.
+				updateServoStateMetrics(process.name, masterOffsetIface.get(configName).alias, "s0")
 				masterOffsetIface.set(configName, "")
 				slaveIface.set(configName, "")
 			}

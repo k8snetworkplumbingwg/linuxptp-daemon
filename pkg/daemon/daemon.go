@@ -24,6 +24,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
@@ -1279,7 +1280,18 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				if !clockTypeFound {
 					pmcClockType = string(clockType)
 				}
-				pmcProcess := NewPMCProcess(runID, dn.processManager.ptpEventHandler, pmcClockType)
+				var portStateOpts *PMCPortStateOpts
+				if pmcClockType == TBC && len(ifaces) > 0 {
+					portIfaceMap := make(map[int]string, len(ifaces))
+					for idx, ifc := range ifaces {
+						portIfaceMap[idx+1] = ifc.Name
+					}
+					portStateOpts = &PMCPortStateOpts{
+						PortIfaceMap: portIfaceMap,
+						OnChange:     dprocess.pmcPortStateChanged,
+					}
+				}
+				pmcProcess := NewPMCProcess(runID, dn.processManager.ptpEventHandler, pmcClockType, portStateOpts)
 				pmcProcess.CmdInit()
 				// TODO addScheduling
 				dprocess.depProcess = append(dprocess.depProcess, pmcProcess)
@@ -1712,30 +1724,24 @@ func (p *ptpProcess) processTBCTransitionHardwareConfig(output string) {
 	})
 }
 
-// processTBCTransitionLegacy is the original implementation as ultimate fallback
+// processTBCTransitionLegacy is the ultimate T-BC fallback: it derives port role transitions from the structured parser.PTPEvent instead of matching substrings on raw ptp4l output.
 func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.PluginManager) {
-	portMatched := false
-	for _, iface := range p.tBCAttributes.trIfaceNames {
-		if strings.Contains(output, iface) {
-			portMatched = true
-			break
-		}
+	tbcPTP4LExtractor := parser.NewPTP4LExtractor()
+	_, ptpEvent, err := tbcPTP4LExtractor.Extract(output)
+	if err != nil {
+		glog.Warningf("T-BC legacy: failed to parse ptp4l port event %q: %v", output, err)
 	}
-	if portMatched {
-		if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
-			portName := parser.ExtractPortName(output)
-			if portName != "" {
-				if len(p.tBCAttributes.trIfaceNames) > 1 && !slices.Contains(p.tBCAttributes.trIfaceNames, portName) {
-					glog.Warningf("Ignoring non-TR port in legacy MASTER_CLOCK_SELECTED event: %s", portName)
-				} else {
-					p.tBCAttributes.activePort = portName
-					glog.Infof("T-BC active upstream port: %s", portName)
-				}
-			}
+
+	if ptpEvent != nil && ptpEvent.Iface != "" && slices.Contains(p.tBCAttributes.trIfaceNames, ptpEvent.Iface) {
+		switch {
+		case ptpEvent.Role == parserconstants.PortRoleSlave:
+			// Port became (or remains) the active upstream time-receiver port.
+			p.tBCAttributes.activePort = ptpEvent.Iface
+			glog.Infof("T-BC active upstream port: %s", ptpEvent.Iface)
 			p.tBCAttributes.lastReportedState = event.PTP_LOCKED
 			p.tBCAttributes.offsetFilter = utils.NewWindow(offsetFilterSize)
-		} else if strings.Contains(output, "to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES") ||
-			strings.Contains(output, "SLAVE to") {
+		case ptpEvent.PreviousRole == parserconstants.PortRoleSlave:
+			// Port is no longer a slave indicating it lost sync
 			pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-entry")
 			p.tBCAttributes.lastReportedState = event.PTP_FREERUN
 			glog.Info("T-BC MOVE TO HOLDOVER")
@@ -1749,6 +1755,16 @@ func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.Plugin
 		pm.AfterRunPTPCommand(&p.nodeProfile, "tbc-ho-exit")
 		p.sendPtp4lEvent()
 	})
+}
+
+// pmcPortStateChanged is the callback invoked by PMCProcess.handlePortDS when
+// a PORT_DATA_SET notification indicates a port role change. In Phase 1 this
+// logs the derived condition for comparison with the log-scraping path;
+// the actual T-BC state machine is still driven by log scraping.
+func (p *ptpProcess) pmcPortStateChanged(iface string, role, previousRole parserconstants.PTPPortRole) {
+	_, conditionType := hardwareconfig.DetectStateChangeFromRole(iface, role, previousRole)
+	glog.Infof("PMC port-state: iface=%s role=%v previousRole=%v condition=%q (config=%s)",
+		iface, role, previousRole, conditionType, p.configName)
 }
 
 // cmdRun runs given ptpProcess and restarts on errors

@@ -1301,7 +1301,7 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 		}
 
 		// First call: Set state to LOCKED (no event sent yet)
-		process.tBCTransitionCheck("ptp4l[123] port 1 (ens4f0): to SLAVE on MASTER_CLOCK_SELECTED", pm)
+		process.tBCTransitionCheck("ptp4l[123.456]: [test-config.0.config] port 1 (ens4f0): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
 
 		// Verify state changed to LOCKED
 		assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
@@ -1318,7 +1318,7 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 		// The filter needs to be full (64 samples) before the event is sent
 		// First call already inserted 1 sample, so we need 63 more to fill it
 		for i := 0; i < 63; i++ {
-			process.tBCTransitionCheck("ptp4l[123] port 1 (ens4f0): some other log message", pm)
+			process.tBCTransitionCheck("ptp4l[123.456]: [test-config.0.config] port 1 (ens4f0): some other log message", pm)
 		}
 
 		// Verify event was sent after filter is full
@@ -1355,7 +1355,7 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 		}
 
 		// Call with lost transition log
-		process.tBCTransitionCheck("ptp4l[123] port 1 (ens4f0): SLAVE to", pm)
+		process.tBCTransitionCheck("ptp4l[123.456]: [test-config.0.config] port 1 (ens4f0): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", pm)
 
 		// Verify state changed to FREERUN
 		assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState)
@@ -1396,7 +1396,7 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 		initialState := process.tBCAttributes.lastReportedState
 
 		// Call with log that doesn't match any transition
-		process.tBCTransitionCheck("ptp4l[123] port 1 (ens4f0): some other message", pm)
+		process.tBCTransitionCheck("ptp4l[123.456]: [test-config.0.config] port 1 (ens4f0): some other message", pm)
 
 		// Verify state didn't change
 		assert.Equal(t, initialState, process.tBCAttributes.lastReportedState)
@@ -1407,6 +1407,122 @@ func TestTBCTransitionCheck_LegacyPath(t *testing.T) {
 			t.Error("Unexpected PTP event was sent")
 		default:
 			// No event sent, which is correct
+		}
+	})
+}
+
+// TestTBCLegacy_HoldoverDetectionPrecision locks in the fix for a regression
+// where processTBCTransitionLegacy's holdover branch fired on ptp4l lines that
+// were not actual departures from SLAVE: any line naming the active port
+// (since parser.PTPEvent.Iface is populated even for PortRoleUnknown events),
+// and any "to MASTER" transition regardless of reason (including benign
+// cold-start BMCA self-election, e.g. "on RS_MASTER"). The fix keys holdover
+// detection off ptpEvent.PreviousRole == PortRoleSlave, which is derived
+// purely from the log line's own "<FROM> to <TO>" text.
+func TestTBCLegacy_HoldoverDetectionPrecision(t *testing.T) {
+	pmStruct, _ := registerPlugins([]string{})
+	pm := &pmStruct
+
+	oldValue := vTbcHasHardwareConfig
+	vTbcHasHardwareConfig = false
+	defer func() { vTbcHasHardwareConfig = oldValue }()
+
+	// newProcess returns a fresh ptpProcess with a single TR interface (ens4f0), the starting point for each subtest below.
+	newProcess := func() *ptpProcess {
+		return &ptpProcess{
+			tBCAttributes: tBCProcessAttributes{
+				trIfaceNames:      []string{"ens4f0"},
+				trPortsConfigFile: "test-config",
+				offsetThreshold:   10.0,
+			},
+			nodeProfile: ptpv1.PtpProfile{
+				Name:        stringPointer("test-profile"),
+				PtpSettings: map[string]string{"leadingInterface": "ens4f0", "clockId[ens4f0]": "123456789"},
+			},
+			eventCh:    make(chan event.Event, 10),
+			configName: "test-config",
+			clockType:  event.BC,
+			offset:     5.0,
+		}
+	}
+
+	t.Run("benign unrelated log line for the active port does not force holdover", func(t *testing.T) {
+		process := newProcess()
+		process.tBCTransitionCheck("ptp4l[123.456]: [test-config.0.config] port 1 (ens4f0): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+		assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+
+		for i := 0; i < 20; i++ {
+			process.tBCTransitionCheck("ptp4l[123.456]: [test-config.0.config] port 1 (ens4f0): some other log message", pm)
+			assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState,
+				"state must stay LOCKED on benign non-transition line iteration %d", i)
+		}
+	})
+
+	t.Run("benign cold-start BMCA self-election does not force holdover", func(t *testing.T) {
+		process := newProcess()
+		process.tBCTransitionCheck("ptp4l[123.456]: [test-config.0.config] port 1 (ens4f0): UNCALIBRATED to MASTER on RS_MASTER", pm)
+		assert.NotEqual(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState)
+	})
+
+	t.Run("genuine SLAVE departure still triggers holdover even if activePort bookkeeping was reset", func(t *testing.T) {
+		process := newProcess()
+		process.tBCAttributes.lastReportedState = event.PTP_LOCKED
+		process.tBCAttributes.lastAppliedState = event.PTP_LOCKED
+		// activePort intentionally left unset (simulates state lost across a
+		// daemon restart while ptp4l itself is still tracking real port state).
+		process.tBCTransitionCheck("ptp4l[123.456]: [test-config.0.config] port 1 (ens4f0): SLAVE to PASSIVE on RS_PASSIVE", pm)
+		assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState)
+		assert.Equal(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState)
+	})
+
+	t.Run("announce-timeout driven loss of an established slave still triggers holdover", func(t *testing.T) {
+		process := newProcess()
+		process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config] port 1 (ens4f0): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+		assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+
+		process.tBCTransitionCheck("ptp4l[200]: [test-config.0.config] port 1 (ens4f0): SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES", pm)
+		assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState)
+		assert.Equal(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState)
+	})
+
+	t.Run("every kind of departure from an established slave triggers holdover", func(t *testing.T) {
+		departures := []string{
+			"SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
+			"SLAVE to GRAND_MASTER",
+			"SLAVE to PASSIVE on RS_PASSIVE",
+			"SLAVE to LISTENING",
+			"SLAVE to UNCALIBRATED",
+			"SLAVE to FAULT_DETECTED on FAULT_DETECTED",
+		}
+		for _, transition := range departures {
+			t.Run(transition, func(t *testing.T) {
+				process := newProcess()
+				process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config] port 1 (ens4f0): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+				assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+
+				process.tBCTransitionCheck("ptp4l[200]: [test-config.0.config] port 1 (ens4f0): "+transition, pm)
+				assert.Equal(t, event.PTP_FREERUN, process.tBCAttributes.lastReportedState)
+				assert.Equal(t, event.PTP_HOLDOVER, process.tBCAttributes.lastAppliedState)
+			})
+		}
+	})
+
+	t.Run("malformed or unparseable lines are ignored without panicking", func(t *testing.T) {
+		process := newProcess()
+		process.tBCTransitionCheck("ptp4l[100]: [test-config.0.config] port 1 (ens4f0): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED", pm)
+		assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState)
+
+		malformedLines := []string{
+			"",
+			"not a ptp4l line at all",
+			"ptp4l[100] port 1 (ens4f0): missing bracket segment",
+		}
+		for _, line := range malformedLines {
+			assert.NotPanics(t, func() {
+				process.tBCTransitionCheck(line, pm)
+			})
+			assert.Equal(t, event.PTP_LOCKED, process.tBCAttributes.lastReportedState,
+				"malformed line %q must not change state", line)
 		}
 	})
 }
@@ -2928,7 +3044,7 @@ func TestEmitClockClassLogs_EmitsWithNilParentDS(t *testing.T) {
 
 	// Create a PMC process with parentDS = nil (the bug condition).
 	// Before the fix, EmitClockClassLogs skipped the call when parentDS was nil.
-	pmcProc := NewPMCProcess(0, handler, "OC")
+	pmcProc := NewPMCProcess(0, handler, "OC", nil)
 	assert.Nil(t, pmcProc.parentDS, "parentDS should be nil for this test")
 
 	// Create a ptp4l process with the PMC as a dependent process
