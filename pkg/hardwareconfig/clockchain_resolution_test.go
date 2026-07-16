@@ -371,24 +371,62 @@ func TestClockChainResolution_TGM(t *testing.T) {
 // TestClockChainResolution_TGM_DeriveNetworkInterface verifies that a T-GM
 // config without networkInterface auto-derives it from any interface in the
 // PTP config, using the same leading-interface resolution as T-BC.
-// TestClockChainResolution_TGM_MissingNetworkInterface verifies that a T-GM
-// config without networkInterface returns a clear error, since T-GM cannot
-// derive it from upstream ports.
-func TestClockChainResolution_TGM_MissingNetworkInterface(t *testing.T) {
+// TestClockChainResolution_TGM_DeriveNetworkInterface verifies that a T-GM
+// config without networkInterface auto-derives it from any interface in the
+// PTP config, using the same leading-interface resolution as T-BC.
+func TestClockChainResolution_TGM_DeriveNetworkInterface(t *testing.T) {
 	hwConfig, err := loadHardwareConfigFromFile("testdata/gnrd-hwconfig-minimal-tgm.yaml")
 	require.NoError(t, err)
 
-	// Remove networkInterface to trigger the validation
+	// Remove networkInterface to trigger auto-derive
 	hwConfig.Spec.Profile.ClockChain.Structure[0].DPLL.NetworkInterface = ""
 
 	ptpConfig, err := loadPtpConfigFromFile("testdata/tgm-gnrd.yaml")
 	require.NoError(t, err)
 
+	// T-GM ptpconfig has ens7f0 with masterOnly=1; auto-derive should use it
+	allIfaces := extractInterfacesFromPtpProfile(&ptpConfig.Spec.Profile[0])
+	require.NotEmpty(t, allIfaces, "PTP config should have at least one interface")
+	assert.Equal(t, testIfaceEns7f0, allIfaces[0])
+
+	// Mock leading interface resolver: ens7f0 -> ptp0 -> PCI -> ens7f0
+	mockResolver := newMockLeadingInterfaceResolver()
+	mockResolver.phcIDs[testIfaceEns7f0] = testDevPtp0
+	mockResolver.symlinks["/sys/class/ptp/ptp0/device"] = "../../../0000:51:00.0"
+	mockResolver.dirEntries["/sys/bus/pci/devices/0000:51:00.0/net"] = []os.DirEntry{
+		&mockDirEntry{name: testIfaceEns7f0, isDir: false},
+	}
+	SetLeadingInterfaceResolver(mockResolver)
+	defer ResetLeadingInterfaceResolver()
+
+	fakeClient := fake.NewClientset()
+	hcm := NewHardwareConfigManager(fakeClient, "default", nil)
+	resolved, err := hcm.ResolveClockChain(hwConfig, ptpConfig)
+	require.NoError(t, err)
+
+	assert.Equal(t, testIfaceEns7f0, resolved.Spec.Profile.ClockChain.Structure[0].DPLL.NetworkInterface,
+		"NetworkInterface should be auto-derived from T-GM PTP config interface")
+}
+
+// TestClockChainResolution_TGM_NoInterfaces verifies that a T-GM config
+// with no interfaces in the PTP config returns a clear error.
+func TestClockChainResolution_TGM_NoInterfaces(t *testing.T) {
+	hwConfig, err := loadHardwareConfigFromFile("testdata/gnrd-hwconfig-minimal-tgm.yaml")
+	require.NoError(t, err)
+
+	hwConfig.Spec.Profile.ClockChain.Structure[0].DPLL.NetworkInterface = ""
+
+	// Create a PTP config with no interface sections (only [global])
+	emptyConf := "[global]\nmasterOnly 1\n"
+	ptpConfig, err := loadPtpConfigFromFile("testdata/tgm-gnrd.yaml")
+	require.NoError(t, err)
+	ptpConfig.Spec.Profile[0].Ptp4lConf = &emptyConf
+
 	fakeClient := fake.NewClientset()
 	hcm := NewHardwareConfigManager(fakeClient, "default", nil)
 	_, err = hcm.ResolveClockChain(hwConfig, ptpConfig)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "networkInterface is required for T-GM subsystem")
+	assert.Contains(t, err.Error(), "no interfaces found in ptpconfig for T-GM subsystem")
 }
 
 // TestClockChainResolution_DualUpstream verifies that a minimal HardwareConfig

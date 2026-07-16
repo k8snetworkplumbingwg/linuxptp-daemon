@@ -93,6 +93,29 @@ func extractUpstreamPortsFromPtpProfile(ptpProfile *ptpv1.PtpProfile) []string {
 	return upstreamPorts
 }
 
+// extractInterfacesFromPtpProfile extracts all interface names from a PTP profile's
+// ptp4l config (any [section] that is not a well-known non-interface section).
+func extractInterfacesFromPtpProfile(ptpProfile *ptpv1.PtpProfile) []string {
+	if ptpProfile == nil || ptpProfile.Ptp4lConf == nil {
+		return nil
+	}
+
+	var interfaces []string
+	for _, line := range strings.Split(*ptpProfile.Ptp4lConf, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section := strings.Trim(line, "[]")
+			switch section {
+			case "global", "nmea", "unicast":
+				continue
+			default:
+				interfaces = append(interfaces, section)
+			}
+		}
+	}
+	return interfaces
+}
+
 // findLeadingInterfaceFromPort finds the leading interface (for DPLL clock ID) from any network port.
 // Steps:
 // 1. Get PHC index from port (ethtool -T)
@@ -320,7 +343,17 @@ func (hcm *HardwareConfigManager) deriveSubsystemStructure(subsystem *ptpv2alpha
 			glog.Infof("Derived NetworkInterface: %s (from upstream port %s)", leadingInterface, upstreamPorts[0])
 		}
 	} else if subsystem.DPLL.NetworkInterface == "" {
-		return fmt.Errorf("networkInterface is required for T-GM subsystem %s (no upstream port to derive it from)", subsystem.Name)
+		// T-GM has no upstream ports; derive from any interface in the PTP config
+		allInterfaces := extractInterfacesFromPtpProfile(ptpProfile)
+		if len(allInterfaces) == 0 {
+			return fmt.Errorf("no interfaces found in ptpconfig for T-GM subsystem %s", subsystem.Name)
+		}
+		leadingInterface, err := findLeadingInterfaceFromPort(allInterfaces[0])
+		if err != nil {
+			return fmt.Errorf("failed to find leading interface from port %s: %w", allInterfaces[0], err)
+		}
+		subsystem.DPLL.NetworkInterface = leadingInterface
+		glog.Infof("Derived NetworkInterface: %s (from T-GM port %s)", leadingInterface, allInterfaces[0])
 	}
 
 	// Load behavior profile to get pin roles
