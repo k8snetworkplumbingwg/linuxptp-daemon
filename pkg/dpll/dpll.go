@@ -377,7 +377,7 @@ func (d *DpllConfig) ActivePhaseOffsetPin(pin *nl.PinInfo) (int, bool) {
 		// New behavior: An input pin is the device synchronization source when its OperState is "active".
 		// Note: In this scenario, the administrative state never exceeds "selectable".
 		if (p.State != nl.PinStateConnected && p.Operstate != nl.PinOperstateActive) || p.Direction != nl.PinDirectionInput {
-			glog.Infof("pin id %d parentID=%d skipped: direction=%s adminState=%s operstate=%s",
+			glog.V(14).Infof("pin id %d parentID=%d skipped: direction=%s adminState=%s operstate=%s",
 				pin.ID, p.ParentID, nl.GetPinDirection(p.Direction), nl.GetPinState(p.State), nl.GetPinOperstate(p.Operstate))
 			continue
 		}
@@ -402,20 +402,29 @@ func (d *DpllConfig) nlUpdateState(devices []*nl.DoDeviceGetReply, pins []*nl.Pi
 				continue
 			}
 			glog.Info(string(replyHr), " ", d.iface)
-			switch nl.GetDpllType(reply.Type) {
+			dpllType := nl.GetDpllType(reply.Type)
+			lockChanged := false
+			switch dpllType {
 			case "eec":
+				lockChanged = d.frequencyStatus != int64(reply.LockStatus)
 				d.frequencyStatus = int64(reply.LockStatus)
 				glog.Infof("%s (%#x) updating eec to %s (%d)", d.iface, d.clockId, stateName(d.frequencyStatus), d.frequencyStatus)
 				valid = true
 			case "pps":
+				lockChanged = d.phaseStatus != int64(reply.LockStatus)
 				d.phaseStatus = int64(reply.LockStatus)
 				glog.Infof("%s (%#x) updating pps to %s (%d)", d.iface, d.clockId, stateName(d.phaseStatus), d.phaseStatus)
 				valid = true
 			default:
-				glog.Infof("discarding irrelevant dpll type: %s, id %#x", nl.GetDpllType(reply.Type), d.clockId)
+				glog.Infof("discarding irrelevant dpll type: %s, id %#x", dpllType, d.clockId)
 			}
-			nl.LogPinTable(fmt.Sprintf("%s %s->%s", d.iface, nl.GetDpllType(reply.Type), stateName(int64(reply.LockStatus))),
-				reply.ClockID, reply.ID, reply.LockStatus)
+			// Log only the parents of the DPLL that changed (reply.ID), and only
+			// when lock status actually changes. Otherwise SyncInitialState and
+			// MonitorDpllNetlink's initial dump reprint the same EEC+PPS tables.
+			if lockChanged {
+				nl.LogPinTable(fmt.Sprintf("%s %s->%s", d.iface, dpllType, stateName(int64(reply.LockStatus))),
+					reply.ClockID, reply.ID, reply.LockStatus)
+			}
 		}
 	}
 	for _, pin := range pins {
