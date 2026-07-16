@@ -25,6 +25,7 @@ import (
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	ptpclient "github.com/k8snetworkplumbingwg/ptp-operator/pkg/client/clientset/versioned"
@@ -1293,6 +1294,21 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			glog.Infof("Delaying phc2sys startup: %s", dprocess.skipInitialStartup)
 		} else if pProcess == ts2phcProcessName { //& if the x plugin is enabled
 			if clockType == event.GM {
+				// If a HardwareConfig defines a GNSS source, locate the serial port and any GNSS initialization commands.
+				var gnssInitCmds ublox.CommandList
+				if nodeProfile.Name != nil && dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
+					gnssPort, gnssErr := dn.hardwareConfigManager.GetGNSSSerialPort(nodeProfile)
+					if gnssErr != nil {
+						glog.Warningf("HardwareConfig GNSS device detection failed: %v", gnssErr)
+					} else if gnssPort != "" {
+						glog.Infof("HardwareConfig GNSS device detected: %s (overriding ts2phc config)", gnssPort)
+						output.gnss_serial_port = gnssPort
+					}
+
+					gnssInitCmds = dn.hardwareConfigManager.GetGNSSInitCommands(nodeProfile)
+					glog.Infof("HardwareConfig GNSS initialization added %d additional commands", len(gnssInitCmds))
+				}
+
 				if output.gnss_serial_port == "" {
 					output.gnss_serial_port = GPSDDefaultGNSSSerialPort
 					glog.Warningf("Setting GNSS serial port to %s", output.gnss_serial_port)
@@ -1302,6 +1318,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 
 				// Record ublox init results (MON-HW, etc.) to NodePtpDevice status.
 				// Replaces any previous "gnss" entries to avoid duplicates on re-init.
+				// Additionally store on HardwareConfigManager when that path is active.
 				gnssResultsFn := func(results []string) {
 					dn.hwconfigsMu.Lock()
 					defer dn.hwconfigsMu.Unlock()
@@ -1332,6 +1349,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 					stopped:       false,
 					messageTag:    messageTag,
 					ublxTool:      nil,
+					gnssInitCmds:  gnssInitCmds,
 					gnssResultsFn: gnssResultsFn,
 				}
 				gpsDaemon.CmdInit()
