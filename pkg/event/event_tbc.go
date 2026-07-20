@@ -457,11 +457,22 @@ func (e *EventHandler) downstreamAnnounceIWF(ctx context.Context, cfgName string
 	}
 	glog.Infof("%++v", es)
 	e.announceClockClass(gs.ClockQuality.ClockClass, gs.ClockQuality.ClockAccuracy, cfgName)
-	if err := pmc.SetExternalGMPropertiesNP(controlledPortsConfig, es); err != nil {
-		glog.Error(err)
+
+	// Re-check we're still LOCKED right before each write: gs/es are a stale snapshot if a slow PMC call let the BC move to HOLDOVER/FREERUN in the meantime.
+	if !e.applyIfLockedBC(cfgName, "before downstream PMC writes", func() {
+		if err := pmc.SetExternalGMPropertiesNP(controlledPortsConfig, es); err != nil {
+			glog.Error(err)
+		}
+	}) {
+		return
 	}
-	if err := pmc.SetGMSettings(controlledPortsConfig, gs); err != nil {
-		glog.Error(err)
+
+	if !e.applyIfLockedBC(cfgName, "before SetGMSettings", func() {
+		if err := pmc.SetGMSettings(controlledPortsConfig, gs); err != nil {
+			glog.Error(err)
+		}
+	}) {
+		return
 	}
 	glog.Infof("%++v", es)
 
