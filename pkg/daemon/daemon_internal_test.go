@@ -27,6 +27,8 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -41,6 +43,9 @@ const (
 	testDUTUpstream1    = "ens2f1"
 	testDUTUpstream2    = "ens2f3"
 	testDUTClockIDKey   = "clockId[ens2f0]"
+	labelIface          = "iface"
+	labelNode           = "node"
+	labelProcess        = "process"
 )
 
 // vendor defaults are embedded; no filesystem setup needed
@@ -3732,4 +3737,35 @@ func TestPtp4lConf_ResolveInterfaceNames(t *testing.T) {
 		}
 		assert.True(t, found["[ens5f0]"], "should keep [ens5f0] unchanged")
 	})
+}
+
+func TestUpdateClockStateMetrics(t *testing.T) {
+	origNodeName := NodeName
+	defer func() { NodeName = origNodeName }()
+
+	NodeName = "test-node"
+	RegisterMetrics(NodeName)
+	ClockState.Reset()
+
+	tests := []struct {
+		state    string
+		expected float64
+	}{
+		{FREERUN, event.ClockStateFreerun},
+		{LOCKED, event.ClockStateLocked},
+		{HOLDOVER, event.ClockStateHoldover},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.state, func(t *testing.T) {
+			updateClockStateMetrics(ptp4lProcessName, testDUTLeadingIface, tt.state)
+			gauge, err := ClockState.GetMetricWith(prometheus.Labels{
+				labelProcess: ptp4lProcessName, labelNode: NodeName, labelIface: testDUTLeadingIface,
+			})
+			assert.NoError(t, err)
+			actual := testutil.ToFloat64(gauge)
+			assert.Equal(t, tt.expected, actual,
+				"clock_state for %s should be %v", tt.state, tt.expected)
+		})
+	}
 }
