@@ -241,11 +241,32 @@ func (c *ClockChain) SetPinsControl(pins []PinControl) ([]dpll.PinParentDeviceCt
 	return pinCommands, nil
 }
 
-// SetPinsControlForAllNICs sets pins across all NICs (leading + other NICs)
-// This is used specifically for initialization functions like SetPinDefaults
+// configuredClockIDs returns the DPLL clock IDs of all NICs in this clock chain.
+// Returns nil when no clock IDs have been resolved yet (leading NIC is zero
+// and no other NICs), which tells the caller to skip filtering.
+func (c *ClockChain) configuredClockIDs() map[uint64]bool {
+	ids := make(map[uint64]bool)
+	if c.LeadingNIC.DpllClockID != 0 {
+		ids[c.LeadingNIC.DpllClockID] = true
+	}
+	for _, nic := range c.OtherNICs {
+		if nic.DpllClockID != 0 {
+			ids[nic.DpllClockID] = true
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
+}
+
+// SetPinsControlForAllNICs sets pins across all NICs in the clock chain
+// (leading + other configured NICs). Pins belonging to NICs not in the
+// clock chain are left untouched.
 func (c *ClockChain) SetPinsControlForAllNICs(pins []PinControl) ([]dpll.PinParentDeviceCtl, error) {
 	pinCommands := []dpll.PinParentDeviceCtl{}
 	errs := make([]error, 0)
+	configuredIDs := c.configuredClockIDs()
 
 	for _, pinCtl := range pins {
 		foundPins := c.DpllPins.GetAllPinsByLabel(pinCtl.Label)
@@ -258,6 +279,10 @@ func (c *ClockChain) SetPinsControlForAllNICs(pins []PinControl) ([]dpll.PinPare
 			continue
 		}
 		for _, pin := range foundPins {
+			if configuredIDs != nil && !configuredIDs[pin.ClockID] {
+				glog.Infof("skipping pin %s (clockID %d) — not in clock chain", pin.BoardLabel, pin.ClockID)
+				continue
+			}
 			pinCommands = append(pinCommands, SetPinControlData(*pin, pinCtl.ParentControl)...)
 		}
 	}
