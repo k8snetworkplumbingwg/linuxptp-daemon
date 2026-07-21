@@ -425,6 +425,8 @@ func (d *DpllConfig) nlUpdateState(devices []*nl.DoDeviceGetReply, pins []*nl.Pi
 				nl.LogPinTable(fmt.Sprintf("%s %s->%s", d.iface, dpllType, stateName(int64(reply.LockStatus))),
 					reply.ClockID, reply.ID, reply.LockStatus)
 			}
+			nl.LogPinTable(fmt.Sprintf("%s %s->%s", d.iface, nl.GetDpllType(reply.Type), stateName(int64(reply.LockStatus))),
+				reply.ClockID, reply.ID, reply.LockStatus)
 		}
 	}
 	for _, pin := range pins {
