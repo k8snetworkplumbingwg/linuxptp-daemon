@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -928,41 +927,84 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 	clockType := testClockTypeTGM
 	subsystemName := testSubsystemLeader
 
-	// User provides only gnssConfig on the GNSS source — the template
-	// provides the DPLL pin details and conditions.
-	hwConfig := &ptpv2alpha1.HardwareConfig{
-		Spec: ptpv2alpha1.HardwareConfigSpec{
-			Profile: ptpv2alpha1.HardwareProfile{
-				ClockType: &clockType,
-				ClockChain: &ptpv2alpha1.ClockChain{
-					Structure: []ptpv2alpha1.Subsystem{
-						{
-							Name:                        subsystemName,
-							HardwareSpecificDefinitions: HwDefDellXR8720t,
-							DPLL: ptpv2alpha1.DPLL{
-								NetworkInterface: testIfaceEno8703,
+	tests := []struct {
+		name               string
+		hwConfig           *ptpv2alpha1.HardwareConfig
+		expectedBoardLabel string
+		expectedGnssConfig *ptpv2alpha1.GNSSConfig
+	}{
+		{
+			name: "No user override",
+			// User provides only gnssConfig on the GNSS source — the template
+			// provides the DPLL pin details and conditions.
+			hwConfig: &ptpv2alpha1.HardwareConfig{
+				Spec: ptpv2alpha1.HardwareConfigSpec{
+					Profile: ptpv2alpha1.HardwareProfile{
+						ClockType: &clockType,
+						ClockChain: &ptpv2alpha1.ClockChain{
+							Structure: []ptpv2alpha1.Subsystem{
+								{
+									Name:                        subsystemName,
+									HardwareSpecificDefinitions: HwDefDellXR8720t,
+									DPLL: ptpv2alpha1.DPLL{
+										NetworkInterface: testIfaceEno8703,
+									},
+									Ethernet: []ptpv2alpha1.Ethernet{
+										{Ports: []string{testIfaceEno8703}},
+									},
+								},
 							},
-							Ethernet: []ptpv2alpha1.Ethernet{
-								{Ports: []string{testIfaceEno8703}},
+							Behavior: &ptpv2alpha1.Behavior{
+								Sources: []ptpv2alpha1.SourceConfig{},
 							},
 						},
 					},
-					Behavior: &ptpv2alpha1.Behavior{
-						Sources: []ptpv2alpha1.SourceConfig{
-							{
-								Name:       testSourceGNSS,
-								SourceType: ptpv2alpha1.SourceTypeGNSS,
-								GNSSConfig: &ptpv2alpha1.GNSSConfig{
-									Init: ptpv2alpha1.GNSSInit{
-										AntennaVoltage: true,
-										Constellations: []ptpv2alpha1.ConstellationID{ptpv2alpha1.ConstellationGPS},
-										SurveyIn: ptpv2alpha1.GNSSSurveyParameters{
-											ObservationTime: 600,
-											Accuracy:        5,
-										},
+				},
+			},
+			expectedBoardLabel: "GNSS_1PPS_IN",
+			expectedGnssConfig: &ptpv2alpha1.GNSSConfig{
+				Init: ptpv2alpha1.GNSSInit{},
+				Match: &ptpv2alpha1.GNSSMatcher{
+					TTYDevice: testACM0,
+				},
+			},
+		},
+		{
+			name: "User override of init only",
+			// User provides only gnssConfig on the GNSS source — the template
+			// provides the DPLL pin details and conditions.
+			hwConfig: &ptpv2alpha1.HardwareConfig{
+				Spec: ptpv2alpha1.HardwareConfigSpec{
+					Profile: ptpv2alpha1.HardwareProfile{
+						ClockType: &clockType,
+						ClockChain: &ptpv2alpha1.ClockChain{
+							Structure: []ptpv2alpha1.Subsystem{
+								{
+									Name:                        subsystemName,
+									HardwareSpecificDefinitions: HwDefDellXR8720t,
+									DPLL: ptpv2alpha1.DPLL{
+										NetworkInterface: testIfaceEno8703,
 									},
-									Match: &ptpv2alpha1.GNSSMatcher{
-										EthernetInterface: testIfaceEno8703,
+									Ethernet: []ptpv2alpha1.Ethernet{
+										{Ports: []string{testIfaceEno8703}},
+									},
+								},
+							},
+							Behavior: &ptpv2alpha1.Behavior{
+								Sources: []ptpv2alpha1.SourceConfig{
+									{
+										Name:       testSourceGNSS,
+										SourceType: ptpv2alpha1.SourceTypeGNSS,
+										GNSSConfig: &ptpv2alpha1.GNSSConfig{
+											Init: ptpv2alpha1.GNSSInit{
+												AntennaVoltage: true,
+												Constellations: []ptpv2alpha1.ConstellationID{ptpv2alpha1.ConstellationGPS},
+												SurveyIn: ptpv2alpha1.GNSSSurveyParameters{
+													ObservationTime: 600,
+													Accuracy:        5,
+												},
+											},
+										},
 									},
 								},
 							},
@@ -970,159 +1012,235 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 					},
 				},
 			},
-		},
-	}
-
-	err := hcm.deriveBehavior(hwConfig, clockType)
-	assert.NoError(t, err)
-
-	behavior := hwConfig.Spec.Profile.ClockChain.Behavior
-	assert.NotNil(t, behavior)
-
-	// Should have the GNSS source from template with user's gnssConfig merged
-	var gnssSource *ptpv2alpha1.SourceConfig
-	for i, s := range behavior.Sources {
-		if s.SourceType == ptpv2alpha1.SourceTypeGNSS {
-			gnssSource = &behavior.Sources[i]
-			break
-		}
-	}
-	if !assert.NotNil(t, gnssSource, "GNSS source should exist") {
-		return
-	}
-
-	// Template fields should be resolved
-	assert.Equal(t, subsystemName, gnssSource.Subsystem, "subsystem should come from template resolution")
-	assert.Equal(t, "GNSS_1PPS_IN", gnssSource.BoardLabel, "boardLabel should come from template")
-
-	// User fields should be merged
-	assert.NotNil(t, gnssSource.GNSSConfig, "gnssConfig should be merged from user")
-	assert.True(t, gnssSource.GNSSConfig.Init.AntennaVoltage, "antennaVoltage should be user's value")
-	assert.Equal(t, 600, gnssSource.GNSSConfig.Init.SurveyIn.ObservationTime)
-	assert.NotNil(t, gnssSource.GNSSConfig.Match)
-	assert.Equal(t, testIfaceEno8703, gnssSource.GNSSConfig.Match.EthernetInterface)
-
-	// Conditions should come from template
-	assert.NotEmpty(t, behavior.Conditions)
-	assert.Equal(t, "Initialize T-GM", behavior.Conditions[0].Name)
-
-	t.Logf("✓ Merge successful: GNSS source has template pin details + user gnssConfig")
-	t.Logf("  Sources: %d, Conditions: %d", len(behavior.Sources), len(behavior.Conditions))
-}
-
-// TestResolveClockChain_MergesUserBehavior verifies that ResolveClockChain
-// merges user-provided sources onto template-derived sources even when the
-// user supplies a Behavior section (i.e. Behavior is non-nil).
-func TestResolveClockChain_MergesUserBehavior(t *testing.T) {
-	// Use the T-BC minimal config so deriveSubsystemStructure succeeds
-	// (T-BC has upstream ports available from the PTP config).
-	hwConfig, err := loadHardwareConfigFromFile("testdata/gnrd-hwconfig-minimal.yaml")
-	require.NoError(t, err)
-	require.NotNil(t, hwConfig)
-
-	// Attach user-provided Behavior with a custom source — Behavior is now non-nil.
-	// deriveBehavior should still run, merging template sources/conditions.
-	hwConfig.Spec.Profile.ClockChain.Behavior = &ptpv2alpha1.Behavior{
-		Sources: []ptpv2alpha1.SourceConfig{
-			{
-				Name:       "CustomDPLL",
-				SourceType: ptpv2alpha1.SourceTypeDPLL,
-				Subsystem:  testSubsystemLeader,
-				BoardLabel: "CUSTOM_PIN",
+			expectedBoardLabel: "GNSS_1PPS_IN",
+			expectedGnssConfig: &ptpv2alpha1.GNSSConfig{
+				Init: ptpv2alpha1.GNSSInit{
+					AntennaVoltage: true,
+					Constellations: []ptpv2alpha1.ConstellationID{ptpv2alpha1.ConstellationGPS},
+					SurveyIn: ptpv2alpha1.GNSSSurveyParameters{
+						ObservationTime: 600,
+						Accuracy:        5,
+					},
+				},
+				Match: &ptpv2alpha1.GNSSMatcher{
+					TTYDevice: testACM0,
+				},
 			},
 		},
-	}
-
-	ptpConfig, err := loadPtpConfigFromFile("testdata/tbc-gnrd.yaml")
-	require.NoError(t, err)
-
-	// Mock leading interface resolver for T-BC
-	mockResolver := newMockLeadingInterfaceResolver()
-	mockResolver.phcIDs["eno2"] = testDevPtp0
-	mockResolver.symlinks["/sys/class/ptp/ptp0/device"] = "../../../0000:13:00.0"
-	mockResolver.dirEntries["/sys/bus/pci/devices/0000:13:00.0/net"] = []os.DirEntry{
-		&mockDirEntry{name: "eno5", isDir: false},
-	}
-	SetLeadingInterfaceResolver(mockResolver)
-	defer ResetLeadingInterfaceResolver()
-
-	fakeClient := fake.NewClientset()
-	hcm := NewHardwareConfigManager(fakeClient, "default", nil)
-	resolved, err := hcm.ResolveClockChain(hwConfig, ptpConfig)
-	require.NoError(t, err)
-	require.NotNil(t, resolved)
-
-	behavior := resolved.Spec.Profile.ClockChain.Behavior
-	require.NotNil(t, behavior, "Behavior should be derived even when user provides sources")
-
-	// Template conditions should be present (not skipped because Behavior was non-nil)
-	assert.NotEmpty(t, behavior.Conditions, "Template conditions should be derived")
-	initCond := findConditionByName(behavior.Conditions, "Initialize T-BC")
-	assert.NotNil(t, initCond, "Initialize T-BC condition should come from template")
-
-	// Template PTP source should be present
-	ptpSource := findSourceByName(behavior.Sources, testSourcePTP)
-	assert.NotNil(t, ptpSource, "Template PTP source should be derived")
-
-	// User's custom source should also be present (unmatched, added as-is)
-	var customSource *ptpv2alpha1.SourceConfig
-	for i, s := range behavior.Sources {
-		if s.Name == "CustomDPLL" {
-			customSource = &behavior.Sources[i]
-			break
-		}
-	}
-	assert.NotNil(t, customSource, "User custom source should be preserved")
-	if customSource != nil {
-		assert.Equal(t, "CUSTOM_PIN", customSource.BoardLabel)
-	}
-}
-
-func TestDeriveBehavior_NoUserBehavior(t *testing.T) {
-	fakeClient := fake.NewClientset()
-	hcm := NewHardwareConfigManager(fakeClient, "default", nil)
-
-	clockType := testClockTypeTGM
-
-	// No user behavior — everything from template
-	hwConfig := &ptpv2alpha1.HardwareConfig{
-		Spec: ptpv2alpha1.HardwareConfigSpec{
-			Profile: ptpv2alpha1.HardwareProfile{
-				ClockType: &clockType,
-				ClockChain: &ptpv2alpha1.ClockChain{
-					Structure: []ptpv2alpha1.Subsystem{
-						{
-							Name:                        testSubsystemLeader,
-							HardwareSpecificDefinitions: HwDefIntelE825,
-							DPLL: ptpv2alpha1.DPLL{
-								NetworkInterface: testIfaceEns7f0,
+		{
+			name: "Full user override",
+			// User provides only gnssConfig on the GNSS source — the template
+			// provides the DPLL pin details and conditions.
+			hwConfig: &ptpv2alpha1.HardwareConfig{
+				Spec: ptpv2alpha1.HardwareConfigSpec{
+					Profile: ptpv2alpha1.HardwareProfile{
+						ClockType: &clockType,
+						ClockChain: &ptpv2alpha1.ClockChain{
+							Structure: []ptpv2alpha1.Subsystem{
+								{
+									Name:                        subsystemName,
+									HardwareSpecificDefinitions: HwDefDellXR8720t,
+									DPLL: ptpv2alpha1.DPLL{
+										NetworkInterface: testIfaceEno8703,
+									},
+									Ethernet: []ptpv2alpha1.Ethernet{
+										{Ports: []string{testIfaceEno8703}},
+									},
+								},
 							},
-							Ethernet: []ptpv2alpha1.Ethernet{
-								{Ports: []string{testIfaceEns7f0}},
+							Behavior: &ptpv2alpha1.Behavior{
+								Sources: []ptpv2alpha1.SourceConfig{
+									{
+										Name:       testSourceGNSS,
+										SourceType: ptpv2alpha1.SourceTypeGNSS,
+										GNSSConfig: &ptpv2alpha1.GNSSConfig{
+											Init: ptpv2alpha1.GNSSInit{
+												AntennaVoltage: true,
+												Constellations: []ptpv2alpha1.ConstellationID{ptpv2alpha1.ConstellationGPS},
+												SurveyIn: ptpv2alpha1.GNSSSurveyParameters{
+													ObservationTime: 600,
+													Accuracy:        5,
+												},
+											},
+											Match: &ptpv2alpha1.GNSSMatcher{
+												EthernetInterface: testIfaceEno8703,
+											},
+										},
+									},
+								},
 							},
 						},
 					},
 				},
 			},
+			expectedBoardLabel: "GNSS_1PPS_IN",
+			expectedGnssConfig: &ptpv2alpha1.GNSSConfig{
+				Init: ptpv2alpha1.GNSSInit{
+					AntennaVoltage: true,
+					Constellations: []ptpv2alpha1.ConstellationID{ptpv2alpha1.ConstellationGPS},
+					SurveyIn: ptpv2alpha1.GNSSSurveyParameters{
+						ObservationTime: 600,
+						Accuracy:        5,
+					},
+				},
+				Match: &ptpv2alpha1.GNSSMatcher{
+					EthernetInterface: testIfaceEno8703,
+				},
+			},
+		},
+		{
+			name: "User override of init only (no default matcher)",
+			// User provides only gnssConfig on the GNSS source — the template
+			// provides the DPLL pin details and conditions.
+			hwConfig: &ptpv2alpha1.HardwareConfig{
+				Spec: ptpv2alpha1.HardwareConfigSpec{
+					Profile: ptpv2alpha1.HardwareProfile{
+						ClockType: &clockType,
+						ClockChain: &ptpv2alpha1.ClockChain{
+							Structure: []ptpv2alpha1.Subsystem{
+								{
+									Name:                        subsystemName,
+									HardwareSpecificDefinitions: HwDefIntelE810,
+									DPLL: ptpv2alpha1.DPLL{
+										NetworkInterface: testIfaceEno8703,
+									},
+									Ethernet: []ptpv2alpha1.Ethernet{
+										{Ports: []string{testIfaceEno8703}},
+									},
+								},
+							},
+							Behavior: &ptpv2alpha1.Behavior{
+								Sources: []ptpv2alpha1.SourceConfig{
+									{
+										Name:       testSourceGNSS,
+										SourceType: ptpv2alpha1.SourceTypeGNSS,
+										GNSSConfig: &ptpv2alpha1.GNSSConfig{
+											Init: ptpv2alpha1.GNSSInit{
+												AntennaVoltage: true,
+												Constellations: []ptpv2alpha1.ConstellationID{ptpv2alpha1.ConstellationGPS},
+												SurveyIn: ptpv2alpha1.GNSSSurveyParameters{
+													ObservationTime: 600,
+													Accuracy:        5,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedBoardLabel: "GNSS-1PPS",
+			expectedGnssConfig: &ptpv2alpha1.GNSSConfig{
+				Init: ptpv2alpha1.GNSSInit{
+					AntennaVoltage: true,
+					Constellations: []ptpv2alpha1.ConstellationID{ptpv2alpha1.ConstellationGPS},
+					SurveyIn: ptpv2alpha1.GNSSSurveyParameters{
+						ObservationTime: 600,
+						Accuracy:        5,
+					},
+				},
+				Match: nil,
+			},
+		},
+		{
+			name: "Full user override (no default matcher)",
+			// User provides only gnssConfig on the GNSS source — the template
+			// provides the DPLL pin details and conditions.
+			hwConfig: &ptpv2alpha1.HardwareConfig{
+				Spec: ptpv2alpha1.HardwareConfigSpec{
+					Profile: ptpv2alpha1.HardwareProfile{
+						ClockType: &clockType,
+						ClockChain: &ptpv2alpha1.ClockChain{
+							Structure: []ptpv2alpha1.Subsystem{
+								{
+									Name:                        subsystemName,
+									HardwareSpecificDefinitions: HwDefIntelE810,
+									DPLL: ptpv2alpha1.DPLL{
+										NetworkInterface: testIfaceEno8703,
+									},
+									Ethernet: []ptpv2alpha1.Ethernet{
+										{Ports: []string{testIfaceEno8703}},
+									},
+								},
+							},
+							Behavior: &ptpv2alpha1.Behavior{
+								Sources: []ptpv2alpha1.SourceConfig{
+									{
+										Name:       testSourceGNSS,
+										SourceType: ptpv2alpha1.SourceTypeGNSS,
+										GNSSConfig: &ptpv2alpha1.GNSSConfig{
+											Init: ptpv2alpha1.GNSSInit{
+												AntennaVoltage: true,
+												Constellations: []ptpv2alpha1.ConstellationID{ptpv2alpha1.ConstellationGPS},
+												SurveyIn: ptpv2alpha1.GNSSSurveyParameters{
+													ObservationTime: 600,
+													Accuracy:        5,
+												},
+											},
+											Match: &ptpv2alpha1.GNSSMatcher{
+												EthernetInterface: testIfaceEno8703,
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedBoardLabel: "GNSS-1PPS",
+			expectedGnssConfig: &ptpv2alpha1.GNSSConfig{
+				Init: ptpv2alpha1.GNSSInit{
+					AntennaVoltage: true,
+					Constellations: []ptpv2alpha1.ConstellationID{ptpv2alpha1.ConstellationGPS},
+					SurveyIn: ptpv2alpha1.GNSSSurveyParameters{
+						ObservationTime: 600,
+						Accuracy:        5,
+					},
+				},
+				Match: &ptpv2alpha1.GNSSMatcher{
+					EthernetInterface: testIfaceEno8703,
+				},
+			},
 		},
 	}
 
-	err := hcm.deriveBehavior(hwConfig, clockType)
-	assert.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := hcm.deriveBehavior(tt.hwConfig, clockType)
+			assert.NoError(t, err)
 
-	behavior := hwConfig.Spec.Profile.ClockChain.Behavior
-	assert.NotNil(t, behavior)
-	assert.NotEmpty(t, behavior.Sources, "should have template-derived sources")
-	assert.NotEmpty(t, behavior.Conditions, "should have template-derived conditions")
+			behavior := tt.hwConfig.Spec.Profile.ClockChain.Behavior
+			assert.NotNil(t, behavior)
 
-	// GNSS source should exist but without gnssConfig (no user input)
-	var gnssSource *ptpv2alpha1.SourceConfig
-	for i, s := range behavior.Sources {
-		if s.SourceType == ptpv2alpha1.SourceTypeGNSS {
-			gnssSource = &behavior.Sources[i]
-			break
-		}
+			// Should have the GNSS source from template with user's gnssConfig merged
+			var gnssSource *ptpv2alpha1.SourceConfig
+			for i, s := range behavior.Sources {
+				if s.SourceType == ptpv2alpha1.SourceTypeGNSS {
+					gnssSource = &behavior.Sources[i]
+					break
+				}
+			}
+			if !assert.NotNil(t, gnssSource, "GNSS source should exist") {
+				return
+			}
+
+			// Template fields should be resolved
+			assert.Equal(t, subsystemName, gnssSource.Subsystem, "subsystem should come from template resolution")
+			assert.Equal(t, tt.expectedBoardLabel, gnssSource.BoardLabel, "boardLabel should come from template")
+
+			// User fields should be merged
+			assert.NotNil(t, gnssSource.GNSSConfig, "gnssConfig should be merged from user")
+			assert.Equal(t, tt.expectedGnssConfig, gnssSource.GNSSConfig, "gnssConfig should match expected merged value")
+
+			// Conditions should come from template
+			assert.NotEmpty(t, behavior.Conditions)
+			assert.Equal(t, "Initialize T-GM", behavior.Conditions[0].Name)
+
+			t.Logf("✓ Merge successful: GNSS source has template pin details + user gnssConfig")
+			t.Logf("  Sources: %d, Conditions: %d", len(behavior.Sources), len(behavior.Conditions))
+		})
 	}
-	assert.NotNil(t, gnssSource, "GNSS source should come from template")
-	assert.Nil(t, gnssSource.GNSSConfig, "gnssConfig should be nil without user input")
 }

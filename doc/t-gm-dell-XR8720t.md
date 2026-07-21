@@ -43,7 +43,7 @@ spec:
         verbose 1
         logging_level 7
         ts2phc.pulsewidth 100000000
-        ts2phc.nmea_serialport /dev/ttyACM0
+        ts2phc.nmea_serialport autodetect
         [eno8703]
         ts2phc.extts_polarity rising
         ts2phc.extts_correction 0
@@ -243,8 +243,6 @@ spec:
             sourceType: gnss
             subsystem: leader
             gnssConfig:
-              match:
-                ttyDevice: "/dev/ttyACM0"
               init:
                 antennaVoltage: true
                 constellations:

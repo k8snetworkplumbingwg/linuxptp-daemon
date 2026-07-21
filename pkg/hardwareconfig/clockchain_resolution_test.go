@@ -896,3 +896,188 @@ func TestDeriveBehavior_UserConditionsPreserved(t *testing.T) {
 	// Template sources should still be present
 	assert.NotEmpty(t, behavior.Sources, "Template sources should be derived")
 }
+
+func Test_mergeSourceConfig(t *testing.T) {
+	const ttyTpl = "/dev/tty-tpl"
+	const ttyUser = "/dev/tty-user"
+
+	tests := []struct {
+		name     string
+		tpl      *ptpv2alpha1.SourceConfig
+		user     *ptpv2alpha1.SourceConfig
+		expected *ptpv2alpha1.SourceConfig
+	}{
+		{
+			name:     "all empty",
+			tpl:      &ptpv2alpha1.SourceConfig{},
+			user:     &ptpv2alpha1.SourceConfig{},
+			expected: &ptpv2alpha1.SourceConfig{},
+		},
+		{
+			name: "update simple fields",
+			tpl: &ptpv2alpha1.SourceConfig{
+				Subsystem:  "tpl-sub",
+				BoardLabel: "tpl-board",
+			},
+			user: &ptpv2alpha1.SourceConfig{
+				Subsystem:        "user-sub",
+				BoardLabel:       "user-board",
+				PTPTimeReceivers: []string{"user-ptp"},
+			},
+			expected: &ptpv2alpha1.SourceConfig{
+				Subsystem:        "user-sub",
+				BoardLabel:       "user-board",
+				PTPTimeReceivers: []string{"user-ptp"},
+			},
+		},
+		{
+			name: "empty user fields do not override tpl fields",
+			tpl: &ptpv2alpha1.SourceConfig{
+				Subsystem:        "tpl-sub",
+				BoardLabel:       "tpl-board",
+				PTPTimeReceivers: []string{"tpl-ptp"},
+			},
+			user: &ptpv2alpha1.SourceConfig{
+				Subsystem:        "",
+				BoardLabel:       "",
+				PTPTimeReceivers: []string{},
+			},
+			expected: &ptpv2alpha1.SourceConfig{
+				Subsystem:        "tpl-sub",
+				BoardLabel:       "tpl-board",
+				PTPTimeReceivers: []string{"tpl-ptp"},
+			},
+		},
+		{
+			name: "user GNSS config nil, tpl GNSS config untouched",
+			tpl: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Match: &ptpv2alpha1.GNSSMatcher{
+						TTYDevice: ttyTpl,
+					},
+				},
+			},
+			user: &ptpv2alpha1.SourceConfig{},
+			expected: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Match: &ptpv2alpha1.GNSSMatcher{
+						TTYDevice: ttyTpl,
+					},
+				},
+			},
+		},
+		{
+			name: "user GNSS config set, no matches in either",
+			tpl:  &ptpv2alpha1.SourceConfig{},
+			user: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{},
+			},
+			expected: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{},
+			},
+		},
+		{
+			name: "user GNSS config set, user match set, tpl GNSS config nil",
+			tpl:  &ptpv2alpha1.SourceConfig{},
+			user: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Match: &ptpv2alpha1.GNSSMatcher{
+						TTYDevice: ttyUser,
+					},
+				},
+			},
+			expected: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Match: &ptpv2alpha1.GNSSMatcher{
+						TTYDevice: ttyUser,
+					},
+				},
+			},
+		},
+		{
+			name: "user GNSS config set with init, tpl match preserved",
+			tpl: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Match: &ptpv2alpha1.GNSSMatcher{
+						TTYDevice: ttyTpl,
+					},
+				},
+			},
+			user: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Init: ptpv2alpha1.GNSSInit{
+						// Dummy field initialization, we just check if it gets copied
+					},
+				},
+			},
+			expected: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Init: ptpv2alpha1.GNSSInit{},
+					Match: &ptpv2alpha1.GNSSMatcher{
+						TTYDevice: ttyTpl,
+					},
+				},
+			},
+		},
+		{
+			name: "user GNSS config set, user match overrides tpl match",
+			tpl: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Match: &ptpv2alpha1.GNSSMatcher{
+						TTYDevice: ttyTpl,
+					},
+				},
+			},
+			user: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Match: &ptpv2alpha1.GNSSMatcher{
+						TTYDevice: ttyUser,
+					},
+				},
+			},
+			expected: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Match: &ptpv2alpha1.GNSSMatcher{
+						TTYDevice: ttyUser,
+					},
+				},
+			},
+		},
+		{
+			name: "user GNSS config set with no match, tpl GNSS config set with no match",
+			tpl: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{},
+			},
+			user: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{},
+			},
+			expected: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mergeSourceConfig(tt.tpl, tt.user)
+			assert.Equal(t, tt.expected, tt.tpl)
+
+			// Verify shallow copy for GNSSConfig and Match if they were merged from user
+			if tt.user.GNSSConfig != nil {
+				// changing tpl should not affect user
+				if tt.tpl.GNSSConfig.Match != nil {
+					// We mutate the copied match string to see if the user's match is untouched
+					originalTTY := tt.tpl.GNSSConfig.Match.TTYDevice
+					tt.tpl.GNSSConfig.Match.TTYDevice = "/dev/mutated"
+
+					if tt.user.GNSSConfig.Match != nil {
+						assert.NotEqual(t, "/dev/mutated", tt.user.GNSSConfig.Match.TTYDevice, "user GNSSConfig.Match was not shallow-copied")
+					}
+
+					// Revert mutation
+					tt.tpl.GNSSConfig.Match.TTYDevice = originalTTY
+				}
+			}
+		})
+	}
+}
