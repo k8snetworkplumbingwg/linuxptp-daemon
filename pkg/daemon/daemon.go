@@ -2539,7 +2539,7 @@ func (dn *Daemon) stopAllProcesses() {
 				for i := len(p.depProcess) - 1; i >= 0; i-- {
 					d := p.depProcess[i]
 					if d != nil {
-						glog.Info("Stopping %s", d.Name())
+						glog.Infof("Stopping %s", d.Name())
 						d.CmdStop()
 						d = nil
 					}
@@ -2547,7 +2547,7 @@ func (dn *Daemon) stopAllProcesses() {
 			}
 
 			// Stop parent process
-			glog.Info("Stopping %s", p.name)
+			glog.Infof("Stopping %s", p.name)
 			p.cmdStop()
 			p.depProcess = nil
 			p.hasCollectedMetrics = false
@@ -2559,7 +2559,7 @@ func (dn *Daemon) stopAllProcesses() {
 				deleteSyncEMetrics(p.name, p.configName, p.syncERelations)
 			}
 
-			glog.Info("Stopped %s ", p.name)
+			glog.Infof("Stopped %s", p.name)
 			p = nil
 		}
 	}
