@@ -30,6 +30,7 @@ const (
 	testSurveyInArgs    = "SURVEYIN,600,50000"
 	testMonHW           = "MON-HW"
 	testCfgMsg          = "CFG-MSG,1,38,248"
+	testACM0            = "/dev/ttyACM0"
 )
 
 // --- Mock helpers ---
@@ -340,10 +341,10 @@ func TestFindGNSSDevice(t *testing.T) {
 
 	t.Run("ttyDevice returned directly", func(t *testing.T) {
 		device, err := FindGNSSDevice(&ptpv2alpha1.GNSSMatcher{
-			TTYDevice: "/dev/ttyACM0",
+			TTYDevice: testACM0,
 		})
 		assert.NoError(t, err)
-		assert.Equal(t, "/dev/ttyACM0", device)
+		assert.Equal(t, testACM0, device)
 	})
 
 	t.Run("ethernetInterface resolves via sysfs", func(t *testing.T) {
@@ -409,7 +410,7 @@ func TestFindGNSSSource(t *testing.T) {
 			Constellations: []ptpv2alpha1.ConstellationID{ptpv2alpha1.ConstellationGPS},
 			SurveyIn:       ptpv2alpha1.GNSSSurveyParameters{ObservationTime: 600, Accuracy: 5},
 		},
-		Match: &ptpv2alpha1.GNSSMatcher{TTYDevice: "/dev/ttyACM0"},
+		Match: &ptpv2alpha1.GNSSMatcher{TTYDevice: testACM0},
 	}
 
 	hwConfig := ptpv2alpha1.HardwareConfig{
@@ -492,7 +493,7 @@ func TestGetGNSSSerialPort(t *testing.T) {
 									SourceType: ptpv2alpha1.SourceTypeGNSS,
 									GNSSConfig: &ptpv2alpha1.GNSSConfig{
 										Init:  ptpv2alpha1.GNSSInit{},
-										Match: &ptpv2alpha1.GNSSMatcher{TTYDevice: "/dev/ttyACM0"},
+										Match: &ptpv2alpha1.GNSSMatcher{TTYDevice: testACM0},
 									},
 								},
 							},
@@ -504,7 +505,7 @@ func TestGetGNSSSerialPort(t *testing.T) {
 		hcm := makeTestHCM(hwConfig)
 		port, err := hcm.GetGNSSSerialPort(testProfile(testProfileName))
 		assert.NoError(t, err)
-		assert.Equal(t, "/dev/ttyACM0", port)
+		assert.Equal(t, testACM0, port)
 	})
 
 	t.Run("returns empty when no GNSS source", func(t *testing.T) {

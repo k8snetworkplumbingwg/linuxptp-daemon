@@ -660,6 +660,17 @@ func mergeSourceConfig(tpl, user *ptpv2alpha1.SourceConfig) {
 		tpl.PTPTimeReceivers = user.PTPTimeReceivers
 	}
 	if user.GNSSConfig != nil {
-		tpl.GNSSConfig = user.GNSSConfig
+		// Explicitly shallow-copy the user GNSS config
+		gnss := *user.GNSSConfig
+		if user.GNSSConfig.Match != nil {
+			// Prefer: shallow-copy the user GNSS matcher (if set)
+			match := *user.GNSSConfig.Match
+			gnss.Match = &match
+		} else if tpl.GNSSConfig != nil && tpl.GNSSConfig.Match != nil {
+			// Fallback: shallow-copy the original template matcher (if set)
+			match := *tpl.GNSSConfig.Match
+			gnss.Match = &match
+		}
+		tpl.GNSSConfig = &gnss
 	}
 }

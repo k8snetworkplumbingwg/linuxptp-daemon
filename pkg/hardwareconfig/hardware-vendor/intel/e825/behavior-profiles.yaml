@@ -10,6 +10,9 @@ behaviorProfiles:
         sourceType: gnss
         subsystem: "{subsystem}"
         boardLabel: GNSS_1PPS_IN
+        gnssConfig:
+          match:
+            ttyDevice: "/dev/ttyACM0"
 
     conditions:
       - name: "Initialize T-GM"
@@ -45,17 +48,17 @@ behaviorProfiles:
   t-bc:
     # Pin role mappings - defines which pins serve which roles
     pinRoles:
-      gnssInputPin: GNSS_1PPS_IN  # DPLL pin used for GNSS input (that should be disabled for T-BC)
-      ptpInputPin: GNR-D_SDP0  # DPLL pin used for PTP input
-    
+      gnssInputPin: GNSS_1PPS_IN # DPLL pin used for GNSS input (that should be disabled for T-BC)
+      ptpInputPin: GNR-D_SDP0 # DPLL pin used for PTP input
+
     # Source template - will be instantiated with resolved variables
     sources:
       - name: PTP
         sourceType: ptpTimeReceiver
-        subsystem: "{subsystem}"  # Will be resolved to subsystem name
-        boardLabel: "{ptpInputPin}"  # Will be resolved from pinRoles
+        subsystem: "{subsystem}" # Will be resolved to subsystem name
+        boardLabel: "{ptpInputPin}" # Will be resolved from pinRoles
         # ptpTimeReceivers will be derived from ptpconfig
-    
+
     # Condition templates - will be instantiated with resolved variables
     conditions:
       - name: "Initialize T-BC"
@@ -80,7 +83,7 @@ behaviorProfiles:
               func: Disabled
               chan: 0
               sourceName: PTP
-      
+
       - name: "PTP Source Locked"
         triggers:
           - conditionType: locked
@@ -115,7 +118,7 @@ behaviorProfiles:
                 state: disconnected
               pps:
                 state: selectable
-      
+
       - name: "PTP Source Lost - Leader Holdover"
         triggers:
           - conditionType: lost
@@ -131,4 +134,3 @@ behaviorProfiles:
               func: Disabled
               chan: 0
               sourceName: PTP
-
