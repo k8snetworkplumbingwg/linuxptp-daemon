@@ -1,7 +1,6 @@
 package hardwareconfig
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -489,10 +488,7 @@ func resolveTemplateString(s string, vars templateVariables) string {
 
 // deepCopyAndResolveSourceConfig deep copies a SourceConfig and resolves template variables
 func deepCopyAndResolveSourceConfig(src ptpv2alpha1.SourceConfig, vars templateVariables, upstreamPorts []string) ptpv2alpha1.SourceConfig {
-	// Deep copy using JSON marshal/unmarshal
-	data, _ := json.Marshal(src)
-	var resolved ptpv2alpha1.SourceConfig
-	_ = json.Unmarshal(data, &resolved)
+	resolved := src.DeepCopy()
 
 	// Resolve template variables
 	resolved.Subsystem = resolveTemplateString(resolved.Subsystem, vars)
@@ -504,15 +500,12 @@ func deepCopyAndResolveSourceConfig(src ptpv2alpha1.SourceConfig, vars templateV
 		copy(resolved.PTPTimeReceivers, upstreamPorts)
 	}
 
-	return resolved
+	return *resolved
 }
 
 // deepCopyAndResolveCondition deep copies a Condition and resolves template variables
 func deepCopyAndResolveCondition(cond ptpv2alpha1.Condition, vars templateVariables) ptpv2alpha1.Condition {
-	// Deep copy using JSON marshal/unmarshal
-	data, _ := json.Marshal(cond)
-	var resolved ptpv2alpha1.Condition
-	_ = json.Unmarshal(data, &resolved)
+	resolved := cond.DeepCopy()
 
 	// Resolve template variables in desired states
 	for i := range resolved.DesiredStates {
@@ -525,7 +518,7 @@ func deepCopyAndResolveCondition(cond ptpv2alpha1.Condition, vars templateVariab
 		}
 	}
 
-	return resolved
+	return *resolved
 }
 
 // deriveBehavior derives behavior section from templates
@@ -661,16 +654,11 @@ func mergeSourceConfig(tpl, user *ptpv2alpha1.SourceConfig) {
 	}
 	if user.GNSSConfig != nil {
 		// Explicitly shallow-copy the user GNSS config
-		gnss := *user.GNSSConfig
-		if user.GNSSConfig.Match != nil {
-			// Prefer: shallow-copy the user GNSS matcher (if set)
-			match := *user.GNSSConfig.Match
-			gnss.Match = &match
-		} else if tpl.GNSSConfig != nil && tpl.GNSSConfig.Match != nil {
-			// Fallback: shallow-copy the original template matcher (if set)
-			match := *tpl.GNSSConfig.Match
-			gnss.Match = &match
+		gnss := user.GNSSConfig.DeepCopy()
+		if user.GNSSConfig.Match == nil && tpl.GNSSConfig != nil && tpl.GNSSConfig.Match != nil {
+			// Fallback to the template matcher if no user matcher was provided
+			gnss.Match = tpl.GNSSConfig.Match.DeepCopy()
 		}
-		tpl.GNSSConfig = &gnss
+		tpl.GNSSConfig = gnss
 	}
 }

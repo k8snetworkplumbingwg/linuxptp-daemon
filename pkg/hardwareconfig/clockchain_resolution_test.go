@@ -900,6 +900,8 @@ func TestDeriveBehavior_UserConditionsPreserved(t *testing.T) {
 func Test_mergeSourceConfig(t *testing.T) {
 	const ttyTpl = "/dev/tty-tpl"
 	const ttyUser = "/dev/tty-user"
+	const testCustomCommand = "custom-command"
+	const testStandardCommand = "standard-command"
 
 	tests := []struct {
 		name     string
@@ -1053,6 +1055,36 @@ func Test_mergeSourceConfig(t *testing.T) {
 			},
 			expected: &ptpv2alpha1.SourceConfig{
 				GNSSConfig: &ptpv2alpha1.GNSSConfig{},
+			},
+		},
+		{
+			name: "user provides init value, already one in template",
+			tpl: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Init: ptpv2alpha1.GNSSInit{
+						ExtraCommands: []ptpv2alpha1.UBLXCommand{
+							{Args: []string{testStandardCommand}, Record: true},
+						},
+					},
+				},
+			},
+			user: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Init: ptpv2alpha1.GNSSInit{
+						ExtraCommands: []ptpv2alpha1.UBLXCommand{
+							{Args: []string{testCustomCommand}, Record: true},
+						},
+					},
+				},
+			},
+			expected: &ptpv2alpha1.SourceConfig{
+				GNSSConfig: &ptpv2alpha1.GNSSConfig{
+					Init: ptpv2alpha1.GNSSInit{
+						ExtraCommands: []ptpv2alpha1.UBLXCommand{
+							{Args: []string{testCustomCommand}, Record: true},
+						},
+					},
+				},
 			},
 		},
 	}
