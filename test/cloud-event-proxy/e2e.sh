@@ -35,6 +35,23 @@ check_port() {
     fi
 }
 
+# poll_current_state waits until CurrentState for RESOURCE contains the given string.
+poll_current_state() {
+    local want="$1"
+    local attempts=20
+    for ((i=0; i<attempts; i++)); do
+        CURRENT="$("$TMPDIR/consumer" \
+            --api-url "http://localhost:$API_PORT" \
+            --resource "$RESOURCE" \
+            --current-state 2>/dev/null)" || true
+        if echo "$CURRENT" | grep -q "$want"; then
+            return 0
+        fi
+        sleep 0.5
+    done
+    return 1
+}
+
 # ── Preflight ──
 check_port "$API_PORT"
 check_port "$CONSUMER_PORT"
@@ -45,18 +62,37 @@ echo "Building binaries..."
 (cd "$ROOT_DIR" && go build -o "$TMPDIR/consumer" ./test/consumer/)
 (cd "$ROOT_DIR" && go build -o "$TMPDIR/ipc-sender" ./test/ipc-sender/)
 
+# ── Start ipc-sender ──
+# Message 0 (immediate): clock_class=6, pre-populates cache → snapshot
+# Message 1 (SIGUSR1):   clock_class=7, live event
+# Message 2 (SIGUSR1):   gnss_state, live event (wrong resource for subscriber)
+MESSAGES='[
+  {"message":{"version":1,"type":"clock_class","profile":"ptp4l.0.config","values":{"clock_class":6}}},
+  {"message":{"version":1,"type":"clock_class","profile":"ptp4l.0.config","values":{"clock_class":7}}},
+  {"message":{"version":1,"type":"gnss_state","profile":"ts2phc.0.config","iface":"ens2f0","values":{"state":"SYNCHRONIZED"}}}
+]'
+
+echo "Starting ipc-sender..."
+"$TMPDIR/ipc-sender" --socket "$SOCKET" --messages "$MESSAGES" >"$TMPDIR/sender.log" 2>&1 &
+SENDER_PID=$!
+PIDS+=($SENDER_PID)
+
 # ── Start cloud-event-proxy ──
 NODE_NAME="$NODE_NAME" "$TMPDIR/cloud-event-proxy" \
     --socket "$SOCKET" \
     --api-port "$API_PORT" \
     --store-path "$TMPDIR" >"$TMPDIR/proxy.log" 2>&1 &
-PIDS+=($!)
-sleep 1
+PIDS+=("$!")
 
-# ── Step 1: Send initial clock class event (clock_class=6) ──
-echo "Sending clock_class=6..."
-"$TMPDIR/ipc-sender" --socket "$SOCKET" --type clock_class --profile ptp4l.0.config --clock-class 6
-sleep 0.5
+# ── Step 1: Verify snapshot — poll until clock_class appears ──
+echo "Waiting for snapshot..."
+if poll_current_state '"value":"6"'; then
+    pass "CurrentState returned clock_class=6 from snapshot"
+else
+    echo "Proxy log:"; cat "$TMPDIR/proxy.log"
+    echo "Sender log:"; cat "$TMPDIR/sender.log"
+    fail "CurrentState did not return expected event"
+fi
 
 # ── Step 2: Start consumer in subscribe mode ──
 CONSUMER_LOG="$TMPDIR/consumer.log"
@@ -65,42 +101,40 @@ CONSUMER_LOG="$TMPDIR/consumer.log"
     --api-url "http://localhost:$API_PORT" \
     --resource "$RESOURCE" \
     > "$CONSUMER_LOG" 2>"$TMPDIR/consumer.err" &
-PIDS+=($!)
+PIDS+=("$!")
 sleep 1
 
-# ── Step 3: Query CurrentState — should return the cached clock_class=6 event ──
-echo "Querying CurrentState..."
-CURRENT="$("$TMPDIR/consumer" \
-    --api-url "http://localhost:$API_PORT" \
-    --resource "$RESOURCE" \
-    --current-state 2>/dev/null)" || true
+# ── Step 3: Signal ipc-sender to send clock_class=7 (live event) ──
+echo "Signaling clock_class=7..."
+kill -USR1 "$SENDER_PID"
 
-if echo "$CURRENT" | grep -q "clock-class"; then
-    pass "CurrentState returned cached clock class event"
-else
-    echo "CurrentState output: $CURRENT"
-    echo "Proxy log:"; cat "$TMPDIR/proxy.log"
-    fail "CurrentState did not return expected event"
-fi
+# Poll subscriber log for the live event
+ATTEMPTS=20
+RECEIVED=false
+for ((i=0; i<ATTEMPTS; i++)); do
+    if grep -q '"value":"7"' "$CONSUMER_LOG"; then
+        RECEIVED=true
+        break
+    fi
+    sleep 0.5
+done
 
-# ── Step 4: Send new clock class event (clock_class=7) — subscriber should receive it ──
-echo "Sending clock_class=7..."
-"$TMPDIR/ipc-sender" --socket "$SOCKET" --type clock_class --profile ptp4l.0.config --clock-class 7
-sleep 1
-
-if grep -q "clock-class" "$CONSUMER_LOG"; then
-    pass "Subscriber received clock class push event"
+if $RECEIVED; then
+    pass "Subscriber received live clock_class=7 push event"
 else
     echo "Consumer log:"; cat "$CONSUMER_LOG"
     echo "Consumer err:"; cat "$TMPDIR/consumer.err"
+    echo "Sender log:"; cat "$TMPDIR/sender.log"
     fail "Subscriber did not receive clock class event"
 fi
 
-# ── Step 5: Send GNSS event — subscriber should NOT receive it ──
+# ── Step 4: Signal ipc-sender to send gnss_state — subscriber should NOT receive it ──
 LINES_BEFORE=$(wc -l < "$CONSUMER_LOG")
-echo "Sending gnss_state=SYNCHRONIZED..."
-"$TMPDIR/ipc-sender" --socket "$SOCKET" --type gnss_state --profile ts2phc.0.config --iface ens2f0 --state SYNCHRONIZED
-sleep 1
+echo "Signaling gnss_state..."
+kill -USR1 "$SENDER_PID"
+
+# Give it time to propagate (if it were going to)
+sleep 2
 
 LINES_AFTER=$(wc -l < "$CONSUMER_LOG")
 if [ "$LINES_AFTER" -eq "$LINES_BEFORE" ]; then

@@ -24,11 +24,9 @@ func TestEventCache_GetBySource(t *testing.T) {
 		proxy := NewCloudEventProxy(cache, nil)
 
 		var buf bytes.Buffer
-		ipc.Encode(&buf, []ipc.Message{{
-			Version: ipc.Version, Type: ipc.TypePTPState,
-			Profile: testProfile, IFace: testIFace,
-			Values: ipc.StateValue{State: ipc.StateLocked},
-		}})
+		ipc.Transmit(&buf, ipc.Message{
+			Version: ipc.Version, Type: ipc.TypePTPState, Profile: testProfile, IFace: testIFace, Values: ipc.StateValue{State: ipc.StateLocked},
+		})
 		proxy.Listen(&buf)
 
 		e, ok := cache.GetBySource(testPTPLockState)
