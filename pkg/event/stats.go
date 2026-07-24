@@ -33,15 +33,17 @@ type DataMetric struct {
 
 // DataDetails .. details for data
 type DataDetails struct {
-	IFace        string
-	State        PTPState
-	ClockType    ClockType
-	Metrics      map[ValueType]DataMetric
-	time         int64
-	logData      string
-	signalSource EventSource // GNSS PPS
-	sourceLost   bool
-	Offset       int64
+	IFace              string
+	State              PTPState
+	ClockType          ClockType
+	Metrics            map[ValueType]DataMetric
+	time               int64
+	logData            string
+	signalSource       EventSource // GNSS PPS
+	sourceLost         bool
+	Offset             int64
+	outOfSpec          bool
+	frequencyTraceable bool
 }
 
 // UpdateState .. update process state
@@ -88,6 +90,7 @@ func (d *Data) AddEvent(event Event) {
 	var sourceLost bool
 	var offset int64
 	var hasOffset bool
+	var outOfSpec, frequencyTraceable bool
 
 	switch data := event.Data.(type) {
 	case *GNSSData:
@@ -102,6 +105,8 @@ func (d *Data) AddEvent(event Event) {
 	case *PTPData:
 		state = data.State
 		sourceLost = data.SourceLost
+		outOfSpec = data.OutOfSpec
+		frequencyTraceable = data.FrequencyTraceable
 		if off, fnd := data.Values[OFFSET]; fnd {
 			offset = off.(int64)
 			hasOffset = true
@@ -113,6 +118,8 @@ func (d *Data) AddEvent(event Event) {
 			if dd.time <= event.Time {
 				dd.State = state
 				dd.sourceLost = sourceLost
+				dd.outOfSpec = outOfSpec
+				dd.frequencyTraceable = frequencyTraceable
 				dd.ClockType = event.ClockType
 				dd.time = event.Time
 				dd.logData = event.GetLogData()
@@ -128,13 +135,15 @@ func (d *Data) AddEvent(event Event) {
 	}
 
 	details := &DataDetails{
-		ClockType:  event.ClockType,
-		Metrics:    map[ValueType]DataMetric{},
-		IFace:      event.IFace,
-		time:       event.Time,
-		logData:    event.GetLogData(),
-		State:      state,
-		sourceLost: sourceLost,
+		ClockType:          event.ClockType,
+		Metrics:            map[ValueType]DataMetric{},
+		IFace:              event.IFace,
+		time:               event.Time,
+		logData:            event.GetLogData(),
+		State:              state,
+		sourceLost:         sourceLost,
+		outOfSpec:          outOfSpec,
+		frequencyTraceable: frequencyTraceable,
 	}
 	if ptp, ok := event.Data.(*PTPData); ok {
 		leading, found := ptp.Values[LeadingSource]

@@ -157,6 +157,7 @@ func applyTestProfile(t *testing.T, profile *ptpv1.PtpProfile) {
 		"test-node-name",
 		"openshift-ptp",
 		false,
+		false,
 		nil,
 		nil,
 		&LinuxPTPConfUpdate{
@@ -253,6 +254,7 @@ func Test_applyProfile_TBC(t *testing.T) {
 		"test-node-name",
 		"openshift-ptp",
 		false,
+		false,
 		nil,
 		nil,
 		&LinuxPTPConfUpdate{
@@ -306,6 +308,7 @@ func Test_applyProfile_TGM(t *testing.T) {
 	dn := New(
 		"test-node-name",
 		"openshift-ptp",
+		false,
 		false,
 		nil,
 		nil,
@@ -2926,19 +2929,15 @@ func TestLiveGateIntegration_TriggerLogsFailureRecovery(t *testing.T) {
 }
 
 func TestEmitClockClassLogs_EmitsWithNilParentDS(t *testing.T) {
-	// Create a minimal event handler (no socket needed — the event package
-	// tests already cover the socket write path via EmitClockClass).
 	eventChannel := make(chan event.Event)
 	closeCh := make(chan bool, 1)
-	handler := event.Init("testnode", false, "", eventChannel, closeCh, nil, nil, nil)
+	handler := event.Init("testnode", false, "", eventChannel, closeCh, nil, nil, nil, nil)
 
-	// Create a PMC process with parentDS = nil (the bug condition).
-	// Before the fix, EmitClockClassLogs skipped the call when parentDS was nil.
-	pmcProc := NewPMCProcess(0, handler, "OC")
+	pmcProc := NewPMCProcess(0, eventChannel, "OC")
 	assert.Nil(t, pmcProc.parentDS, "parentDS should be nil for this test")
 
-	// Create a ptp4l process with the PMC as a dependent process
 	pm := &ProcessManager{
+		ptpEventHandler: handler,
 		process: []*ptpProcess{
 			{
 				name:       ptp4lProcessName,
@@ -2947,10 +2946,6 @@ func TestEmitClockClassLogs_EmitsWithNilParentDS(t *testing.T) {
 		},
 	}
 
-	// EmitClockClassLogs should dispatch to pmc.EmitClockClassLogs()
-	// without panicking, even when parentDS is nil.
-	// EmitClockClass returns early (no clkSyncState data) but the key
-	// assertion is that the call is made at all — the old code skipped it.
 	assert.NotPanics(t, func() {
 		pm.EmitClockClassLogs()
 	}, "EmitClockClassLogs should not panic with nil parentDS")
@@ -3092,7 +3087,7 @@ func TestEmitLogsHandler_Ready_EmitsReplayThenOpensGate(t *testing.T) {
 					stopped:             false,
 				},
 			},
-			ptpEventHandler: event.Init("test-node", false, socketPath, nil, nil, nil, nil, nil),
+			ptpEventHandler: event.Init("test-node", false, socketPath, nil, nil, nil, nil, nil, nil),
 			daemon:          dn,
 		},
 	}

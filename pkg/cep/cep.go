@@ -91,7 +91,7 @@ func buildDataValues(resourceAddr string, v ipc.Value) []event.DataValue {
 			ValueType: event.ENUMERATION,
 			Value:     val.State,
 		}
-		return []event.DataValue{dv, metricDV(resourceAddr, placeholderOffset)}
+		return []event.DataValue{dv, metricDV(resourceAddr, val.Offset)}
 	case ipc.GNSSStateValue:
 		dv := event.DataValue{
 			Resource:  resourceAddr,

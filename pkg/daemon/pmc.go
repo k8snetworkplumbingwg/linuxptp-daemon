@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
 	expect "github.com/google/goexpect"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
@@ -24,13 +23,13 @@ const (
 )
 
 // NewPMCProcess creates a new PMC process instance for monitoring PTP events.
-func NewPMCProcess(runID int, eventHandler *event.EventHandler, clockType string) *PMCProcess {
+func NewPMCProcess(runID int, eventCh chan<- event.Event, clockType string) *PMCProcess {
 	return &PMCProcess{
 		configFileName:    fmt.Sprintf("ptp4l.%d.config", runID),
 		messageTag:        fmt.Sprintf("[ptp4l.%d.config:{level}]", runID),
 		monitorParentData: true,
 		parentDSCh:        make(chan protocol.ParentDataSet, 10),
-		eventHandler:      eventHandler,
+		eventCh:           eventCh,
 		clockType:         clockType,
 		getMonitorFn:      pmcPkg.GetPMCMontior,
 	}
@@ -51,7 +50,7 @@ type PMCProcess struct {
 	clockType         string
 	c                 net.Conn // guarded by lock
 	messageTag        string
-	eventHandler      *event.EventHandler
+	eventCh           chan<- event.Event
 
 	getMonitorFn func(string) (*expect.GExpect, <-chan error, error)
 }
@@ -137,11 +136,6 @@ func (pmc *PMCProcess) getMonitorSubcribeCommand() string {
 		btof(pmc.monitorParentData),
 		btof(pmc.monitorCMLDS),
 	)
-}
-
-// EmitClockClassLogs emits clock class change logs via the EventHandler's connection.
-func (pmc *PMCProcess) EmitClockClassLogs() {
-	go pmc.eventHandler.EmitClockClass(pmc.configFileName)
 }
 
 // CmdRun starts the PMC monitoring process.
@@ -280,23 +274,22 @@ func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- proto
 
 func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 	if pmc.parentDS != nil && pmc.parentDS.Equal(&parentDS) {
-		glog.Infof("ParentDataSet unchanged, skipping processing for %s", pmc.configFileName)
+		glog.V(14).Infof("ParentDataSet unchanged, skipping processing for %s", pmc.configFileName)
 		return
 	}
-
 	glog.Info(parentDS.String())
-	oldParentDS := pmc.parentDS
 	pmc.parentDS = &parentDS
 
-	if pmc.clockType == TBC {
-		pmc.eventHandler.UpdateUpstreamParentDataSet(parentDS)
-	} else if oldParentDS == nil || oldParentDS.GrandmasterClockClass != parentDS.GrandmasterClockClass {
-		pmc.eventHandler.AnnounceClockClass(
-			fbprotocol.ClockClass(parentDS.GrandmasterClockClass),
-			fbprotocol.ClockAccuracy(parentDS.GrandmasterClockAccuracy),
-			pmc.configFileName,
-			event.ClockType(pmc.clockType),
-		)
+	select {
+	case pmc.eventCh <- event.Event{
+		Source:    event.PMC,
+		CfgName:   pmc.configFileName,
+		ClockType: event.ClockType(pmc.clockType),
+		Time:      time.Now().UnixMilli(),
+		Data:      &event.ParentDSData{ParentDataSet: parentDS},
+	}:
+	default:
+		glog.Warning("event channel full, dropping ParentDS update")
 	}
 }
 

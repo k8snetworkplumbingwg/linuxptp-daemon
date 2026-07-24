@@ -9,6 +9,7 @@ import (
 
 	expect "github.com/google/goexpect"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/daemon"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 )
@@ -122,7 +123,7 @@ func TestMonitorExitsViaCmdStop(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", "T-BC", mock.getMonitor)
+	proc := daemon.NewTestPMCProcess("test.config", "T-BC", make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
 	proc.CmdRun(false)
@@ -142,7 +143,7 @@ func TestMonitorNoOrphanAfterProcessDeath(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", "T-BC", mock.getMonitor)
+	proc := daemon.NewTestPMCProcess("test.config", "T-BC", make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
 	proc.CmdRun(false)
@@ -180,7 +181,7 @@ func TestCmdStopIdempotent(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", "T-BC", mock.getMonitor)
+	proc := daemon.NewTestPMCProcess("test.config", "T-BC", make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
 	proc.CmdRun(false)
@@ -202,7 +203,7 @@ func TestCmdStopBeforeCmdRun(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", "T-BC", mock.getMonitor)
+	proc := daemon.NewTestPMCProcess("test.config", "T-BC", make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
 	proc.CmdStop()

@@ -12,17 +12,28 @@ type EventHandlerForTests struct {
 // NewEventHandlerForTests creates an EventHandlerForTests wrapping
 // a minimal EventHandler for socket logic tests.
 func NewEventHandlerForTests(socketPath string) *EventHandlerForTests {
+	handler := newTestEventHandler(socketPath)
 	return &EventHandlerForTests{
-		EventHandler: newTestEventHandler(socketPath),
+		EventHandler: handler,
 	}
 }
 
-// SetClockClass populates the clock sync state for the given config
-// so that EmitClockClass has data to emit.
+// SetClockClass registers a TBC clock with the given announced clock class.
 func (t *EventHandlerForTests) SetClockClass(cfgName string, clockClass uint8) {
 	t.Lock()
 	defer t.Unlock()
-	t.clkSyncState[cfgName] = &clockSyncState{
-		clockClass: fbprotocol.ClockClass(clockClass),
+	if t.clocks == nil {
+		t.clocks = map[string]Clock{}
 	}
+	t.clocks[cfgName] = &TBCClock{
+		cfgName:             cfgName,
+		io:                  t.EventHandler,
+		announcedClockClass: fbprotocol.ClockClass(clockClass),
+		leadingClockData:    newLeadingClockParams(),
+	}
+}
+
+// EmitClockClass delegates to EventHandler.EmitClockClass.
+func (t *EventHandlerForTests) EmitClockClass(cfgName string) {
+	t.EventHandler.EmitClockClass(cfgName)
 }

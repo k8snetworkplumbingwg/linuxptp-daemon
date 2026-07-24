@@ -38,6 +38,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
@@ -63,6 +64,7 @@ const (
 	PTP4L_CONF_DIR                  = "/ptp4l-conf"
 	connectionRetryInterval         = 1 * time.Second
 	eventSocket                     = "/cloud-native/events.sock"
+	ipcSocket                       = "/var/run/ptp/ipc.sock"
 	ClockClassChangeIndicator       = "selected best master clock"
 	GPSDDefaultGNSSSerialPort       = "/dev/gnss0"
 	NMEASourceDisabledIndicator     = "nmea source timed out"
@@ -221,7 +223,7 @@ func (p *ProcessManager) SetTestData(name, msgTag string, ifaces config.IFaces) 
 	p.process[0].messageTag = msgTag
 	p.process[0].ifaces = ifaces
 	p.process[0].logParser = getParser(name)
-	p.process[0].handler = event.Init("test", false, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics)
+	p.process[0].handler = event.Init("test", false, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics, nil)
 	// Reset aliases for each test to avoid cross-case collisions.
 	alias.ClearAliases()
 	// Calculate aliases for the test interfaces to ensure proper aliasing
@@ -273,14 +275,15 @@ func (p *ProcessManager) EmitProcessStatusLogs() {
 	}
 }
 
-// EmitClockClassLogs ...
+// EmitClockClassLogs re-emits the last known clock class for each profile
+// that has an active PMC process. Called when a new consumer connects.
 func (p *ProcessManager) EmitClockClassLogs() {
 	for _, proc := range p.process {
 		if proc.name == ptp4lProcessName {
 			for _, dp := range proc.depProcess {
 				if dp.Name() == PMCProcessName {
 					pmc := dp.(*PMCProcess)
-					pmc.EmitClockClassLogs()
+					go p.ptpEventHandler.EmitClockClass(pmc.configFileName)
 				}
 			}
 		}
@@ -432,6 +435,7 @@ type Daemon struct {
 	namespace string
 	// write logs to socket, this will also send metrics to the socket
 	stdoutToSocket bool
+	enableCepV2    bool
 
 	// kubeClient allows interaction with Kubernetes, including the node we are running on.
 	kubeClient *kubernetes.Clientset
@@ -587,6 +591,7 @@ func New(
 	nodeName string,
 	namespace string,
 	stdoutToSocket bool,
+	enableCepV2 bool,
 	kubeClient *kubernetes.Clientset,
 	ptpClient *ptpclient.Clientset,
 	ptpUpdate *LinuxPTPConfUpdate,
@@ -604,12 +609,16 @@ func New(
 	InitializeOffsetMaps()
 	pluginManager, unknownPlugins := registerPlugins(plugins)
 	eventChannel := make(chan event.Event, 100)
+	cache := ipc.NewCache(100, enableCepV2)
 	pm := &ProcessManager{
 		process:         nil,
 		eventChannel:    eventChannel,
-		ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics),
+		ptpEventHandler: event.Init(nodeName, stdoutToSocket, eventSocket, eventChannel, closeManager, Offset, ClockState, ClockClassMetrics, cache),
 	}
 	tracker.processManager = pm
+	if enableCepV2 {
+		go ipc.NewWriter(ipcSocket, cache.Out(), closeManager).Run()
+	}
 
 	// Initialize fsnotify watcher for sa_file change detection
 	saFileWatch, err := fsnotify.NewWatcher()
@@ -634,6 +643,7 @@ func New(
 		nodeName:             nodeName,
 		namespace:            namespace,
 		stdoutToSocket:       stdoutToSocket,
+		enableCepV2:          enableCepV2,
 		kubeClient:           kubeClient,
 		ptpClient:            ptpClient,
 		ptpUpdate:            ptpUpdate,
@@ -785,6 +795,7 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	glog.Infof("in applyNodePTPProfiles - starting to apply %d node profiles", len(dn.ptpUpdate.NodeProfiles))
 
 	dn.stopAllProcesses()
+	dn.processManager.ptpEventHandler.RemoveAllClocks()
 	// All process should have been stopped,
 	// clear process in process manager.
 	// Assigning processManager.process to nil releases
@@ -1051,7 +1062,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		case TGM:
 			clockType = event.GM
 		case TBC:
-			clockType = event.BC
+			clockType = event.TBC
 			leadingNic = (*nodeProfile).PtpSettings["leadingInterface"]
 			if portsStr, ok := (*nodeProfile).PtpSettings["upstreamPort"]; ok {
 				upstreamPorts = strings.Split(portsStr, ",")
@@ -1077,7 +1088,15 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		clockType = ptp4lOutput.clock_type
 	}
 
+	clockCfgName := fmt.Sprintf("ptp4l.%d.config", runID)
+	if _, err = dn.processManager.ptpEventHandler.AddClock(clockCfgName, clockType); err != nil {
+		return fmt.Errorf("failed to register clock for profile %s: %v", *nodeProfile.Name, err)
+	}
+
 	for _, pProcess := range ptpProcesses {
+		if pProcess == chronydProcessName && !dn.enableCepV2 {
+			continue
+		}
 		controlledConfigFile := ""
 		switch pProcess {
 		case ptp4lProcessName:
@@ -1240,7 +1259,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 		}
 
 		if pProcess == ptp4lProcessName {
-			if len(upstreamPorts) > 0 && clockType == event.BC {
+			if len(upstreamPorts) > 0 && clockType == event.TBC {
 				dprocess.tBCAttributes.trIfaceNames = upstreamPorts
 				dprocess.tBCAttributes.perPortState = make(map[string]event.PTPState, len(upstreamPorts))
 				for _, p := range upstreamPorts {
@@ -1281,7 +1300,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				if !clockTypeFound {
 					pmcClockType = string(clockType)
 				}
-				pmcProcess := NewPMCProcess(runID, dn.processManager.ptpEventHandler, pmcClockType)
+				pmcProcess := NewPMCProcess(runID, dn.processManager.eventChannel, pmcClockType)
 				pmcProcess.CmdInit()
 				// TODO addScheduling
 				dprocess.depProcess = append(dprocess.depProcess, pmcProcess)

@@ -129,6 +129,13 @@ func main() {
 		}
 	}
 
+	var enableCepV2 = false
+	if val, ok := os.LookupEnv("ENABLE_CEP_V2"); ok && val != "" {
+		if ret, parseErr := strconv.ParseBool(val); parseErr == nil {
+			enableCepV2 = ret
+		}
+	}
+
 	plugins := make([]string, 0)
 
 	if val, ok := os.LookupEnv("PLUGINS"); ok && val != "" {
@@ -184,6 +191,7 @@ func main() {
 		nodeName,
 		daemon.PtpNamespace,
 		stdoutToSocket,
+		enableCepV2,
 		kubeClient,
 		ptpClient,
 		ptpConfUpdate,
@@ -360,7 +368,7 @@ func runFullControllerMode(cfg *rest.Config, cp *cliParams, nodeName string, ptp
 			}
 		case sig := <-sigCh:
 			glog.Info("signal received, shutting down", sig)
-			closeProcessManager <- true
+			close(closeProcessManager)
 			cmSetup.mgrCancel() // Stop the controller manager
 			return
 		}
@@ -401,7 +409,7 @@ func runHybridMode(cfg *rest.Config, cp *cliParams, nodeName string, ptpConfUpda
 			}
 		case sig := <-sigCh:
 			glog.Info("signal received, shutting down", sig)
-			closeProcessManager <- true
+			close(closeProcessManager)
 			cmSetup.mgrCancel() // Stop the controller manager
 			return
 		}
@@ -428,7 +436,7 @@ func runLegacyMode(cp *cliParams, _ string, ptpConfUpdate *daemon.LinuxPTPConfUp
 			}
 		case sig := <-sigCh:
 			glog.Info("signal received, shutting down", sig)
-			closeProcessManager <- true
+			close(closeProcessManager)
 			return
 		}
 	}
