@@ -28,10 +28,7 @@ const (
 // clock identities are an 8-octet EUI-64 value formatted as three hex groups (e.g.
 // 507c6f.fffe.1fb16c).
 const clockIdentityPattern = `[0-9a-fA-F]+\.[0-9a-fA-F]+\.[0-9a-fA-F]+`
-
-// signedIntRegEx matches an optionally negative base-10 integer, shared by the
-// several DataSet ValueRegEx maps whose fields may report negative values.
-const signedIntRegEx = `-?\d+`
+const signedIntRE = `-?\d+`
 
 // DataSet is an interface for PTP data sets that can be parsed from PMC output.
 type DataSet interface {
@@ -559,6 +556,7 @@ func (tp *TimePropertiesDS) String() string {
 // PortDataSet defines IEEE 1588 PORT_DATA_SET, pushed by ptp4l's NOTIFY_PORT_STATE subscription.
 type PortDataSet struct {
 	PortIdentity            string
+	PortNum                 int    // extracted from the trailing "-N" of PortIdentity during parsing
 	PortState               string // ps_str value: SLAVE, MASTER, LISTENING, FAULTY, etc.
 	LogMinDelayReqInterval  int8
 	PeerMeanPathDelay       int64
@@ -591,13 +589,13 @@ func (p *PortDataSet) ValueRegEx() map[string]string {
 	return map[string]string{
 		"portIdentity":            `.*`,
 		"portState":               `[A-Z_]+`,
-		"logMinDelayReqInterval":  signedIntRegEx,
-		"peerMeanPathDelay":       signedIntRegEx,
-		"logAnnounceInterval":     signedIntRegEx,
+		"logMinDelayReqInterval":  signedIntRE,
+		"peerMeanPathDelay":       signedIntRE,
+		"logAnnounceInterval":     signedIntRE,
 		"announceReceiptTimeout":  `\d+`,
-		"logSyncInterval":         signedIntRegEx,
+		"logSyncInterval":         signedIntRE,
 		"delayMechanism":          `\d+`,
-		"logMinPdelayReqInterval": signedIntRegEx,
+		"logMinPdelayReqInterval": signedIntRE,
 		"versionNumber":           `\d+`,
 	}
 }
@@ -617,6 +615,11 @@ func (p *PortDataSet) Update(key string, value string) {
 	switch key {
 	case "portIdentity":
 		p.PortIdentity = value
+		if idx := strings.LastIndex(value, "-"); idx >= 0 && idx < len(value)-1 {
+			if n, err := strconv.Atoi(value[idx+1:]); err == nil {
+				p.PortNum = n
+			}
+		}
 	case "portState":
 		p.PortState = value
 	case "logMinDelayReqInterval":
@@ -676,20 +679,6 @@ func (p *PortDataSet) Equal(other *PortDataSet) bool {
 		p.VersionNumber == other.VersionNumber
 }
 
-// PortNumber extracts the port number from the trailing "-N" of PortIdentity
-// (e.g. "b4e9b8.fffe.5ec71a-3" -> 3).
-func (p *PortDataSet) PortNumber() (int, error) {
-	idx := strings.LastIndex(p.PortIdentity, "-")
-	if idx < 0 || idx == len(p.PortIdentity)-1 {
-		return 0, fmt.Errorf("no port number suffix in portIdentity %q", p.PortIdentity)
-	}
-	n, err := strconv.Atoi(p.PortIdentity[idx+1:])
-	if err != nil {
-		return 0, fmt.Errorf("invalid port number in portIdentity %q: %w", p.PortIdentity, err)
-	}
-	return n, nil
-}
-
 // SubscribedEvents represents the subscription events configuration for PTP notifications.
 type SubscribedEvents struct {
 	Duration            int32
@@ -702,7 +691,7 @@ type SubscribedEvents struct {
 // ValueRegEx provides the regex method for the SubscribedEvents values matching
 func (se *SubscribedEvents) ValueRegEx() map[string]string {
 	return map[string]string{
-		"duration":               signedIntRegEx,
+		"duration":               signedIntRE,
 		"NOTIFY_PORT_STATE":      `on|off`,
 		"NOTIFY_TIME_SYNC":       `on|off`,
 		"NOTIFY_PARENT_DATA_SET": `on|off`,

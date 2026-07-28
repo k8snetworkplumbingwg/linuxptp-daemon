@@ -329,6 +329,7 @@ func TestPortDataSet_RegEx_MatchesRealPmcResponse(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, testPortIdentity, pds.PortIdentity)
+	assert.Equal(t, 1, pds.PortNum)
 	assert.Equal(t, "SLAVE", pds.PortState)
 	assert.Equal(t, int8(0), pds.LogMinDelayReqInterval)
 	assert.Equal(t, int64(0), pds.PeerMeanPathDelay)
@@ -394,31 +395,26 @@ func TestPortDataSet_RegEx_AllPortStates(t *testing.T) {
 	}
 }
 
-func TestPortDataSet_PortNumber(t *testing.T) {
+func TestPortDataSet_PortNum_ParsedFromIdentity(t *testing.T) {
 	tests := []struct {
-		name      string
-		identity  string
-		wantPort  int
-		wantError bool
+		name     string
+		identity string
+		wantPort int
 	}{
-		{"port 1", testPortIdentity, 1, false},
-		{"port 0", "b4e9b8.fffe.5ec71a-0", 0, false},
-		{"port 21", "c45ab1.ffff.545c05-21", 21, false},
-		{"no suffix", "b4e9b8.fffe.5ec71a", 0, true},
-		{"trailing dash", "b4e9b8.fffe.5ec71a-", 0, true},
-		{"non-numeric", "b4e9b8.fffe.5ec71a-abc", 0, true},
+		{"port 1", testPortIdentity, 1},
+		{"port 0", "b4e9b8.fffe.5ec71a-0", 0},
+		{"port 21", "c45ab1.ffff.545c05-21", 21},
+		{"no suffix", "b4e9b8.fffe.5ec71a", 0},
+		{"trailing dash", "b4e9b8.fffe.5ec71a-", 0},
+		{"non-numeric", "b4e9b8.fffe.5ec71a-abc", 0},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pds := &PortDataSet{PortIdentity: tt.identity}
-			got, err := pds.PortNumber()
-			if tt.wantError {
-				assert.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, tt.wantPort, got)
-			}
+			pds := &PortDataSet{}
+			pds.Update("portIdentity", tt.identity)
+			assert.Equal(t, tt.wantPort, pds.PortNum)
+			assert.Equal(t, tt.identity, pds.PortIdentity)
 		})
 	}
 }

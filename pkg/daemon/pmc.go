@@ -356,19 +356,13 @@ func (pmc *PMCProcess) handleParentDS(parentDS protocol.ParentDataSet) {
 }
 
 func (pmc *PMCProcess) handlePortDS(portDS protocol.PortDataSet) {
-	portNum, err := portDS.PortNumber()
-	if err != nil {
-		glog.Warningf("PMC port-state: cannot extract port number: %v", err)
-		return
-	}
-
-	iface, ok := pmc.portIfaceMap[portNum]
+	iface, ok := pmc.portIfaceMap[portDS.PortNum]
 	if !ok {
-		glog.Warningf("PMC port-state: unknown port number %d (identity=%s)", portNum, portDS.PortIdentity)
+		glog.Warningf("PMC port-state: unknown port number %d (identity=%s)", portDS.PortNum, portDS.PortIdentity)
 		return
 	}
 
-	role, _ := parser.PortStateToRole(portDS.PortState)
+	role := parser.PortStateToRole(portDS.PortState)
 	previousRole := pmc.lastPortRole[iface]
 	pmc.lastPortRole[iface] = role
 

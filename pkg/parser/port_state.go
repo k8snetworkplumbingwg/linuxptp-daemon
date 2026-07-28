@@ -4,26 +4,22 @@ import "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 
 // PortStateToRole maps a linuxptp ps_str port-state name (as carried in a
 // PORT_DATA_SET management message's portState field) to the internal
-// PTPPortRole and ClockState enums.
-//
-// The mapping mirrors determineRole() in ptp4l_parser.go but operates on a
-// single-state string ("SLAVE") rather than a log-line transition phrase
-// ("UNCALIBRATED to SLAVE on ..."). Because PORT_DATA_SET only reports the
-// current state (not the previous one), the caller is responsible for
-// maintaining previous-role context externally.
-func PortStateToRole(state string) (constants.PTPPortRole, constants.ClockState) {
+// PTPPortRole enum. Because PORT_DATA_SET only reports the current state
+// (not the previous one), the caller is responsible for maintaining
+// previous-role context externally.
+func PortStateToRole(state string) constants.PTPPortRole {
 	switch state {
 	case "SLAVE":
-		return constants.PortRoleSlave, constants.ClockStateFreeRun
+		return constants.PortRoleSlave
 	case "MASTER", "GRAND_MASTER", "PRE_MASTER":
-		return constants.PortRoleMaster, constants.ClockStateFreeRun
+		return constants.PortRoleMaster
 	case "PASSIVE":
-		return constants.PortRolePassive, constants.ClockStateFreeRun
+		return constants.PortRolePassive
 	case "LISTENING":
-		return constants.PortRoleListening, constants.ClockStateFreeRun
+		return constants.PortRoleListening
 	case "FAULTY":
-		return constants.PortRoleFaulty, constants.ClockStateHoldover
+		return constants.PortRoleFaulty
 	default:
-		return constants.PortRoleUnknown, constants.ClockStateFreeRun
+		return constants.PortRoleUnknown
 	}
 }
