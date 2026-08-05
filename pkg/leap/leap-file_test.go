@@ -112,7 +112,7 @@ func Test_processLeapIndication_FutureLeapNotZero(t *testing.T) {
 	assert.NotNil(t, res)
 	assert.WithinDuration(t, time.Now().UTC(), res.updateTime, 1*time.Second)
 	deltaHours, err := time.ParseDuration(fmt.Sprintf("%dh",
-		ind.DateOfLsGpsWn*7*24+uint(ind.DateOfLsGpsDn)*24))
+		uint(ind.DateOfLsGpsWn)*7*24+uint(ind.DateOfLsGpsDn)*24))
 	assert.NoError(t, err)
 	assert.WithinDuration(t, res.leapTime, time.Date(1980, time.January, 6, 0, 0, 0, 0, time.UTC).Add(deltaHours), 0*time.Second)
 	assert.Equal(t, int(ind.CurrLs+ind.LsChange+19), res.leapSec)

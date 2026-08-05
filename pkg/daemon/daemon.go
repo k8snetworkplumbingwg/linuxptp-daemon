@@ -1135,17 +1135,17 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				if configOpts != nil && *configOpts != "" {
 					if !strings.Contains(*configOpts, "--ts2phc.holdover") {
 						if frequencyTraceable {
-							*configOpts += " --ts2phc.holdover " + strconv.FormatInt(maxHoldoverTimeout, 10)
+							*configOpts += " --ts2phc.holdover " + strconv.FormatUint(maxHoldoverTimeout, 10)
 						} else {
-							*configOpts += " --ts2phc.holdover " + strconv.FormatInt(min(inSpecTimer, maxHoldoverTimeout), 10)
+							*configOpts += " --ts2phc.holdover " + strconv.FormatUint(min(inSpecTimer, maxHoldoverTimeout), 10)
 						}
 					} // there is a 5s delay in the NMEA driver, accepting pulses 5s after the last valid NMEA message, so that might need to be subtracted from that value
 					// need more testing to confirm
 					if !strings.Contains(*configOpts, "--servo_offset_threshold") {
 						if frequencyTraceable {
-							*configOpts += " --servo_offset_threshold " + strconv.FormatInt(maxHoldoverOffSet, 10)
+							*configOpts += " --servo_offset_threshold " + strconv.FormatUint(maxHoldoverOffSet, 10)
 						} else {
-							*configOpts += " --servo_offset_threshold " + strconv.FormatInt(min(maxInSpecOffset, maxHoldoverOffSet), 10)
+							*configOpts += " --servo_offset_threshold " + strconv.FormatUint(min(maxInSpecOffset, maxHoldoverOffSet), 10)
 						}
 					}
 					if !strings.Contains(*configOpts, "--servo_num_offset_values") { // if consecutive smaller offsets (less than the threshold) are not observed, the system stays in S2

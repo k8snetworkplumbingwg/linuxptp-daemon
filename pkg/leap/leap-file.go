@@ -409,7 +409,7 @@ func (l *LeapManager) processLeapIndication(data *ublox.TimeLs) (*leapIndResult,
 				leapSecOnFile, int(data.CurrLs), gpsToTaiDiff, int(data.LsChange))
 			gpsStartTime := time.Date(1980, time.January, 6, 0, 0, 0, 0, time.UTC)
 			deltaHours, err := time.ParseDuration(fmt.Sprintf("%dh",
-				data.DateOfLsGpsWn*7*24+uint(data.DateOfLsGpsDn)*24))
+				uint(data.DateOfLsGpsWn)*7*24+uint(data.DateOfLsGpsDn)*24))
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse time duration: Leap: %v", err)
 			}
