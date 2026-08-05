@@ -52,8 +52,10 @@ func deleteOsClockStateMetrics(profiles map[string][]string) {
 	}
 }
 
-// DeleteProcessStatusMetrics ...
+// DeleteProcessStatusMetrics removes the process_status gauge for a torn-down
+// process/config. process_restart_count is intentionally left in place so the
+// cumulative counter remains monotonic when the same config identity is
+// re-applied after applyNodePTPProfiles teardown (OCPBUGS-7811).
 func DeleteProcessStatusMetrics(config, process string) {
 	ProcessStatus.Delete(prometheus.Labels{"process": process, "node": NodeName, "config": config})
-	ProcessRestartCount.Delete(prometheus.Labels{"process": process, "node": NodeName, "config": config})
 }

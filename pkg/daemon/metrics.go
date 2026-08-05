@@ -649,11 +649,16 @@ func deleteOsClockStateMetrics(profiles map[string][]string) {
 }
 
 func deleteProcessStatusMetrics(config, process string) {
+	// Remove the process_status gauge when the process/config is torn down so
+	// scrapers do not see a stale UP/DOWN sample (OCPBUGS-7808).
+	//
+	// Do NOT delete process_restart_count: it is a cumulative counter keyed by
+	// (process, node, config). applyNodePTPProfiles always stopAllProcesses
+	// before re-applying the same config slot (e.g. ts2phc.0.config); deleting
+	// the series resets the counter and breaks monotonicity across delete/re-apply
+	// (OCPBUGS-7811). Process crash/restart already continues the counter via Inc().
 	ProcessStatus.Delete(prometheus.Labels{
 		"process": process, "node": NodeName, "config": config})
-	ProcessRestartCount.Delete(prometheus.Labels{
-		"process": process, "node": NodeName, "config": config})
-
 }
 func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
 	replacer := strings.NewReplacer("[", " ", "]", " ", ":", " ")
