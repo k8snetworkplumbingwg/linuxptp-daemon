@@ -162,6 +162,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y podman
           podman --version
+          # The kubic repo may not carry a crun newer than the distro's
+          # 1.14.1 which rejects OCI runtime spec v1.2.1 from podman 5.x.
+          # Install crun >= 1.14.3 from upstream GitHub releases.
+          CRUN_VER=1.19.1
+          sudo curl -fsSL -o /usr/bin/crun \
+            "https://github.com/containers/crun/releases/download/${CRUN_VER}/crun-${CRUN_VER}-linux-amd64"
+          sudo chmod +x /usr/bin/crun
+          crun --version | head -1
 
       - name: Clone ptp-operator
         run: git clone --depth 1 --branch "${PTP_BRANCH}" "${PTP_REPO}" /tmp/ptp-operator
@@ -228,6 +236,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y podman
           podman --version
+          # The kubic repo may not carry a crun newer than the distro's
+          # 1.14.1 which rejects OCI runtime spec v1.2.1 from podman 5.x.
+          # Install crun >= 1.14.3 from upstream GitHub releases.
+          CRUN_VER=1.19.1
+          sudo curl -fsSL -o /usr/bin/crun \
+            "https://github.com/containers/crun/releases/download/${CRUN_VER}/crun-${CRUN_VER}-linux-amd64"
+          sudo chmod +x /usr/bin/crun
+          crun --version | head -1
 
       - name: Install OpenShift CLI (oc)
         run: |
