@@ -187,7 +187,7 @@ jobs:
 
           VM_IP=$(hostname -I | awk '{print $1}')
           cd /root/ptp-operator/scripts
-          ./run-on-vm.sh --dkms --images "${VM_IP}"
+          ./run-on-vm.sh --verbose --dkms --images "${VM_IP}"
 
           rm -rf /tmp/go-build* /root/.cache/go-build
           BUILD
@@ -279,7 +279,7 @@ jobs:
 
           VM_IP=$(hostname -I | awk '{print $1}')
           cd /root/ptp-operator/scripts
-          ./run-on-vm.sh --dkms --load /tmp/ptp-images.tar "${VM_IP}"
+          ./run-on-vm.sh --verbose --dkms --load /tmp/ptp-images.tar "${VM_IP}"
           LOAD
 
       - name: "Free disk space before tests"
@@ -301,7 +301,7 @@ jobs:
 
           VM_IP=$(hostname -I | awk '{print $1}')
           cd /root/ptp-operator/scripts
-          ./run-on-vm.sh --dkms --deploy "${VM_IP}" --mode "${{ matrix.mode }}" "${VM_IP}"
+          ./run-on-vm.sh --verbose --dkms --deploy "${VM_IP}" --mode "${{ matrix.mode }}" "${VM_IP}"
           DEPLOY
 
       - name: Upload test artifacts
