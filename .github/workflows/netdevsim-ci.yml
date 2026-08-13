@@ -16,8 +16,10 @@ env:
   DKMS_VER: "6.9.5"
   DKMS_REPO: https://github.com/redhat-cne/netdevsim-dkms.git
   DKMS_BRANCH: main
-  PTP_REPO: https://github.com/k8snetworkplumbingwg/ptp-operator.git
-  PTP_BRANCH: main
+  # Temporary: exercise k8snetworkplumbingwg/ptp-operator#285 (.dockerignore).
+  # Revert to k8snetworkplumbingwg/ptp-operator@main after that PR merges.
+  PTP_REPO: https://github.com/edcdavid/ptp-operator-upstream.git
+  PTP_BRANCH: ci-exclude-local-runs-from-build-context
 
 jobs:
   # ------------------------------------------------------------------
