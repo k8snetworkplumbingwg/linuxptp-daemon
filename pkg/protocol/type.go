@@ -28,6 +28,7 @@ const (
 // clock identities are an 8-octet EUI-64 value formatted as three hex groups (e.g.
 // 507c6f.fffe.1fb16c).
 const clockIdentityPattern = `[0-9a-fA-F]+\.[0-9a-fA-F]+\.[0-9a-fA-F]+`
+const signedIntRE = `-?\d+`
 
 // DataSet is an interface for PTP data sets that can be parsed from PMC output.
 type DataSet interface {
@@ -248,6 +249,25 @@ func stoi32(s string) int32 {
 		fmt.Printf("%v\n", err)
 	}
 	return int32(int64Value)
+}
+
+// stoi8 parses s as a base-10 integer bounded to the int8 range. Unlike
+// int8(stoi32(s)), it relies on strconv.ParseInt's own bitSize=8 clamping
+// instead of silently wrapping out-of-range int32 values when narrowed.
+func stoi8(s string) int8 {
+	int64Value, err := strconv.ParseInt(s, 10, 8)
+	if err != nil {
+		fmt.Printf("%v\n", err)
+	}
+	return int8(int64Value)
+}
+
+func stoi64(s string) int64 {
+	int64Value, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		fmt.Printf("%v\n", err)
+	}
+	return int64Value
 }
 
 func stof64(s string) float64 {
@@ -533,6 +553,132 @@ func (tp *TimePropertiesDS) String() string {
 	return result
 }
 
+// PortDataSet defines IEEE 1588 PORT_DATA_SET, pushed by ptp4l's NOTIFY_PORT_STATE subscription.
+type PortDataSet struct {
+	PortIdentity            string
+	PortNum                 int    // extracted from the trailing "-N" of PortIdentity during parsing
+	PortState               string // ps_str value: SLAVE, MASTER, LISTENING, FAULTY, etc.
+	LogMinDelayReqInterval  int8
+	PeerMeanPathDelay       int64
+	LogAnnounceInterval     int8
+	AnnounceReceiptTimeout  uint8
+	LogSyncInterval         int8
+	DelayMechanism          uint8
+	LogMinPdelayReqInterval int8
+	VersionNumber           uint8
+}
+
+// Keys provides the keys method for the PortDataSet values
+func (p *PortDataSet) Keys() []string {
+	return []string{
+		"portIdentity",
+		"portState",
+		"logMinDelayReqInterval",
+		"peerMeanPathDelay",
+		"logAnnounceInterval",
+		"announceReceiptTimeout",
+		"logSyncInterval",
+		"delayMechanism",
+		"logMinPdelayReqInterval",
+		"versionNumber",
+	}
+}
+
+// ValueRegEx provides the regex method for the PortDataSet values matching
+func (p *PortDataSet) ValueRegEx() map[string]string {
+	return map[string]string{
+		"portIdentity":            `.*`,
+		"portState":               `[A-Z_]+`,
+		"logMinDelayReqInterval":  signedIntRE,
+		"peerMeanPathDelay":       signedIntRE,
+		"logAnnounceInterval":     signedIntRE,
+		"announceReceiptTimeout":  `\d+`,
+		"logSyncInterval":         signedIntRE,
+		"delayMechanism":          `\d+`,
+		"logMinPdelayReqInterval": signedIntRE,
+		"versionNumber":           `\d+`,
+	}
+}
+
+// RegEx generates the PortDataSet command regex
+func (p *PortDataSet) RegEx() string {
+	return buildDataSetRegex(p.Keys(), p.ValueRegEx(), true, []string{})
+}
+
+// MonitorRegEx generates the PortDataSet regex without capture groups.
+func (p *PortDataSet) MonitorRegEx() string {
+	return buildDataSetRegex(p.Keys(), p.ValueRegEx(), false, []string{})
+}
+
+// Update provides the Update method for the PortDataSet values
+func (p *PortDataSet) Update(key string, value string) {
+	switch key {
+	case "portIdentity":
+		p.PortIdentity = value
+		if idx := strings.LastIndex(value, "-"); idx >= 0 && idx < len(value)-1 {
+			if n, err := strconv.Atoi(value[idx+1:]); err == nil {
+				p.PortNum = n
+			}
+		}
+	case "portState":
+		p.PortState = value
+	case "logMinDelayReqInterval":
+		p.LogMinDelayReqInterval = stoi8(value)
+	case "peerMeanPathDelay":
+		p.PeerMeanPathDelay = stoi64(value)
+	case "logAnnounceInterval":
+		p.LogAnnounceInterval = stoi8(value)
+	case "announceReceiptTimeout":
+		p.AnnounceReceiptTimeout = stou8(value)
+	case "logSyncInterval":
+		p.LogSyncInterval = stoi8(value)
+	case "delayMechanism":
+		p.DelayMechanism = stou8(value)
+	case "logMinPdelayReqInterval":
+		p.LogMinPdelayReqInterval = stoi8(value)
+	case "versionNumber":
+		p.VersionNumber = stou8(value)
+	}
+}
+
+func (p *PortDataSet) String() string {
+	if p == nil {
+		glog.Error("returned empty PortDataSet")
+		return ""
+	}
+	result := fmt.Sprintf("portIdentity            %s\n", p.PortIdentity)
+	result += fmt.Sprintf("portState               %s\n", p.PortState)
+	result += fmt.Sprintf("logMinDelayReqInterval  %d\n", p.LogMinDelayReqInterval)
+	result += fmt.Sprintf("peerMeanPathDelay       %d\n", p.PeerMeanPathDelay)
+	result += fmt.Sprintf("logAnnounceInterval     %d\n", p.LogAnnounceInterval)
+	result += fmt.Sprintf("announceReceiptTimeout  %d\n", p.AnnounceReceiptTimeout)
+	result += fmt.Sprintf("logSyncInterval         %d\n", p.LogSyncInterval)
+	result += fmt.Sprintf("delayMechanism          %d\n", p.DelayMechanism)
+	result += fmt.Sprintf("logMinPdelayReqInterval %d\n", p.LogMinPdelayReqInterval)
+	result += fmt.Sprintf("versionNumber           %d\n", p.VersionNumber)
+	return result
+}
+
+// Equal compares two PortDataSet instances for equality.
+func (p *PortDataSet) Equal(other *PortDataSet) bool {
+	if p == nil && other == nil {
+		return true
+	}
+	if p == nil || other == nil {
+		return false
+	}
+	return p.PortIdentity == other.PortIdentity &&
+		p.PortState == other.PortState &&
+		p.LogMinDelayReqInterval == other.LogMinDelayReqInterval &&
+		p.PeerMeanPathDelay == other.PeerMeanPathDelay &&
+		p.LogAnnounceInterval == other.LogAnnounceInterval &&
+		p.AnnounceReceiptTimeout == other.AnnounceReceiptTimeout &&
+		p.LogSyncInterval == other.LogSyncInterval &&
+		p.DelayMechanism == other.DelayMechanism &&
+		p.LogMinPdelayReqInterval == other.LogMinPdelayReqInterval &&
+		p.VersionNumber == other.VersionNumber
+}
+
 // SubscribedEvents represents the subscription events configuration for PTP notifications.
 type SubscribedEvents struct {
 	Duration            int32
@@ -545,7 +691,7 @@ type SubscribedEvents struct {
 // ValueRegEx provides the regex method for the SubscribedEvents values matching
 func (se *SubscribedEvents) ValueRegEx() map[string]string {
 	return map[string]string{
-		"duration":               `-?\d+`,
+		"duration":               signedIntRE,
 		"NOTIFY_PORT_STATE":      `on|off`,
 		"NOTIFY_TIME_SYNC":       `on|off`,
 		"NOTIFY_PARENT_DATA_SET": `on|off`,

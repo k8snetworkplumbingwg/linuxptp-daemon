@@ -30,6 +30,7 @@ var (
 	pmcCmdConstPart              = "pmc -u -b 0 -f /var/run/"
 	grandmasterSettingsNPRegExp  = regexp.MustCompile((&protocol.GrandmasterSettings{}).RegEx())
 	parentDataSetRegExp          = regexp.MustCompile((&protocol.ParentDataSet{}).RegEx())
+	portDataSetRegExp            = regexp.MustCompile((&protocol.PortDataSet{}).RegEx())
 	externalGMPropertiesNPRegExp = regexp.MustCompile((&protocol.ExternalGrandmasterProperties{}).RegEx())
 	timePropertiesDSRegExp       = regexp.MustCompile((&protocol.TimePropertiesDS{}).RegEx())
 	currentDSRegExp              = regexp.MustCompile((&protocol.CurrentDS{}).RegEx())
@@ -490,12 +491,24 @@ func GetPMCMontior(configFileName string) (*expect.GExpect, <-chan error, error)
 }
 
 // GetMonitorRegex returns a regex pattern for monitoring PMC events based on configuration.
-func GetMonitorRegex(monitorParentData bool) *regexp.Regexp {
-	parts := make([]string, 0)
-	// TODO: Add other messages
+func GetMonitorRegex(monitorParentData, monitorPortState bool) *regexp.Regexp {
+	parts := make([]string, 0, 2)
 
 	if monitorParentData {
 		parts = append(parts, parentDataSetRegExp.String())
 	}
-	return regexp.MustCompile(`(?m).* seq \d+ RESPONSE MANAGEMENT .*\s*` + strings.Join(parts, `|`))
+	if monitorPortState {
+		parts = append(parts, portDataSetRegExp.String())
+	}
+	return regexp.MustCompile(`(?m).* seq \d+ RESPONSE MANAGEMENT .*\s*(?:` + strings.Join(parts, `|`) + `)`)
+}
+
+// PortDataSetRegExp returns the compiled regex for PORT_DATA_SET parsing.
+func PortDataSetRegExp() *regexp.Regexp {
+	return portDataSetRegExp
+}
+
+// ParentDataSetRegExp returns the compiled regex for PARENT_DATA_SET parsing.
+func ParentDataSetRegExp() *regexp.Regexp {
+	return parentDataSetRegExp
 }

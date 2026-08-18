@@ -642,6 +642,103 @@ func Test_ProcessPTPMetrics(t *testing.T) {
 	}
 }
 
+// servoStateTestCases exercises the raw linuxptp servo state (s0-s3) metric
+// end-to-end through the current parser-event path (pm.RunProcessPTPMetrics
+// -> processWithParser -> updateServoStateMetrics), independent of the
+// collapsed ClockState metric.
+var servoStateTestCases = []struct {
+	name               string
+	log                string
+	messageTag         string
+	process            string
+	iface              string
+	expectedServoState float64
+}{
+	{
+		// The exact log line reported in CNF-25298.
+		name:               "ptp4l master offset line with s2 (LOCKED) reports raw servo state 2",
+		log:                "ptp4l[2330.162]: [ptp4l.1.config:6] master offset         -1 s2 freq      +1 path delay     18481",
+		messageTag:         "[ptp4l.1.config:6]",
+		process:            "ptp4l",
+		iface:              "master",
+		expectedServoState: 2,
+	},
+	{
+		name:               "ptp4l master offset line with s0 (UNLOCKED) reports raw servo state 0",
+		log:                "ptp4l[365195.391]: [ptp4l.0.config] master offset -1 s0 freq -3972 path delay 89",
+		messageTag:         "[ptp4l.0.config]",
+		process:            "ptp4l",
+		iface:              "master",
+		expectedServoState: 0,
+	},
+	{
+		name:               "phc2sys phc offset line with s2 (LOCKED) reports raw servo state 2",
+		log:                "phc2sys[1823126.732]: [ptp4l.0.config] CLOCK_REALTIME phc offset       -10 s2 freq   +8956 delay    508",
+		messageTag:         "[ptp4l.0.config]",
+		process:            "phc2sys",
+		iface:              "CLOCK_REALTIME",
+		expectedServoState: 2,
+	},
+	{
+		name:               "ts2phc master offset line with s1 (JUMP) reports raw servo state 1",
+		log:                "ts2phc[1896332.824]: [ts2phc.5.config] dev/ptp12 offset        777 s1 freq   -88888",
+		messageTag:         "[ts2phc.5.config]",
+		process:            "ts2phc",
+		iface:              "ens20fx",
+		expectedServoState: 1,
+	},
+}
+
+func Test_ProcessPTPMetrics_ServoState(t *testing.T) {
+	for _, tc := range servoStateTestCases {
+		t.Run(tc.name, func(t *testing.T) {
+			daemon.ServoState.With(map[string]string{"process": tc.process, "node": MYNODE, "iface": tc.iface}).Set(CLEANUP)
+			pm.SetTestData(tc.process, tc.messageTag, config.IFaces{{Name: tc.iface, PhcId: "dev/ptp12"}})
+			pm.RunProcessPTPMetrics(tc.log)
+
+			servoState := daemon.ServoState.With(map[string]string{"process": tc.process, "node": MYNODE, "iface": tc.iface})
+			assert.Equal(t, tc.expectedServoState, testutil.ToFloat64(servoState), "ServoState does not match for log: %q", tc.log)
+		})
+	}
+}
+
+// TestProcessParsedEvent_FaultyResetsServoState verifies that when a tracked
+// SLAVE port faults, the fault-handling branch in processParsedEvent resets
+// servo_state back to UNLOCKED (s0) for that port's alias, the same way it
+// already forces clock_state to FREERUN. Without this, servo_state would
+// keep reporting the last real "sN" value from before the fault (e.g. 2 for
+// s2/LOCKED), since no further offset lines arrive for a faulty port.
+func TestProcessParsedEvent_FaultyResetsServoState(t *testing.T) {
+	const (
+		messageTag = "[ptp4l.50.config]"
+		process    = "ptp4l"
+		ifaceName  = "ens50f3"
+		ifaceAlias = "ens50fx"
+	)
+	ifaces := config.IFaces{{Name: ifaceName, IsMaster: false, Source: "", PhcId: "phcid-50"}}
+	pm.SetTestData(process, messageTag, ifaces)
+
+	// Port becomes SLAVE: tracks masterOffsetIface/slaveIface for this config
+	// so the later FAULTY transition below is recognized as "the tracked
+	// slave going faulty" and triggers the fault-handling branch.
+	pm.RunProcessPTPMetrics("ptp4l[1.0]: [ptp4l.50.config] port 1: UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED")
+
+	clockState := daemon.ClockState.With(map[string]string{"process": process, "node": MYNODE, "iface": ifaceAlias})
+	servoState := daemon.ServoState.With(map[string]string{"process": process, "node": MYNODE, "iface": ifaceAlias})
+
+	// Seed both metrics as if a prior "s2" (LOCKED) master offset line had
+	// already been reported for this port.
+	clockState.Set(1)
+	servoState.Set(2)
+
+	// The port faults; both clock_state and servo_state for this port's
+	// alias should be forced back down (FREERUN / s0-UNLOCKED).
+	pm.RunProcessPTPMetrics("ptp4l[3.0]: [ptp4l.50.config] port 1: SLAVE to FAULTY on FAULT_DETECTED (FT_UNSPECIFIED)")
+
+	assert.Equal(t, float64(0), testutil.ToFloat64(clockState), "expected clock_state FREERUN after fault")
+	assert.Equal(t, float64(0), testutil.ToFloat64(servoState), "expected servo_state reset to s0 (UNLOCKED) after fault")
+}
+
 func TestDaemon_ApplyHaProfiles(t *testing.T) {
 	skip, teardownTest := testhelpers.SetupForTestBCPTPHA()
 	defer teardownTest()

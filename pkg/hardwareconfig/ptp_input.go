@@ -1,8 +1,6 @@
 package hardwareconfig
 
 import (
-	"strings"
-
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
@@ -35,39 +33,35 @@ func NewPTPStateDetector(hcm *HardwareConfigManager) *PTPStateDetector {
 	return psd
 }
 
+// DetectStateChangeFromRole maps a port-role transition to a condition type.
+// This is the shared core that both log-scraping and PMC-based port-state
+// detection use. Returns ("", "") when the transition is not relevant.
+func DetectStateChangeFromRole(portName string, role, previousRole constants.PTPPortRole) (string, string) {
+	switch {
+	case role == constants.PortRoleSlave:
+		return portName, ConditionTypeLocked
+	case previousRole == constants.PortRoleSlave:
+		return portName, ConditionTypeLost
+	default:
+		return "", ""
+	}
+}
+
 // DetectStateChange processes a PTP4L log line and returns port-aware state change information.
 // Returns the port name and condition type ("locked", "lost") for the port that changed state.
 // Returns ("", "") when the log line contains no relevant state change or the port is not monitored.
-// TODO: replace by pmc state monitor
 func (psd *PTPStateDetector) DetectStateChange(logLine string) (portName string, conditionType string) {
 	_, event, err := psd.ptp4lExtractor.Extract(logLine)
 	if err != nil || event == nil {
 		return "", ""
 	}
 
-	portName = psd.extractPortName(logLine)
-	if portName == "" {
+	portName = event.Iface
+	if portName == "" || !psd.monitoredPorts[portName] {
 		return "", ""
 	}
 
-	if !psd.monitoredPorts[portName] {
-		return "", ""
-	}
-
-	switch event.Role {
-	case constants.PortRoleSlave:
-		return portName, ConditionTypeLocked
-	default:
-		if strings.Contains(event.Raw, "SLAVE to ") {
-			return portName, ConditionTypeLost
-		}
-		return "", ""
-	}
-}
-
-// extractPortName extracts the port name from a PTP4L log line using the parser
-func (psd *PTPStateDetector) extractPortName(logLine string) string {
-	return psd.ExtractPortName(logLine)
+	return DetectStateChangeFromRole(portName, event.Role, event.PreviousRole)
 }
 
 // ExtractPortName extracts the port name from a PTP4L log line using the parser package
