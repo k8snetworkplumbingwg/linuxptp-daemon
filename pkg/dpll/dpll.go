@@ -325,6 +325,9 @@ func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxIn
 		LocalHoldoverTimeout:   localHoldoverTimeout,
 		MaxInSpecOffset:        maxInSpecOffset,
 		slope: func() float64 {
+			if localMaxHoldoverOffSet == 0 || localHoldoverTimeout == 0 {
+				return 0
+			}
 			return float64(localMaxHoldoverOffSet) / float64(localHoldoverTimeout)
 		}(),
 		timer:                    0,
@@ -352,9 +355,11 @@ func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxIn
 	}
 
 	// time to reach maxnInSpecOffset
-	d.timer = int64(math.Round(float64(d.MaxInSpecOffset) / d.slope))
+	if d.slope > 0 {
+		d.timer = int64(math.Round(float64(d.MaxInSpecOffset) / d.slope))
+	}
 	glog.Infof("slope %f ns/s, in spec offset %f ns, in spec timer %d /sec Max timer %d /s",
-		d.slope, float64(d.MaxInSpecOffset), d.timer, int64(d.LocalHoldoverTimeout))
+		d.slope, float64(d.MaxInSpecOffset), d.timer, d.LocalHoldoverTimeout)
 	return d
 }
 
@@ -922,7 +927,8 @@ func (d *DpllConfig) isOffsetInRange() bool {
 // Frequency State (EEC_DPLL)
 // cat /sys/class/net/interface_name/device/dpll_0_state
 
-func CalculateTimer(nodeProfile *ptpv1.PtpProfile) (int64, int64, int64, int64, bool) {
+// CalculateTimer computes holdover timing parameters from a PTP profile's settings.
+func CalculateTimer(nodeProfile *ptpv1.PtpProfile) (uint64, uint64, uint64, uint64, bool) {
 	var localMaxHoldoverOffSet uint64 = LocalMaxHoldoverOffSet
 	var localHoldoverTimeout uint64 = LocalHoldoverTimeout
 	var maxInSpecOffset uint64 = MaxInSpecOffset
@@ -942,9 +948,13 @@ func CalculateTimer(nodeProfile *ptpv1.PtpProfile) (int64, int64, int64, int64, 
 			maxInSpecOffset = i
 		}
 	}
+	if localMaxHoldoverOffSet == 0 || localHoldoverTimeout == 0 {
+		glog.Warningf("invalid holdover config: localMaxHoldoverOffSet=%d, localHoldoverTimeout=%d; disabling holdover", localMaxHoldoverOffSet, localHoldoverTimeout)
+		return maxInSpecOffset, localMaxHoldoverOffSet, localHoldoverTimeout, 0, false
+	}
 	slope := float64(localMaxHoldoverOffSet) / float64(localHoldoverTimeout)
-	inSpecTimer := int64(math.Round(float64(maxInSpecOffset) / slope))
-	return int64(maxInSpecOffset), int64(localMaxHoldoverOffSet), int64(localHoldoverTimeout), inSpecTimer, false
+	inSpecTimer := uint64(math.Round(float64(maxInSpecOffset) / slope))
+	return maxInSpecOffset, localMaxHoldoverOffSet, localHoldoverTimeout, inSpecTimer, false
 }
 
 // PtpSettingsDpllIgnoreKey returns the PtpSettings key to ignore DPLL for the given interface name:

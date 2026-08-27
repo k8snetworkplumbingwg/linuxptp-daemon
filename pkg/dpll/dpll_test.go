@@ -14,6 +14,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -331,6 +332,27 @@ func TestSlopeAndTimer(t *testing.T) {
 			expectedSlope:          6000 / 100, // 60ns rate of change
 			expectedTimeout:        2,          // 100/60 = 2 sec (maxInSpecOffset /slope)
 		},
+		{
+			localMaxHoldoverOffSet: 0,
+			localHoldoverTimeout:   100,
+			maxInSpecOffset:        100,
+			expectedSlope:          0,
+			expectedTimeout:        0,
+		},
+		{
+			localMaxHoldoverOffSet: 6000,
+			localHoldoverTimeout:   0,
+			maxInSpecOffset:        100,
+			expectedSlope:          0,
+			expectedTimeout:        0,
+		},
+		{
+			localMaxHoldoverOffSet: 0,
+			localHoldoverTimeout:   0,
+			maxInSpecOffset:        100,
+			expectedSlope:          0,
+			expectedTimeout:        0,
+		},
 	}
 	for _, tt := range testCase {
 		d := dpll.NewDpll(100, tt.localMaxHoldoverOffSet, tt.localHoldoverTimeout, tt.maxInSpecOffset,
@@ -340,5 +362,88 @@ func TestSlopeAndTimer(t *testing.T) {
 		assert.Equal(t, tt.maxInSpecOffset, d.MaxInSpecOffset, "Max In Spec Offset")
 		assert.Equal(t, tt.expectedTimeout, d.Timer(), "Timer in secs")
 		assert.Equal(t, tt.expectedSlope, d.Slope(), "Slope")
+	}
+}
+
+func TestCalculateTimer(t *testing.T) {
+	tests := []struct {
+		name                   string
+		settings               map[string]string
+		expectedMaxInSpec      uint64
+		expectedMaxHoldover    uint64
+		expectedHoldoverTimout uint64
+		expectedInSpecTimer    uint64
+		expectedFreqTraceable  bool
+	}{
+		{
+			name:                   "defaults",
+			settings:               map[string]string{},
+			expectedMaxInSpec:      dpll.MaxInSpecOffset,
+			expectedMaxHoldover:    dpll.LocalMaxHoldoverOffSet,
+			expectedHoldoverTimout: dpll.LocalHoldoverTimeout,
+			expectedInSpecTimer:    uint64(14400),
+			expectedFreqTraceable:  false,
+		},
+		{
+			name: "custom valid values",
+			settings: map[string]string{
+				dpll.LocalMaxHoldoverOffSetStr: "6000",
+				dpll.LocalHoldoverTimeoutStr:   "100",
+				dpll.MaxInSpecOffsetStr:        "100",
+			},
+			expectedMaxInSpec:      100,
+			expectedMaxHoldover:    6000,
+			expectedHoldoverTimout: 100,
+			expectedInSpecTimer:    2,
+			expectedFreqTraceable:  false,
+		},
+		{
+			name: "zero localMaxHoldoverOffSet",
+			settings: map[string]string{
+				dpll.LocalMaxHoldoverOffSetStr: "0",
+			},
+			expectedMaxInSpec:      dpll.MaxInSpecOffset,
+			expectedMaxHoldover:    0,
+			expectedHoldoverTimout: dpll.LocalHoldoverTimeout,
+			expectedInSpecTimer:    0,
+			expectedFreqTraceable:  false,
+		},
+		{
+			name: "zero localHoldoverTimeout",
+			settings: map[string]string{
+				dpll.LocalHoldoverTimeoutStr: "0",
+			},
+			expectedMaxInSpec:      dpll.MaxInSpecOffset,
+			expectedMaxHoldover:    dpll.LocalMaxHoldoverOffSet,
+			expectedHoldoverTimout: 0,
+			expectedInSpecTimer:    0,
+			expectedFreqTraceable:  false,
+		},
+		{
+			name: "both zero",
+			settings: map[string]string{
+				dpll.LocalMaxHoldoverOffSetStr: "0",
+				dpll.LocalHoldoverTimeoutStr:   "0",
+			},
+			expectedMaxInSpec:      dpll.MaxInSpecOffset,
+			expectedMaxHoldover:    0,
+			expectedHoldoverTimout: 0,
+			expectedInSpecTimer:    0,
+			expectedFreqTraceable:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			profile := &ptpv1.PtpProfile{
+				PtpSettings: tt.settings,
+			}
+			maxInSpec, maxHoldover, holdoverTimeout, inSpecTimer, freqTraceable := dpll.CalculateTimer(profile)
+			assert.Equal(t, tt.expectedMaxInSpec, maxInSpec, "maxInSpecOffset")
+			assert.Equal(t, tt.expectedMaxHoldover, maxHoldover, "localMaxHoldoverOffSet")
+			assert.Equal(t, tt.expectedHoldoverTimout, holdoverTimeout, "localHoldoverTimeout")
+			assert.Equal(t, tt.expectedInSpecTimer, inSpecTimer, "inSpecTimer")
+			assert.Equal(t, tt.expectedFreqTraceable, freqTraceable, "frequencyTraceable")
+		})
 	}
 }
