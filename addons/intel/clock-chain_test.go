@@ -210,3 +210,52 @@ func Test_SetPinDefaults_AllNICs(t *testing.T) {
 		assert.True(t, pinLabelsSeen[expectedPin], "should have command for pin %s", expectedPin)
 	}
 }
+
+func Test_SetPinsControlForAllNICs_SkipsUnconfiguredNICs(t *testing.T) {
+	unconfiguredClockID := uint64(9999999999999999999)
+	configuredClockID := uint64(5799633565432596414)
+
+	mockPins, restoreDPLLPins := setupMockDPLLPins(
+		&dpll.PinInfo{ID: 1, ClockID: configuredClockID, BoardLabel: "GNSS-1PPS",
+			ParentDevice: []dpll.PinParentDevice{
+				{ParentID: 1, Direction: dpll.PinDirectionInput},
+				{ParentID: 2, Direction: dpll.PinDirectionInput},
+			}},
+		&dpll.PinInfo{ID: 2, ClockID: unconfiguredClockID, BoardLabel: "GNSS-1PPS",
+			ParentDevice: []dpll.PinParentDevice{
+				{ParentID: 3, Direction: dpll.PinDirectionInput},
+				{ParentID: 4, Direction: dpll.PinDirectionInput},
+			}},
+	)
+	defer restoreDPLLPins()
+	_ = mockPins
+
+	mockPinSet, restorePinSet := setupBatchPinSetMock()
+	defer restorePinSet()
+
+	cc := &ClockChain{
+		LeadingNIC: CardInfo{Name: "test-nic", DpllClockID: configuredClockID},
+		OtherNICs:  []CardInfo{},
+		DpllPins:   DpllPins,
+	}
+
+	commands, err := cc.SetPinsControlForAllNICs([]PinControl{
+		{
+			Label: "GNSS-1PPS",
+			ParentControl: PinParentControl{
+				EecPriority: PriorityDisabled,
+				PpsPriority: PriorityDisabled,
+			},
+		},
+	})
+	assert.NoError(t, err)
+	err = BatchPinSet(commands)
+	assert.NoError(t, err)
+
+	// Only the configured NIC's pin should produce commands
+	for _, cmd := range mockPinSet.commands {
+		assert.NotEqual(t, uint32(2), cmd.ID,
+			"pin ID 2 belongs to unconfigured NIC and should not have commands")
+	}
+	assert.Greater(t, len(mockPinSet.commands), 0, "should have commands for the configured NIC")
+}
