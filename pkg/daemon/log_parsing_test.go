@@ -5,10 +5,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
 
 // TestReplayDualUpstreamLog replays the actual ptp4l log sequence from OCPBUGS-111881
@@ -30,16 +32,16 @@ import (
 func TestReplayDualUpstreamLog(t *testing.T) {
 	InitializeOffsetMaps()
 
-	handler := event.Init("test-node", false, "", nil, nil, nil, nil, nil)
 	process := &ptpProcess{
 		name:       ptp4lProcessName,
+		configName: "ptp4l.1.config",
 		messageTag: "[ptp4l.1.config]",
 		ifaces: config.IFaces{
 			{Name: "eno8303"},
 			{Name: "eno8403"},
 		},
-		handler:   handler,
 		logParser: parser.NewPTP4LExtractor(),
+		eventCh:   make(chan event.Event, 10),
 	}
 
 	// --- Phase 1: Initial boot ---
@@ -85,4 +87,46 @@ func TestReplayDualUpstreamLog(t *testing.T) {
 	}
 	assert.Equal(t, float64(SLAVE), testutil.ToFloat64(InterfaceRole.WithLabelValues(ptp4lProcessName, NodeName, "eno8303")), "recovery: eno8303 should be SLAVE")
 	assert.Equal(t, float64(MASTER), testutil.ToFloat64(InterfaceRole.WithLabelValues(ptp4lProcessName, NodeName, "eno8403")), "recovery: eno8403 should be MASTER")
+}
+
+// TestProcessParsedEvent_EmitsPortRoleEventForBC verifies that a port-role
+// transition line, parsed for a BC/OC clock, results in a PTPData event on the
+// process eventCh carrying the port role. This is the signal the BCClock uses
+// to drive the mini-holdover from upstream adjacency loss.
+func TestProcessParsedEvent_EmitsPortRoleEventForBC(t *testing.T) {
+	InitializeOffsetMaps()
+
+	process := &ptpProcess{
+		name:       ptp4lProcessName,
+		clockType:  event.OC,
+		configName: "ptp4l.1.config",
+		messageTag: "[ptp4l.1.config]",
+		ifaces: config.IFaces{
+			{Name: "ens1f0"},
+		},
+		logParser: parser.NewPTP4LExtractor(),
+		eventCh:   make(chan event.Event, 10),
+	}
+
+	// eno8303-style single-port OC: SLAVE -> FAULTY (upstream adjacency lost)
+	line := "ptp4l[82736.439]: [ptp4l.1.config:5] port 1 (ens1f0): SLAVE to FAULTY on FAULT_DETECTED (FT_UNSPECIFIED)"
+	processWithParser(process, line)
+
+	var got event.Event
+	select {
+	case ev := <-process.eventCh:
+		got = ev
+	default:
+		t.Fatal("expected a port-role event on eventCh")
+	}
+
+	assert.Equal(t, event.PTP4l, got.Source)
+	assert.Equal(t, event.OC, got.ClockType)
+	assert.Equal(t, "ens1f0", got.IFace)
+
+	ptp, ok := got.Data.(*event.PTPData)
+	require.True(t, ok, "event data should be *event.PTPData")
+	role, ok := ptp.Values[event.PortRole]
+	require.True(t, ok, "event should carry a PortRole value")
+	assert.Equal(t, int64(constants.PortRoleFaulty), role)
 }

@@ -96,6 +96,18 @@ type PtpClockThreshold struct {
 	// +kubebuilder:default=-100
 	// min offset in nano secs
 	MinOffsetThreshold int64 `json:"minOffsetThreshold,omitempty"`
+	// sysOffsetInSyncThreshold is the phc2sys-to-CLOCK_REALTIME offset threshold, in nanoseconds, that must be met to gate the OS Clock Sync (E3) LOCKED state. abs(offset) <= this threshold for sysOffsetSamples consecutive samples triggers LOCKED. When unset, it defaults to maxOffsetThreshold.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	SysOffsetInSyncThreshold *int64 `json:"sysOffsetInSyncThreshold,omitempty"`
+	// sysOffsetOutOfSyncThreshold is the phc2sys-to-CLOCK_REALTIME offset threshold, in nanoseconds, that when exceeded gates the OS Clock Sync (E3) FREERUN state. abs(offset) > this threshold for sysOffsetSamples consecutive samples triggers FREERUN. Independent of sysOffsetInSyncThreshold; together they form a hysteresis band. When unset, it defaults to maxOffsetThreshold.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	SysOffsetOutOfSyncThreshold *int64 `json:"sysOffsetOutOfSyncThreshold,omitempty"`
+	// sysOffsetSamples is the number of consecutive phc2sys offset samples required for an E3 LOCKED/FREERUN state transition in either direction (relative to sysOffsetInSyncThreshold for LOCKED, or sysOffsetOutOfSyncThreshold for FREERUN). When unset, it defaults to 10.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	SysOffsetSamples *int64 `json:"sysOffsetSamples,omitempty"`
 	// Acceptable process downtime in seconds for each process
 	ProcessDowntimeThresholds *ProcessDowntimeThresholds `json:"processDowntimeThresholds,omitempty"`
 }

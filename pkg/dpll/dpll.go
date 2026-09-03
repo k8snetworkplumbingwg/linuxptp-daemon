@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"net"
+
 	"strconv"
 	"sync"
 	"time"
@@ -305,12 +305,11 @@ func (d *DpllConfig) SyncInitialState() {
 }
 
 // ProcessStatus ... process status
-func (d *DpllConfig) ProcessStatus(_ net.Conn, _ int64) {
+func (d *DpllConfig) ProcessStatus(_ int64) {
 }
 
 // CmdRun ... run command
-func (d *DpllConfig) CmdRun(stdToSocket bool) {
-	// noting to run, monitor() function takes care of dpll run
+func (d *DpllConfig) CmdRun() {
 }
 
 // NewDpll ... create new DPLL process

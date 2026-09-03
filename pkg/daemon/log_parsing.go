@@ -52,6 +52,8 @@ func getParser(processName string) parser.MetricsExtractor {
 		return parser.NewPhc2SysExtractor()
 	case ts2phcProcessName:
 		return parser.NewTS2PHCExtractor()
+	case chronydProcessName:
+		return parser.NewChronydExtractor()
 	default:
 		glog.Errorf("No parser available for process: %s", processName)
 		return nil
@@ -121,7 +123,26 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		if ptpMetrics.Source == "master" && process.dn != nil {
 			process.dn.HandleDelayedPhc2sysStartup(process.name, ptpMetrics.Offset, process.nodeProfile.Name)
 		}
+		// sendPtp4lOffsetEvent handles T-BC: windowed offset averaging,
+		// rate-limited to 1/sec, using tBCAttributes. It no-ops for simple
+		// OC/BC (offsetEventWindow is nil), so we send the event directly below.
 		process.sendPtp4lOffsetEvent()
+		if process.clockType == event.BC || process.clockType == event.OC {
+			select {
+			case process.eventCh <- event.Event{
+				Source:    event.PTP4l,
+				CfgName:   configName,
+				IFace:     ptpMetrics.Iface,
+				ClockType: process.clockType,
+				Time:      time.Now().UnixMilli(),
+				Data: &event.PTPData{
+					State:  state,
+					Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+				},
+			}:
+			default:
+			}
+		}
 	case ts2phcProcessName:
 		if process.dn != nil {
 			process.dn.HandleDelayedPhc2sysStartup(process.name, ptpMetrics.Offset, process.nodeProfile.Name)
@@ -150,6 +171,45 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		}:
 		default:
 		}
+	case phc2sysProcessName:
+		// Apply the OS-clock E3 hysteresis filter. The raw shouldFreeRun override applied
+		// above is discarded for phc2sys: the filtered state (LOCKED/FREERUN from
+		// sysOffsetInSyncThreshold/sysOffsetOutOfSyncThreshold, deduped over
+		// sysOffsetSamples samples) drives the PHC2SYS event and thus the O-RAN
+		// OsClockSyncStateChange. Emit only on transition so a single jitter sample across
+		// the threshold does not flap E3.
+		osState, osChanged := process.updateOSClockState(ptpMetrics.Offset, state)
+		if osChanged {
+			select {
+			case process.eventCh <- event.Event{
+				Source:    event.PHC2SYS,
+				CfgName:   configName,
+				IFace:     ptpMetrics.Iface,
+				ClockType: process.clockType,
+				Time:      time.Now().UnixMilli(),
+				Data: &event.PTPData{
+					State:  osState,
+					Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+				},
+			}:
+			default:
+			}
+		}
+	case chronydProcessName:
+		select {
+		case process.eventCh <- event.Event{
+			Source:    event.CHRONYD,
+			CfgName:   configName,
+			IFace:     ptpMetrics.Iface,
+			ClockType: process.clockType,
+			Time:      time.Now().UnixMilli(),
+			Data: &event.PTPData{
+				State:  state,
+				Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+			},
+		}:
+		default:
+		}
 	}
 }
 
@@ -167,10 +227,27 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 		interfaceName := process.ifaces[ptpEvent.PortID-1].Name
 		role := convertParserRoleToMetricsRole(ptpEvent.Role)
 		UpdateInterfaceRoleMetrics(process.name, interfaceName, role)
-		process.handler.SetPortRole(configName, interfaceName, ptpEvent)
-
 		if configName == "" {
 			return
+		}
+
+		// Feed the parsed port role into BC/OC clocks so they can drive the
+		// mini-holdover from an upstream adjacency-loss (port leaves SLAVE),
+		// not just the servo state. Non-blocking, mirroring the offset event.
+		if process.clockType == event.BC || process.clockType == event.OC {
+			select {
+			case process.eventCh <- event.Event{
+				Source:    event.PTP4l,
+				CfgName:   configName,
+				IFace:     interfaceName,
+				ClockType: process.clockType,
+				Time:      time.Now().UnixMilli(),
+				Data: &event.PTPData{
+					Values: map[event.ValueType]interface{}{event.PortRole: int64(ptpEvent.Role)},
+				},
+			}:
+			default:
+			}
 		}
 
 		// Handle role-specific logic

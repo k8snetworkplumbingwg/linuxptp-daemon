@@ -260,13 +260,17 @@ func updatePTPMetrics(from, process, iface string, ptpOffset, maxPtpOffset, freq
 		"process": process, "node": NodeName, "iface": iface}).Set(delay)
 }
 
-// extractMetrics ...
-func extractMetrics(messageTag string, processName string, ifaces config.IFaces, output string, updateMetrics bool) (configName, source string, offset float64, state string, iface string) {
-	glog.V(14).Infof("DEBUG extractMetrics: process=%s updateMetrics=%v tag=%s", processName, updateMetrics, messageTag)
-	configName = strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
-	if configName != "" {
-		configName = strings.Split(configName, MessageTagSuffixSeperator)[0] // remove any suffix added to the configName
+func configNameFromMessageTag(messageTag string) string {
+	cfgName := strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
+	if cfgName != "" {
+		cfgName = strings.Split(cfgName, MessageTagSuffixSeperator)[0]
 	}
+	return cfgName
+}
+
+// extractMetrics ...
+func extractMetrics(messageTag string, processName string, ifaces config.IFaces, output string) (configName, source string, offset float64, state string, iface string) {
+	configName = configNameFromMessageTag(messageTag) // remove any suffix added to the configName
 	output = removeMessageSuffix(output)
 	if strings.Contains(output, " max ") {
 		ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay := extractSummaryMetrics(configName, processName, output)
@@ -293,10 +297,8 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 			if offsetSource == master {
 				masterOffsetSource.set(configName, processName)
 			}
-			if updateMetrics {
-				updatePTPMetrics(offsetSource, processName, ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay)
-				updateClockStateMetrics(processName, ifaceName, clockstate)
-			}
+			updatePTPMetrics(offsetSource, processName, ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay)
+			updateClockStateMetrics(processName, ifaceName, clockstate)
 		}
 		source = processName
 		offset = ptpOffset
@@ -313,11 +315,9 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 				} else if role == FAULTY {
 					if slaveIface.isFaulty(configName, ifaces[portId-1].Name) &&
 						masterOffsetSource.get(configName) == ptp4lProcessName {
-						if updateMetrics {
-							updatePTPMetrics(master, processName, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
-							updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
-							updateClockStateMetrics(processName, masterOffsetIface.get(configName).alias, FREERUN)
-						}
+						updatePTPMetrics(master, processName, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
+						updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
+						updateClockStateMetrics(processName, masterOffsetIface.get(configName).alias, FREERUN)
 						masterOffsetIface.set(configName, "")
 						slaveIface.set(configName, "")
 						state = HOLDOVER
@@ -607,12 +607,20 @@ func deleteSyncEMetrics(process, configName string, relations *synce.Relations) 
 }
 
 // DeleteMetrics ... update ptp ha  metrics
-func deleteMetrics(ifaces config.IFaces, haProfiles map[string][]string, process, config string) {
+func deleteMetrics(ifaces config.IFaces, haProfiles map[string][]string, process, config, messageTag string) {
+	cfgNameFromTag := configNameFromMessageTag(messageTag)
+	if cfgNameFromTag != "" {
+		deleteProcessStatusMetrics(cfgNameFromTag, process)
+	}
+	if config != "" && config != cfgNameFromTag {
+		deleteProcessStatusMetrics(config, process)
+	}
+
 	if process == phc2sysProcessName {
 		deleteOsClockStateMetrics(haProfiles)
 		return
 	}
-	deleteProcessStatusMetrics(config, process)
+
 	for _, iface := range ifaces {
 		InterfaceRole.Delete(prometheus.Labels{
 			"process": ptp4lProcessName, "node": NodeName, "iface": iface.Name})
@@ -704,10 +712,9 @@ func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
 	return
 }
 
-func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf, stdoutToSocket bool) {
+func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf) {
 	switch process {
 	case "ptp4l":
-		// If output doesn't exist we add it for the prometheus exporter
 		if configOpts != nil {
 			if !strings.Contains(*configOpts, "-m") {
 				glog.Info("adding -m to print messages to stdout for ptp4l to use prometheus exporter")
@@ -722,24 +729,24 @@ func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf, std
 			}
 		}
 	case "phc2sys":
-		// If output doesn't exist we add it for the prometheus exporter
 		if configOpts != nil && *configOpts != "" {
 			if !strings.Contains(*configOpts, "-m") {
 				glog.Info("adding -m to print messages to stdout for phc2sys to use prometheus exporter")
 				*configOpts = fmt.Sprintf("%s -m", *configOpts)
 			}
-			// stdoutToSocket is for sidecar to consume events, -u  will not generate logs with offset and clock state.
-			// disable -u for  events
-			if stdoutToSocket && strings.Contains(*configOpts, "-u") {
-				glog.Error("-u option will not generate clock state events,  remove -u option")
-			} else if !stdoutToSocket && !strings.Contains(*configOpts, "-u") {
-				glog.Info("adding -u 1 to print summary messages to stdout for phc2sys to use prometheus exporter")
-				*configOpts = fmt.Sprintf("%s -u 1", *configOpts)
+			if strings.Contains(*configOpts, "-u") {
+				glog.Error("-u option will not generate clock state events, remove -u option")
 			}
 		}
 	case "ts2phc":
 	}
+}
 
+func removeMessageSuffix(input string) (output string) {
+	replacer := strings.NewReplacer("{", "", "}", "")
+	output = replacer.Replace(input)
+	output = messageTagSuffixRegEx.ReplaceAllString(output, "$1")
+	return output
 }
 
 // StartMetricsServer runs the prometheus listner so that metrics can be collected
