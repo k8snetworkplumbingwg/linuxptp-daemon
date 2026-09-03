@@ -16,8 +16,10 @@ env:
   DKMS_VER: "6.9.5"
   DKMS_REPO: https://github.com/redhat-cne/netdevsim-dkms.git
   DKMS_BRANCH: main
-  PTP_REPO: https://github.com/k8snetworkplumbingwg/ptp-operator.git
-  PTP_BRANCH: main
+  # Temporary: exercise k8snetworkplumbingwg/ptp-operator#285 (.dockerignore).
+  # Revert to k8snetworkplumbingwg/ptp-operator@main after that PR merges.
+  PTP_REPO: https://github.com/edcdavid/ptp-operator-upstream.git
+  PTP_BRANCH: ci-exclude-local-runs-from-build-context
 
 jobs:
   # ------------------------------------------------------------------
@@ -150,18 +152,15 @@ jobs:
           echo "RAM: $(free -h | awk '/Mem:/{print $2}')"
           echo "Kernel: $(uname -r)"
 
-      - name: Install latest podman
+      - name: Verify podman and upgrade crun
         run: |
-          . /etc/os-release
-          sudo mkdir -p /etc/apt/keyrings
-          curl -fsSL "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_${VERSION_ID}/Release.key" \
-            | sudo gpg --dearmor --yes -o /etc/apt/keyrings/devel_kubic_libcontainers_unstable.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/devel_kubic_libcontainers_unstable.gpg] \
-            https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_${VERSION_ID}/ /" \
-            | sudo tee /etc/apt/sources.list.d/devel:kubic:libcontainers:unstable.list >/dev/null
-          sudo apt-get update
-          sudo apt-get install -y podman
           podman --version
+          CRUN_VER=1.19.1
+          CRUN_PATH="$(which crun 2>/dev/null || echo /usr/bin/crun)"
+          sudo curl -fsSL --retry 7 --retry-all-errors -o "${CRUN_PATH}" \
+            "https://github.com/containers/crun/releases/download/${CRUN_VER}/crun-${CRUN_VER}-linux-amd64"
+          sudo chmod +x "${CRUN_PATH}"
+          crun --version | head -1
 
       - name: Clone ptp-operator
         run: git clone --depth 1 --branch "${PTP_BRANCH}" "${PTP_REPO}" /tmp/ptp-operator
@@ -199,7 +198,9 @@ jobs:
 
           VM_IP=$(hostname -I | awk '{print $1}')
           cd /root/ptp-operator/scripts
-          ./run-on-vm.sh --dkms --images "${VM_IP}"
+          ./run-on-vm.sh --verbose --dkms --images "${VM_IP}"
+
+          rm -rf /tmp/go-build* /root/.cache/go-build
           BUILD
 
       - name: Upload image tarball
@@ -227,23 +228,20 @@ jobs:
           echo "RAM: $(free -h | awk '/Mem:/{print $2}')"
           echo "Kernel: $(uname -r)"
 
-      - name: Install latest podman
+      - name: Verify podman and upgrade crun
         run: |
-          . /etc/os-release
-          sudo mkdir -p /etc/apt/keyrings
-          curl -fsSL "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_${VERSION_ID}/Release.key" \
-            | sudo gpg --dearmor --yes -o /etc/apt/keyrings/devel_kubic_libcontainers_unstable.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/devel_kubic_libcontainers_unstable.gpg] \
-            https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_${VERSION_ID}/ /" \
-            | sudo tee /etc/apt/sources.list.d/devel:kubic:libcontainers:unstable.list >/dev/null
-          sudo apt-get update
-          sudo apt-get install -y podman
           podman --version
+          CRUN_VER=1.19.1
+          CRUN_PATH="$(which crun 2>/dev/null || echo /usr/bin/crun)"
+          sudo curl -fsSL --retry 7 --retry-all-errors -o "${CRUN_PATH}" \
+            "https://github.com/containers/crun/releases/download/${CRUN_VER}/crun-${CRUN_VER}-linux-amd64"
+          sudo chmod +x "${CRUN_PATH}"
+          crun --version | head -1
 
       - name: Install OpenShift CLI (oc)
         run: |
           if ! command -v oc &>/dev/null; then
-            curl -sLO https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz
+            curl -sLO --retry 7 --retry-all-errors https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz
             sudo tar xzf openshift-client-linux.tar.gz -C /usr/local/bin oc kubectl
             rm -f openshift-client-linux.tar.gz
           fi
@@ -251,6 +249,7 @@ jobs:
 
       - name: Install DKMS dependencies
         run: |
+          sudo apt-get update
           sudo apt-get install -y dkms gcc make ethtool linuxptp \
             linux-headers-$(uname -r) \
             linux-modules-extra-$(uname -r)
@@ -291,8 +290,17 @@ jobs:
 
           VM_IP=$(hostname -I | awk '{print $1}')
           cd /root/ptp-operator/scripts
-          ./run-on-vm.sh --dkms --load /tmp/ptp-images.tar "${VM_IP}"
+          ./run-on-vm.sh --verbose --dkms --load /tmp/ptp-images.tar "${VM_IP}"
           LOAD
+
+      - name: "Free disk space before tests"
+        run: |
+          sudo bash -l <<'CLEANUP'
+          set -euo pipefail
+          rm -rf /tmp/ptp-images.tar /tmp/ptp-images-load
+          rm -rf /tmp/go-build* /var/cache/apt /root/.cache
+          df -h
+          CLEANUP
 
       - name: "Run scenario: ${{ matrix.mode }}"
         run: |
@@ -304,7 +312,7 @@ jobs:
 
           VM_IP=$(hostname -I | awk '{print $1}')
           cd /root/ptp-operator/scripts
-          ./run-on-vm.sh --dkms --deploy "${VM_IP}" --mode "${{ matrix.mode }}" "${VM_IP}"
+          ./run-on-vm.sh --verbose --dkms --deploy "${VM_IP}" --mode "${{ matrix.mode }}" "${VM_IP}"
           DEPLOY
 
       - name: Upload test artifacts
