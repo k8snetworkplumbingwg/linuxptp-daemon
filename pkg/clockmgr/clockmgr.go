@@ -45,8 +45,6 @@ type ClockManager struct {
 	applyingProfiles atomic.Bool
 	// syncStatusCh is signalled (non-blocking) whenever a clock state transitions.
 	syncStatusCh chan struct{}
-	// clockStates tracks the last reported state per config for transition detection.
-	clockStates map[string]event.PTPState
 }
 
 type metricKey struct {
@@ -99,7 +97,6 @@ func Init(nodeName string, processChannel chan event.Event, offsetMetric *promet
 		osClockState:     event.PTP_NOTSET,
 		ipcCache:         ipcCache,
 		syncStatusCh:     make(chan struct{}, 1),
-		clockStates:      map[string]event.PTPState{},
 	}
 }
 
@@ -139,7 +136,6 @@ func (m *ClockManager) RemoveAllClocks() {
 		m.unregisterMetrics(cfgName, "")
 	}
 	m.clocks = map[string]clock.Clock{}
-	m.clockStates = map[string]event.PTPState{}
 	m.clockManagementMu.Unlock()
 
 	debug.ClearState()
@@ -252,11 +248,11 @@ func (m *ClockManager) ProcessEvents(ctx context.Context) {
 					fmt.Printf("%s", logData)
 				}
 			}
+			prevState := clk.GetState()
 			clockState := clk.AddEvent(ev)
-			if prev, hasPrev := m.clockStates[lookupName]; hasPrev && prev != clockState.State {
+			if prevState != event.PTP_NOTSET && prevState != clockState.State {
 				m.signalSyncStatus()
 			}
-			m.clockStates[lookupName] = clockState.State
 			if clockState.LeadingIFace != event.LEADING_INTERFACE_UNKNOWN {
 				m.updateClockStateMetrics(clockState.State, string(ev.ClockType), alias.GetAlias(clockState.LeadingIFace))
 			}
