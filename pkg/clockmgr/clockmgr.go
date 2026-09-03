@@ -43,6 +43,10 @@ type ClockManager struct {
 	// restarting processes. When true, T-BC/T-TSC events are skipped so
 	// teardown races cannot emit spurious state transitions.
 	applyingProfiles atomic.Bool
+	// syncStatusCh is signalled (non-blocking) whenever a clock state transitions.
+	syncStatusCh chan struct{}
+	// clockStates tracks the last reported state per config for transition detection.
+	clockStates map[string]event.PTPState
 }
 
 type metricKey struct {
@@ -67,6 +71,19 @@ func (m *ClockManager) IsApplying() bool {
 	return m.applyingProfiles.Load()
 }
 
+// SyncStatusUpdateCh returns a channel that receives a signal (non-blocking send)
+// whenever a clock state transitions. Missed signals are coalesced.
+func (m *ClockManager) SyncStatusUpdateCh() <-chan struct{} {
+	return m.syncStatusCh
+}
+
+func (m *ClockManager) signalSyncStatus() {
+	select {
+	case m.syncStatusCh <- struct{}{}:
+	default:
+	}
+}
+
 // Init ... initialize event manager
 func Init(nodeName string, processChannel chan event.Event, offsetMetric *prometheus.GaugeVec, clockMetric *prometheus.GaugeVec, clockClassMetric *prometheus.GaugeVec, ipcCache *ipc.Cache) *ClockManager {
 	return &ClockManager{
@@ -81,6 +98,8 @@ func Init(nodeName string, processChannel chan event.Event, offsetMetric *promet
 		clocks:           map[string]clock.Clock{},
 		osClockState:     event.PTP_NOTSET,
 		ipcCache:         ipcCache,
+		syncStatusCh:     make(chan struct{}, 1),
+		clockStates:      map[string]event.PTPState{},
 	}
 }
 
@@ -120,6 +139,7 @@ func (m *ClockManager) RemoveAllClocks() {
 		m.unregisterMetrics(cfgName, "")
 	}
 	m.clocks = map[string]clock.Clock{}
+	m.clockStates = map[string]event.PTPState{}
 	m.clockManagementMu.Unlock()
 
 	debug.ClearState()
@@ -164,6 +184,7 @@ func (m *ClockManager) handleOSClockEvent(ev event.Event) {
 	if m.osClockState == prevClockState {
 		return
 	}
+	m.signalSyncStatus()
 
 	// if the OS clock state changed, emit the event to CEP and also pass it along to each clock
 	var osOffset int64
@@ -232,6 +253,10 @@ func (m *ClockManager) ProcessEvents(ctx context.Context) {
 				}
 			}
 			clockState := clk.AddEvent(ev)
+			if prev, hasPrev := m.clockStates[lookupName]; hasPrev && prev != clockState.State {
+				m.signalSyncStatus()
+			}
+			m.clockStates[lookupName] = clockState.State
 			if clockState.LeadingIFace != event.LEADING_INTERFACE_UNKNOWN {
 				m.updateClockStateMetrics(clockState.State, string(ev.ClockType), alias.GetAlias(clockState.LeadingIFace))
 			}
