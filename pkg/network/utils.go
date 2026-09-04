@@ -122,7 +122,7 @@ func GetPhcId(iface string) string {
 	var err error
 	var id int
 	if id, err = getPTPClockIndex(iface); err != nil {
-		glog.Error(err.Error())
+		glog.Error(err)
 	} else {
 		return fmt.Sprintf("/dev/ptp%d", id)
 	}

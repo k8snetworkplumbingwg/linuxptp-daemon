@@ -285,7 +285,7 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 	} else if strings.Contains(output, " offset ") {
 		err, ifaceName, clockstate, ptpOffset, maxPtpOffset, frequencyAdjustment, delay := extractRegularMetrics(configName, processName, output, ifaces)
 		if err != nil {
-			glog.Error(err.Error())
+			glog.Error(err)
 
 		} else if ifaceName != "" {
 			offsetSource := master

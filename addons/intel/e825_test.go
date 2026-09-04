@@ -41,6 +41,14 @@ func Test_E825(t *testing.T) {
 	assert.Nil(t, d)
 }
 
+func Test_AfterRunPTPCommandE825_NilProfile(t *testing.T) {
+	p, d := E825("e825")
+	assert.NotPanics(t, func() {
+		err := p.AfterRunPTPCommand(d, nil, "pmc")
+		assert.NoError(t, err)
+	})
+}
+
 func Test_AfterRunPTPCommandE825(t *testing.T) {
 	profile, err := loadProfile("./testdata/e825-tgm.yaml")
 	assert.NoError(t, err)

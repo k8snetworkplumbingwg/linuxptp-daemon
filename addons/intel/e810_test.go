@@ -11,6 +11,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func Test_AfterRunPTPCommandE810_NilProfile(t *testing.T) {
+	p, d := E810("e810")
+	assert.NotPanics(t, func() {
+		err := p.AfterRunPTPCommand(d, nil, "pmc")
+		assert.NoError(t, err)
+	})
+}
+
 func Test_E810(t *testing.T) {
 	p, d := E810("e810")
 	assert.NotNil(t, p)

@@ -27,7 +27,7 @@ func TestBCClock_AddEvent_StateTransitions(t *testing.T) {
 		bc, rio := newTestBCClock()
 		cs := bc.AddEvent(event.Event{
 			IFace: testEns7f0,
-			Data:  &event.PTPData{State: event.PTP_LOCKED},
+			Data:  &event.OffsetData{State: event.PTP_LOCKED},
 		})
 		assert.Equal(t, event.PTP_LOCKED, cs.State)
 		require.Len(t, rio.messages, 1)
@@ -42,7 +42,7 @@ func TestBCClock_AddEvent_StateTransitions(t *testing.T) {
 		bc.syncState = event.PTP_LOCKED
 		cs := bc.AddEvent(event.Event{
 			IFace: testEns7f0,
-			Data:  &event.PTPData{State: event.PTP_FREERUN},
+			Data:  &event.OffsetData{State: event.PTP_FREERUN},
 		})
 		assert.Equal(t, event.PTP_FREERUN, cs.State)
 		require.Len(t, rio.messages, 1)
@@ -54,13 +54,13 @@ func TestBCClock_AddEvent_StateTransitions(t *testing.T) {
 		bc.syncState = event.PTP_LOCKED
 		cs := bc.AddEvent(event.Event{
 			IFace: testEns7f0,
-			Data:  &event.PTPData{State: event.PTP_LOCKED},
+			Data:  &event.OffsetData{State: event.PTP_LOCKED},
 		})
 		assert.Equal(t, event.PTP_LOCKED, cs.State)
 		assert.Empty(t, rio.messages)
 	})
 
-	t.Run("nil PTPData returns current state unchanged", func(t *testing.T) {
+	t.Run("nil Data returns current state unchanged", func(t *testing.T) {
 		bc, rio := newTestBCClock()
 		bc.syncState = event.PTP_FREERUN
 		cs := bc.AddEvent(event.Event{Data: nil})
@@ -114,7 +114,7 @@ func TestBCClock_UpdateOSClockState(t *testing.T) {
 func TestBCClock_UpdateClockClass(t *testing.T) {
 	t.Run("change emits clock_class IPC with iface", func(t *testing.T) {
 		bc, rio := newTestBCClock()
-		bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.PTPData{State: event.PTP_LOCKED}})
+		bc.AddEvent(event.Event{IFace: testEns7f0, Data: &event.OffsetData{State: event.PTP_LOCKED}})
 		rio.messages = nil // clear ptp_state IPC from addEvent
 		bc.updateClockClass(fbprotocol.ClockClass6)
 		require.Len(t, rio.messages, 1)
@@ -163,7 +163,7 @@ func TestBCClock_ClockType(t *testing.T) {
 		bc.clockType = event.OC
 		cs := bc.AddEvent(event.Event{
 			IFace: testEns7f0,
-			Data:  &event.PTPData{State: event.PTP_LOCKED},
+			Data:  &event.OffsetData{State: event.PTP_LOCKED},
 		})
 		assert.Equal(t, event.PTP_LOCKED, cs.State)
 		require.Len(t, rio.messages, 1)
@@ -198,4 +198,17 @@ func TestBCClock_ParentDSUpdate(t *testing.T) {
 
 		assert.Empty(t, rio.messages, "updateClockClass should no-op on unchanged class")
 	})
+}
+
+func TestBCClock_AddEvent_ProcessStatusDoesNotCreateData(t *testing.T) {
+	bc, rio := newTestBCClock()
+	cs := bc.AddEvent(event.ProcessStatusEvent(event.PTP4l, testPTP4lCfg, event.OC, "", 1))
+	assert.Equal(t, event.PTP_NOTSET, cs.State)
+	data := bc.ProcessData()
+	require.Len(t, data, 1)
+	assert.Equal(t, event.PTP4l, data[0].ProcessName)
+	assert.Equal(t, event.PTP_UNKNOWN, data[0].State)
+	assert.Empty(t, data[0].Details)
+	assert.Equal(t, int64(1), data[0].ProcessStatus)
+	assert.Empty(t, rio.messages)
 }

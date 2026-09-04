@@ -120,9 +120,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 		if ptpMetrics.Iface != "" && configName != "" {
 			masterOffsetIface.set(configName, ptpMetrics.Iface)
 		}
-		if ptpMetrics.Source == "master" && process.dn != nil {
-			process.dn.HandleDelayedPhc2sysStartup(process.name, ptpMetrics.Offset, process.nodeProfile.Name)
-		}
+
 		// sendPtp4lOffsetEvent handles T-BC: windowed offset averaging,
 		// rate-limited to 1/sec, using tBCAttributes. It no-ops for simple
 		// OC/BC (offsetEventWindow is nil), so we send the event directly below.
@@ -135,25 +133,23 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 				IFace:     ptpMetrics.Iface,
 				ClockType: process.clockType,
 				Time:      time.Now().UnixMilli(),
-				Data: &event.PTPData{
+				Data: &event.OffsetData{
 					State:  state,
-					Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+					Offset: int64(ptpMetrics.Offset),
 				},
 			}:
 			default:
 			}
 		}
 	case ts2phcProcessName:
-		if process.dn != nil {
-			process.dn.HandleDelayedPhc2sysStartup(process.name, ptpMetrics.Offset, process.nodeProfile.Name)
-		}
 		// Send event for ts2phc
 		eventSource := process.ifaces.GetEventSource(process.ifaces.GetPhcID2IFace(ptpMetrics.Iface))
-		values := map[event.ValueType]interface{}{
-			event.OFFSET: int64(ptpMetrics.Offset),
+		od := &event.OffsetData{
+			State:  state,
+			Offset: int64(ptpMetrics.Offset),
 		}
 		if eventSource == event.GNSS {
-			values[event.NMEA_STATUS] = int64(1)
+			od.NMEAStatus = event.Int64Ptr(1)
 		}
 		select {
 		case process.eventCh <- event.Event{
@@ -164,10 +160,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			Time:       time.Now().UnixMilli(),
 			WriteToLog: eventSource == event.GNSS,
 			Reset:      false,
-			Data: &event.PTPData{
-				State:  state,
-				Values: values,
-			},
+			Data:       od,
 		}:
 		default:
 		}
@@ -179,9 +172,9 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			IFace:     ptpMetrics.Iface,
 			ClockType: process.clockType,
 			Time:      time.Now().UnixMilli(),
-			Data: &event.PTPData{
+			Data: &event.OffsetData{
 				State:  state,
-				Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+				Offset: int64(ptpMetrics.Offset),
 			},
 		}:
 		default:
@@ -194,9 +187,9 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			IFace:     ptpMetrics.Iface,
 			ClockType: process.clockType,
 			Time:      time.Now().UnixMilli(),
-			Data: &event.PTPData{
+			Data: &event.OffsetData{
 				State:  state,
-				Values: map[event.ValueType]interface{}{event.OFFSET: int64(ptpMetrics.Offset)},
+				Offset: int64(ptpMetrics.Offset),
 			},
 		}:
 		default:
@@ -220,6 +213,9 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 		UpdateInterfaceRoleMetrics(process.name, interfaceName, role)
 		if configName == "" {
 			return
+		}
+		if process.dn != nil && process.dn.processManager != nil && process.dn.processManager.clockMgr != nil {
+			process.dn.processManager.clockMgr.SetPortRole(configName, interfaceName, ptpEvent)
 		}
 
 		// Handle role-specific logic
