@@ -18,14 +18,10 @@ import (
 
 // GM is a Grand Master clock instance.
 type GM struct {
-	cfgName                string
-	sendIPC                func(ipc.Message)
+	BaseClock
 	getUtcOffset           func() int
 	pmcClient              pmc.Client
-	data                   []*event.Data
 	syncState              SyncState
-	overallSyncState       event.PTPState
-	osClockState           event.PTPState
 	gnssState              event.PTPState
 	announcedClockClass    fbprotocol.ClockClass
 	announcedClockAccuracy fbprotocol.ClockAccuracy
@@ -39,13 +35,13 @@ func (c *GM) ClockType() event.ClockType { return event.GM }
 func (c *GM) ClockClass() fbprotocol.ClockClass { return c.syncState.ClockClass }
 
 // ConfigName returns the configuration name.
-func (c *GM) ConfigName() string { return c.cfgName }
 
 // Reset resets the clock state.
 func (c *GM) Reset() {
+	c.BaseClock.Reset()
+
 	c.syncState = SyncState{}
 	c.overallSyncState = event.PTP_FREERUN
-	c.osClockState = event.PTP_NOTSET
 	c.gnssState = event.PTP_NOTSET
 	c.announcedClockClass = 0
 	c.announcedClockAccuracy = 0
@@ -59,19 +55,17 @@ func (c *GM) AddEvent(ev event.Event) SyncState {
 		return c.syncState
 	}
 
-	d := c.getData(ev.Source)
+	d := c.GetData(ev.Source)
 	d.AddEvent(ev)
 	d.UpdateState()
 	clockState := c.updateState()
-	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState.State, c.osClockState, c.cfgName)
+	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState.State, c.osClock.State, c.cfgName)
 	c.announceClockClassIfChanged(ev, clockState)
 
 	// Zero NMEA status when GM is not locked
 	if clockState.State != event.PTP_LOCKED {
-		if ptp, isPTP := ev.Data.(*event.PTPData); isPTP {
-			if _, hasNMEA := ptp.Values[event.NMEA_STATUS]; hasNMEA {
-				ptp.Values[event.NMEA_STATUS] = 0
-			}
+		if od, ok := ev.Data.(*event.OffsetData); ok && od.NMEAStatus != nil {
+			od.NMEAStatus = event.Int64Ptr(0)
 		}
 	}
 
@@ -81,13 +75,16 @@ func (c *GM) AddEvent(ev event.Event) SyncState {
 		switch data := ev.Data.(type) {
 		case *event.GNSSData:
 			debug.UpdateGNSSState(string(dataDetails.State), data.Offset)
-		case *event.PTPData:
-			switch ev.Source {
-			case event.DPLL:
-				debug.UpdateDPLLState(string(data.State), data.Values[event.OFFSET], ev.IFace)
-				debug.UpdateDPLLState(string(dataDetails.State), 0, debug.OverallDpllKey)
-			case event.TS2PHC:
-				debug.UpdateTs2phcState(string(data.State), data.Values[event.OFFSET], ev.IFace)
+		case *event.DPLLData:
+			var offset interface{}
+			if data.Offset != nil {
+				offset = *data.Offset
+			}
+			debug.UpdateDPLLState(string(data.State), offset, ev.IFace)
+			debug.UpdateDPLLState(string(dataDetails.State), 0, debug.OverallDpllKey)
+		case *event.OffsetData:
+			if ev.Source == event.TS2PHC {
+				debug.UpdateTs2phcState(string(data.State), data.Offset, ev.IFace)
 				debug.UpdateTs2phcState(string(dataDetails.State), 0, debug.OverallTs2phcKey)
 			}
 		}
@@ -97,29 +94,16 @@ func (c *GM) AddEvent(ev event.Event) SyncState {
 	return clockState
 }
 
-func (c *GM) getData(processName event.EventSource) *event.Data {
-	for _, d := range c.data {
-		if d.ProcessName == processName {
-			return d
-		}
-	}
-	d := &event.Data{ProcessName: processName, State: event.PTP_UNKNOWN, Window: *utils.NewWindow(event.WindowSize)}
-	c.data = append(c.data, d)
-	return d
-}
-
 func (c *GM) announceClockClassIfChanged(ev event.Event, clockState SyncState) {
 	if clockState.ClockClass == protocol.ClockClassUninitialized {
 		return
 	}
 
 	clockAccuracy := c.announcedClockAccuracy
-	if ptp, isPTP := ev.Data.(*event.PTPData); isPTP && ev.Source == event.DPLL {
+	if dpll, ok := ev.Data.(*event.DPLLData); ok && ev.Source == event.DPLL {
 		if clockState.ClockClass == fbprotocol.ClockClass7 || clockState.ClockClass == protocol.ClockClassOutOfSpec {
-			if offset, found := ptp.Values[event.OFFSET]; found {
-				if offsetValue, isInt64 := offset.(int64); isInt64 {
-					clockAccuracy = fbprotocol.ClockAccuracyFromOffset(time.Duration(offsetValue) * time.Nanosecond)
-				}
+			if dpll.Offset != nil {
+				clockAccuracy = fbprotocol.ClockAccuracyFromOffset(time.Duration(*dpll.Offset) * time.Nanosecond)
 			}
 		}
 	}
@@ -195,9 +179,8 @@ func (c *GM) hasNonLeadingDPLLFault(leadingInterface string) bool {
 }
 
 // SystemClockUpdate updates the OS clock state.
-func (c *GM) SystemClockUpdate(osClockState event.PTPState) {
-	c.osClockState = osClockState
-	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState.State, c.osClockState, c.cfgName)
+func (c *GM) SystemClockUpdate() {
+	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState.State, c.osClock.State, c.cfgName)
 }
 
 func (c *GM) updateClockClass(clockClass fbprotocol.ClockClass) {
@@ -352,7 +335,7 @@ func (c *GM) updateState() SyncState {
 	leadingInterface := c.getLeadingInterface()
 	glog.Infof("GM updateState: leadingInterface=%s, data entries=%d", leadingInterface, len(c.data))
 	for _, d := range c.data {
-		glog.Infof("  Data: process=%s state=%s details=%d", d.ProcessName, d.State, len(d.Details))
+		glog.Infof("  %s", d.Summary())
 	}
 	if leadingInterface == event.LEADING_INTERFACE_UNKNOWN {
 		glog.Infof("Leading interface is not yet identified, clock state reporting delayed.")
@@ -522,7 +505,7 @@ func (c *GM) updateState() SyncState {
 	if c.syncState.LastLoggedTime != logTime {
 		c.syncState.LastLoggedTime = logTime
 		glog.Info(c.status())
-		glog.Infof("dpll State %s, gnss State %s, tsphc state %s, gm state %s,", dpllState, gnssState, ts2phcState, c.syncState.State)
+		glog.Infof("dpll State %s, gnss State %s, ts2phc state %s, gm state %s,", dpllState, gnssState, ts2phcState, c.syncState.State)
 	}
 	return result
 }

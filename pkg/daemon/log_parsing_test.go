@@ -11,6 +11,10 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 )
 
+const (
+	ttestPtp4l1ConfigLog = "ptp4l.1.config"
+)
+
 // TestReplayDualUpstreamLog replays the actual ptp4l log sequence from OCPBUGS-111881
 // and verifies openshift_ptp_interface_role metrics after each phase.
 //
@@ -31,15 +35,17 @@ func TestReplayDualUpstreamLog(t *testing.T) {
 	InitializeOffsetMaps()
 
 	process := &ptpProcess{
-		name:       ptp4lProcessName,
-		configName: "ptp4l.1.config",
-		messageTag: "[ptp4l.1.config]",
+		ExecProcess: ExecProcess{
+			name:       ptp4lProcessName,
+			configName: ttestPtp4l1ConfigLog,
+			messageTag: "[ptp4l.1.config]",
+			eventCh:    make(chan event.Event, 10),
+		},
 		ifaces: config.IFaces{
 			{Name: "eno8303"},
 			{Name: "eno8403"},
 		},
 		logParser: parser.NewPTP4LExtractor(),
-		eventCh:   make(chan event.Event, 10),
 	}
 
 	// --- Phase 1: Initial boot ---
