@@ -2060,11 +2060,11 @@ func (p *ptpProcess) ProcessTs2PhcEvents(ptpOffset float64, source string, iface
 		}
 		switch ptpState {
 		case event.PTP_LOCKED:
-			updateClockStateMetrics(p.name, iface, LOCKED)
+			updateClockStateMetrics(p.name, iface, LOCKED, "")
 		case event.PTP_FREERUN:
-			updateClockStateMetrics(p.name, iface, FREERUN)
+			updateClockStateMetrics(p.name, iface, FREERUN, "")
 		case event.PTP_HOLDOVER:
-			updateClockStateMetrics(p.name, iface, HOLDOVER)
+			updateClockStateMetrics(p.name, iface, HOLDOVER, "")
 		}
 	}
 }

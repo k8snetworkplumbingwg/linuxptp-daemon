@@ -94,7 +94,7 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 
 	// Update clock state metrics if available
 	if ptpMetrics.ClockState != "" {
-		updateClockStateMetrics(process.name, iface, string(ptpMetrics.ClockState))
+		updateClockStateMetrics(process.name, iface, string(ptpMetrics.ClockState), ptpMetrics.ServoState)
 	}
 
 	configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
@@ -234,7 +234,7 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 				// Set fault metrics and clear slave & master offset interfaces
 				updatePTPMetrics(master, process.name, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
 				updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
-				updateClockStateMetrics(process.name, masterOffsetIface.get(configName).alias, FREERUN)
+				updateClockStateMetrics(process.name, masterOffsetIface.get(configName).alias, FREERUN, "")
 				masterOffsetIface.set(configName, "")
 				slaveIface.set(configName, "")
 			}

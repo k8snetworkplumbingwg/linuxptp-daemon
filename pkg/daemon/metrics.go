@@ -298,7 +298,7 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 				masterOffsetSource.set(configName, processName)
 			}
 			updatePTPMetrics(offsetSource, processName, ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay)
-			updateClockStateMetrics(processName, ifaceName, clockstate)
+			updateClockStateMetrics(processName, ifaceName, clockstate, "")
 		}
 		source = processName
 		offset = ptpOffset
@@ -317,7 +317,7 @@ func extractMetrics(messageTag string, processName string, ifaces config.IFaces,
 						masterOffsetSource.get(configName) == ptp4lProcessName {
 						updatePTPMetrics(master, processName, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
 						updatePTPMetrics(phc, phc2sysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
-						updateClockStateMetrics(processName, masterOffsetIface.get(configName).alias, FREERUN)
+						updateClockStateMetrics(processName, masterOffsetIface.get(configName).alias, FREERUN, "")
 						masterOffsetIface.set(configName, "")
 						slaveIface.set(configName, "")
 						state = HOLDOVER
@@ -523,11 +523,11 @@ func extractRegularMetrics(configName, processName, output string, ifaces config
 }
 
 // updateClockStateMetrics ...
-func updateClockStateMetrics(process, iface string, state string) {
+func updateClockStateMetrics(process, iface, state, servoState string) {
 	if !utils.CheckMetricSanity("ClockState", process, iface) {
 		return
 	}
-	glog.V(14).Infof("updateClockStateMetrics: process=%s iface=%s state=%s", process, iface, state)
+	glog.V(14).Infof("updateClockStateMetrics: process=%s iface=%s state=%s servo=%s", process, iface, state, servoState)
 	labels := prometheus.Labels{"process": process, "node": NodeName, "iface": iface}
 	switch state {
 	case LOCKED:

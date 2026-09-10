@@ -2515,7 +2515,7 @@ func TestUpdateClockStateMetrics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.state, func(t *testing.T) {
-			updateClockStateMetrics(ptp4lProcessName, testDUTLeadingIface, tt.state)
+			updateClockStateMetrics(ptp4lProcessName, testDUTLeadingIface, tt.state, "")
 			gauge, err := ClockState.GetMetricWith(prometheus.Labels{
 				labelProcess: ptp4lProcessName, labelNode: NodeName, labelIface: testDUTLeadingIface,
 			})
