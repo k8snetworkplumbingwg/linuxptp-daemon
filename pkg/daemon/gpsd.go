@@ -130,7 +130,7 @@ func (g *GPSD) CmdInit() {
 		g.name = GPSD_PROCESSNAME
 	}
 	g.monitorCtx, g.monitorCancel = context.WithCancel(context.Background())
-	g.cmdLine = fmt.Sprintf("/usr/local/sbin/%s -p -n -S 2947 -G -N %s", g.Name(), g.SerialPort())
+	g.cmdLine = fmt.Sprintf("/usr/local/sbin/%s -p -n -S 2947 -N %s", g.Name(), g.SerialPort())
 	if g.cmdRunner == nil {
 		g.cmdRunner = exec.CommandContext
 	}
