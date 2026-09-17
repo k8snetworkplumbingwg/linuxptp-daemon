@@ -14,11 +14,13 @@ import (
 type Clock interface {
 	AddEvent(ev event.Event) SyncState
 	GetState() event.PTPState
-	SystemClockUpdate(state event.PTPState)
+	SystemClockUpdate()
 	Reset()
 	ConfigName() string
 	ClockType() event.ClockType
 	ClockClass() fbprotocol.ClockClass
+	GetData(processName event.EventSource) *event.Data
+	ProcessData() []*event.Data
 }
 
 // SyncState holds the composite synchronization state of a clock.
@@ -33,16 +35,24 @@ type SyncState struct {
 	ClockOffset    int64
 }
 
+func newBaseClock(cfgName string, sendIPC func(ipc.Message), osClock *OsClock) BaseClock {
+	return BaseClock{
+		cfgName:          cfgName,
+		sendIPC:          sendIPC,
+		overallSyncState: event.PTP_NOTSET,
+		osClock:          osClock,
+	}
+}
+
 // NewClock creates the appropriate Clock implementation for the given clock type.
-func NewClock(cfgName string, clockType event.ClockType, sendIPC func(ipc.Message), sendEvent func(event.Event), getUtcOffset func() int, pmcClient pmc.Client) (Clock, error) {
+func NewClock(cfgName string, clockType event.ClockType, sendIPC func(ipc.Message), sendEvent func(event.Event), getUtcOffset func() int, pmcClient pmc.Client, osClock *OsClock) (Clock, error) {
 	switch clockType {
 	case event.GM:
 		if pmcClient == nil {
 			return nil, fmt.Errorf("pmc.Client is required for clock type %s (config %s)", clockType, cfgName)
 		}
 		return &GM{
-			cfgName:      cfgName,
-			sendIPC:      sendIPC,
+			BaseClock:    newBaseClock(cfgName, sendIPC, osClock),
 			getUtcOffset: getUtcOffset,
 			pmcClient:    pmcClient,
 			syncState: SyncState{
@@ -50,8 +60,6 @@ func NewClock(cfgName string, clockType event.ClockType, sendIPC func(ipc.Messag
 				ClockClass:    protocol.ClockClassUninitialized,
 				ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
 			},
-			overallSyncState:       event.PTP_NOTSET,
-			osClockState:           event.PTP_NOTSET,
 			gnssState:              event.PTP_NOTSET,
 			announcedClockClass:    protocol.ClockClassUninitialized,
 			announcedClockAccuracy: fbprotocol.ClockAccuracyUnknown,
@@ -61,8 +69,7 @@ func NewClock(cfgName string, clockType event.ClockType, sendIPC func(ipc.Messag
 			return nil, fmt.Errorf("pmc.Client is required for clock type %s (config %s)", clockType, cfgName)
 		}
 		return &TBC{
-			cfgName:      cfgName,
-			sendIPC:      sendIPC,
+			BaseClock:    newBaseClock(cfgName, sendIPC, osClock),
 			sendEvent:    sendEvent,
 			getUtcOffset: getUtcOffset,
 			pmcClient:    pmcClient,
@@ -71,8 +78,6 @@ func NewClock(cfgName string, clockType event.ClockType, sendIPC func(ipc.Messag
 				ClockClass:    protocol.ClockClassUninitialized,
 				ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
 			},
-			overallSyncState: event.PTP_NOTSET,
-			osClockState:     event.PTP_NOTSET,
 			leadingClockData: newLeadingClockParams(),
 			announceToken:    nextAnnounceToken(),
 		}, nil
@@ -80,12 +85,9 @@ func NewClock(cfgName string, clockType event.ClockType, sendIPC func(ipc.Messag
 		// OC (single slave port) and BC share the same state machine; the
 		// clockType is preserved so metrics and events report the correct role.
 		return &BCClock{
-			cfgName:          cfgName,
-			clockType:        clockType,
-			sendIPC:          sendIPC,
-			syncState:        event.PTP_NOTSET,
-			overallSyncState: event.PTP_NOTSET,
-			osClockState:     event.PTP_NOTSET,
+			BaseClock: newBaseClock(cfgName, sendIPC, osClock),
+			clockType: clockType,
+			syncState: event.PTP_NOTSET,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported clock type %q for config %s", clockType, cfgName)
