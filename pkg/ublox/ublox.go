@@ -115,15 +115,6 @@ func defaultUblxCmds() CommandList {
 	return cmds
 }
 
-// PollResult is retained as a compatibility type for batch consumers. New
-// consumers should subscribe to Message values instead.
-type PollResult struct {
-	GPSStatus int64
-	Offset    int64
-	TimeLs    *TimeLs
-	HasGNSS   bool
-}
-
 // UBlox ... UBlox type
 type UBlox struct {
 	status       int

@@ -47,8 +47,8 @@ type GPSD struct {
 	stopped              bool
 	noFixStateOccurrence int // number of times no fix state has occurred
 	offset               int64
-	gpsStatus            int64
-	gpsStatusValid       bool
+	lastNavStatus        *ublox.NavStatus
+	lastNavClock         *ublox.NavClock
 	processConfig        config.ProcessConfig
 	gmInterface          string
 	messageTag           string
@@ -234,8 +234,8 @@ func (g *GPSD) MonitorGNSSEventsWithUblox() {
 		if results := ublx.InitResults(); len(results) > 0 && g.gnssResultsFn != nil {
 			g.gnssResultsFn(results)
 		}
-		g.gpsStatus = 0
-		g.gpsStatusValid = false
+		g.lastNavStatus = nil
+		g.lastNavClock = nil
 		subscription := ublx.Subscribe(g.monitorCtx,
 			ublox.NavClockType,
 			ublox.NavStatusType,
@@ -252,7 +252,8 @@ func (g *GPSD) MonitorGNSSEventsWithUblox() {
 				} else {
 					missedTickers++
 					if missedTickers > 3 {
-						g.gpsStatusValid = false
+						g.lastNavStatus = nil
+						g.lastNavClock = nil
 						ublx.UbloxPollReset()
 						missedTickers = 0
 					}
@@ -273,59 +274,75 @@ func (g *GPSD) MonitorGNSSEventsWithUblox() {
 	}
 }
 
-// processGNSSMessage applies one typed ublox message. NAV-CLOCK completes a
-// GNSS sample using the most recent NAV-STATUS message.
+// processGNSSMessage applies one typed ublox message. NAV-STATUS and
+// NAV-CLOCK messages are retained until their iTOW values can be correlated.
 func (g *GPSD) processGNSSMessage(message ublox.Message) bool {
 	switch payload := message.Payload.(type) {
 	case ublox.NavStatus:
-		g.gpsStatus = payload.GPSFix
-		g.gpsStatusValid = true
+		g.lastNavStatus = &payload
+		return g.checkForiTOWCorrelation()
 	case ublox.NavClock:
-		if !g.gpsStatusValid {
-			return false
-		}
-		g.processGNSSResult(ublox.PollResult{
-			GPSStatus: g.gpsStatus,
-			Offset:    payload.Offset,
-			HasGNSS:   true,
-		})
-		return true
+		g.lastNavClock = &payload
+		return g.checkForiTOWCorrelation()
 	case ublox.TimeLs:
-		g.processGNSSResult(ublox.PollResult{TimeLs: &payload})
+		processTimeLs(payload)
+		return false
+	default:
+		return false
 	}
-	return false
 }
 
-// processGNSSResult applies parsed ublox data to daemon state and emits the
-// corresponding GNSS and leap-second events.
-func (g *GPSD) processGNSSResult(result ublox.PollResult) {
-	if result.HasGNSS {
-		g.offset = result.Offset
-		g.sourceLost = result.GPSStatus < 3 || !g.isOffsetInRange()
-		if g.processConfig.EventChannel != nil {
-			select {
-			case g.processConfig.EventChannel <- event.Event{
-				Source:     event.GNSS,
-				CfgName:    g.processConfig.ConfigName,
-				IFace:      g.gmInterface,
-				ClockType:  g.processConfig.ClockType,
-				Time:       time.Now().UnixMilli(),
-				WriteToLog: true,
-				Reset:      false,
-				Data:       &event.GNSSData{GPSStatus: result.GPSStatus, Offset: g.offset, SourceLost: g.sourceLost},
-			}:
-			default:
-				glog.Error("failed to send gnss event to eventHandler")
-			}
-		}
-	}
-	if result.TimeLs != nil && leap.LeapMgr != nil {
+// processTimeLs sends the timls message up to the LeapMgr if it's ready
+func processTimeLs(timels ublox.TimeLs) {
+	if leap.LeapMgr != nil {
 		select {
-		case leap.LeapMgr.UbloxLsInd <- *result.TimeLs:
+		case leap.LeapMgr.UbloxLsInd <- timels:
 		case <-time.After(100 * time.Millisecond):
 			glog.Infof("failed to send leap event updates")
 		}
 	}
+}
+
+// checkForiTOWCorrelation sends sync/offset messages only when we have a match
+// pair of NavClock and NavStatus messages.
+func (g *GPSD) checkForiTOWCorrelation() bool {
+	// Wait for one NavStatus and one NavClock with matching iTOW
+	if g.lastNavStatus == nil || g.lastNavClock == nil ||
+		g.lastNavStatus.ITOW != g.lastNavClock.ITOW {
+		return false
+	}
+
+	// Consume both messages after correlation so neither can be reused by a
+	// later message with a different iTOW.
+	clock := g.lastNavClock
+	status := g.lastNavStatus
+	g.lastNavStatus = nil
+	g.lastNavClock = nil
+
+	// Process the offset and GPSFixes from the correlated set
+	g.offset = clock.Offset
+	g.sourceLost = status.GPSFix < 3 || !g.isOffsetInRange()
+	if g.processConfig.EventChannel != nil {
+		select {
+		case g.processConfig.EventChannel <- event.Event{
+			Source:     event.GNSS,
+			CfgName:    g.processConfig.ConfigName,
+			IFace:      g.gmInterface,
+			ClockType:  g.processConfig.ClockType,
+			Time:       time.Now().UnixMilli(),
+			WriteToLog: true,
+			Reset:      false,
+			Data: &event.GNSSData{
+				GPSStatus:  status.GPSFix,
+				Offset:     g.offset,
+				SourceLost: g.sourceLost,
+			},
+		}:
+		default:
+			glog.Error("failed to send gnss event to eventHandler")
+		}
+	}
+	return true
 }
 
 // isOffsetInRange returns true when abs(offset) < GMThreshold.Max

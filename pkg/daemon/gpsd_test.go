@@ -121,10 +121,46 @@ func TestResetSerialPortPassesCorrectArgs(t *testing.T) {
 	assert.Equal(t, []string{"-F", device, "sane"}, capturedArgs)
 }
 
-func TestProcessGNSSMessageRequiresStatus(t *testing.T) {
+func TestProcessGNSSMessageCorrelatesLatestStatusAndClock(t *testing.T) {
 	eventCh := make(chan event.Event, 1)
 	g := &GPSD{
-		gpsStatus: 3,
+		processConfig: config.ProcessConfig{
+			EventChannel: eventCh,
+			GMThreshold:  config.Threshold{Max: 100},
+		},
+	}
+
+	// Keep an unmatched clock until a status with the same iTOW arrives.
+	assert.False(t, g.processGNSSMessage(ublox.Message{
+		Type:    ublox.NavClockType,
+		Payload: ublox.NavClock{Offset: 10, ITOW: 100},
+	}))
+	assert.Empty(t, eventCh)
+
+	// A newer status replaces the previous correlation candidate.
+	assert.False(t, g.processGNSSMessage(ublox.Message{
+		Type:    ublox.NavStatusType,
+		Payload: ublox.NavStatus{GPSFix: 3, ITOW: 101},
+	}))
+	assert.Empty(t, eventCh)
+
+	assert.True(t, g.processGNSSMessage(ublox.Message{
+		Type:    ublox.NavClockType,
+		Payload: ublox.NavClock{Offset: 10, ITOW: 101},
+	}))
+	assert.Nil(t, g.lastNavStatus)
+	assert.Nil(t, g.lastNavClock)
+	assert.Len(t, eventCh, 1)
+	eventValue := <-eventCh
+	gnssData, ok := eventValue.Data.(*event.GNSSData)
+	require.True(t, ok)
+	assert.Equal(t, int64(3), gnssData.GPSStatus)
+	assert.Equal(t, int64(10), gnssData.Offset)
+}
+
+func TestProcessGNSSMessageCorrelatesClockBeforeStatus(t *testing.T) {
+	eventCh := make(chan event.Event, 1)
+	g := &GPSD{
 		processConfig: config.ProcessConfig{
 			EventChannel: eventCh,
 			GMThreshold:  config.Threshold{Max: 100},
@@ -133,25 +169,54 @@ func TestProcessGNSSMessageRequiresStatus(t *testing.T) {
 
 	assert.False(t, g.processGNSSMessage(ublox.Message{
 		Type:    ublox.NavClockType,
-		Payload: ublox.NavClock{Offset: 10},
+		Payload: ublox.NavClock{Offset: 10, ITOW: 100},
 	}))
-	assert.False(t, g.gpsStatusValid)
+	assert.NotNil(t, g.lastNavClock)
 	assert.Empty(t, eventCh)
 
-	assert.False(t, g.processGNSSMessage(ublox.Message{
-		Type:    ublox.NavStatusType,
-		Payload: ublox.NavStatus{GPSFix: 3},
-	}))
-	assert.True(t, g.gpsStatusValid)
-
 	assert.True(t, g.processGNSSMessage(ublox.Message{
-		Type:    ublox.NavClockType,
-		Payload: ublox.NavClock{Offset: 10},
+		Type:    ublox.NavStatusType,
+		Payload: ublox.NavStatus{GPSFix: 3, ITOW: 100},
 	}))
-	assert.Len(t, eventCh, 1)
+	assert.Nil(t, g.lastNavStatus)
+	assert.Nil(t, g.lastNavClock)
+
 	eventValue := <-eventCh
 	gnssData, ok := eventValue.Data.(*event.GNSSData)
 	require.True(t, ok)
 	assert.Equal(t, int64(3), gnssData.GPSStatus)
 	assert.Equal(t, int64(10), gnssData.Offset)
+}
+
+func TestProcessGNSSMessageRejectsClockWithoutMatchingStatus(t *testing.T) {
+	eventCh := make(chan event.Event, 1)
+	g := &GPSD{
+		processConfig: config.ProcessConfig{
+			EventChannel: eventCh,
+			GMThreshold:  config.Threshold{Max: 100},
+		},
+	}
+
+	assert.False(t, g.processGNSSMessage(ublox.Message{
+		Type:    ublox.NavStatusType,
+		Payload: ublox.NavStatus{GPSFix: 3, ITOW: 100},
+	}))
+	assert.NotNil(t, g.lastNavStatus)
+
+	assert.True(t, g.processGNSSMessage(ublox.Message{
+		Type:    ublox.NavClockType,
+		Payload: ublox.NavClock{Offset: 10, ITOW: 100},
+	}))
+	assert.Nil(t, g.lastNavStatus)
+	assert.Nil(t, g.lastNavClock)
+	assert.Len(t, eventCh, 1)
+	<-eventCh
+
+	// The status for iTOW 100 has already been consumed, so a later clock
+	// cannot reuse its GPSFix value without a new matching status.
+	assert.False(t, g.processGNSSMessage(ublox.Message{
+		Type:    ublox.NavClockType,
+		Payload: ublox.NavClock{Offset: 20, ITOW: 101},
+	}))
+	assert.Empty(t, eventCh)
 }
