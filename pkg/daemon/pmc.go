@@ -19,10 +19,15 @@ const (
 	// PMCProcessName is the name identifier for PMC processes
 	PMCProcessName = "pmc"
 	pollTimeout    = 5 * time.Minute
+	// defaultMonitorPollInterval bounds how long the monitor loop will block
+	// waiting for a NOTIFY_PARENT_DATA_SET push before it re-polls the parent
+	// data set on its own. It is a fallback for callers (e.g. tests) that do not
+	// supply an interval.
+	defaultMonitorPollInterval = 30 * time.Second
 )
 
 // NewPMCProcess creates a new PMC process instance for monitoring PTP events.
-func NewPMCProcess(runID int, eventCh chan<- event.Event, clockType string) *PMCProcess {
+func NewPMCProcess(runID int, eventCh chan<- event.Event, clockType string, pollInterval time.Duration) *PMCProcess {
 	return &PMCProcess{
 		configFileName:    fmt.Sprintf("ptp4l.%d.config", runID),
 		messageTag:        fmt.Sprintf("[ptp4l.%d.config:{level}]", runID),
@@ -30,6 +35,7 @@ func NewPMCProcess(runID int, eventCh chan<- event.Event, clockType string) *PMC
 		parentDSCh:        make(chan protocol.ParentDataSet, 10),
 		eventCh:           eventCh,
 		clockType:         clockType,
+		pollInterval:      pollInterval,
 		getMonitorFn:      pmcPkg.GetPMCMontior,
 	}
 }
@@ -47,8 +53,13 @@ type PMCProcess struct {
 	parentDSCh        chan protocol.ParentDataSet
 	exitCh            chan struct{}
 	clockType         string
-	messageTag        string
-	eventCh           chan<- event.Event
+	// pollInterval bounds how long expectWorker blocks on Expect before it
+	// re-polls the parent data set. This guarantees the clock class metric
+	// recovers within one interval even if a NOTIFY_PARENT_DATA_SET push is
+	// never delivered (observed on netdevsim after a link outage recovers).
+	pollInterval time.Duration
+	messageTag   string
+	eventCh      chan<- event.Event
 
 	getMonitorFn func(string) (*expect.GExpect, <-chan error, error)
 }
@@ -200,6 +211,16 @@ func (pmc *PMCProcess) monitor() error {
 }
 
 func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- protocol.ParentDataSet, signalCh chan<- workerSignal, doneCh <-chan struct{}) {
+	// Bound the Expect wait so the loop re-polls every pollInterval even when no
+	// NOTIFY_PARENT_DATA_SET push arrives. Without this the loop blocks for the
+	// spawn timeout (~10m), so a parent-data-set change that is not pushed (e.g.
+	// clock class returning to 6 after a link outage on netdevsim) is not seen
+	// until that timeout expires — long enough to fail recovery tests.
+	pollInterval := pmc.pollInterval
+	if pollInterval <= 0 {
+		pollInterval = defaultMonitorPollInterval
+	}
+
 	for {
 		select {
 		case <-pmc.exitCh:
@@ -210,7 +231,7 @@ func (pmc *PMCProcess) expectWorker(exp *expect.GExpect, parentDSCh chan<- proto
 		}
 
 		go pmc.Poll() // Check if anything changed while handling the last message
-		_, matches, expectErr := exp.Expect(pmcPkg.GetMonitorRegex(pmc.monitorParentData), -1)
+		_, matches, expectErr := exp.Expect(pmcPkg.GetMonitorRegex(pmc.monitorParentData), pollInterval)
 
 		if expectErr != nil {
 			if _, ok := expectErr.(expect.TimeoutError); ok {
