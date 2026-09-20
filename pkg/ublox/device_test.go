@@ -111,6 +111,41 @@ func TestNormalizeUSBID(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestGNSSDeviceFromEthernetDevice(t *testing.T) {
+	t.Run("selects GNSS device by PCI slot", func(t *testing.T) {
+		restore := setupReadDirMock(
+			map[string][]os.DirEntry{
+				"/sys/bus/pci/devices/0000:86:00.0/net": {mockDirEntry{name: "eno8703"}},
+				"/sys/class/net/eno8703/device/gnss":    {mockDirEntry{name: "gnss0"}},
+			}, nil,
+		)
+		defer restore()
+
+		device, err := GNSSDeviceFromEthernetDevice("", "86:00.0", "", "")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/gnss0", device)
+	})
+
+	t.Run("selects GNSS device by interface name", func(t *testing.T) {
+		restore := setupReadDirMock(
+			map[string][]os.DirEntry{
+				"/sys/class/net/eno8703/device/gnss": {mockDirEntry{name: "gnss0"}},
+			}, nil,
+		)
+		defer restore()
+
+		device, err := GNSSDeviceFromEthernetDevice("eno8703", "", "", "")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/gnss0", device)
+	})
+
+	t.Run("rejects invalid selection criteria", func(t *testing.T) {
+		_, err := GNSSDeviceFromEthernetDevice("", "", "not-hex", "")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid PCI vendor ID")
+	})
+}
+
 func TestGNSSDeviceFromUSB(t *testing.T) {
 	t.Run("finds tty by vendor and product", func(t *testing.T) {
 		ttyClassPath := makeUSBTTYFixture(t, "ttyACM0")

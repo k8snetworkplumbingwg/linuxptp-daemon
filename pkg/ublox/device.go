@@ -18,6 +18,12 @@ const (
 
 	// ttyClassSysfsPath contains the sysfs class entries for tty devices.
 	ttyClassSysfsPath = "/sys/class/tty"
+
+	// netClassSysfsPath contains the sysfs class entries for network devices.
+	netClassSysfsPath = "/sys/class/net"
+
+	// pciNetSysfsTemplate locates network interfaces belonging to a PCI device.
+	pciNetSysfsTemplate = "/sys/bus/pci/devices/%s/net"
 )
 
 // ReadDir is the function used to read sysfs directories.
@@ -47,6 +53,133 @@ func GNSSDeviceFromInterface(iface string) (string, error) {
 	result := fmt.Sprintf("/dev/%s", entries[0].Name())
 	glog.Infof("Detected GNSS device %s", result)
 	return result, nil
+}
+
+// GNSSDeviceFromEthernetDevice resolves a GNSS device attached to an Ethernet
+// device. When name is provided, it is used directly. Otherwise, PCI slot,
+// vendor, and device ID are used to discover the interface through sysfs.
+// All matching criteria other than name are applied together, and the result
+// must identify exactly one GNSS device.
+func GNSSDeviceFromEthernetDevice(name, pciSlot, vendor, deviceID string) (string, error) {
+	if name != "" {
+		return GNSSDeviceFromInterface(name)
+	}
+
+	if pciSlot == "" && vendor == "" && deviceID == "" {
+		return "", fmt.Errorf("EthernetDevice has no selection criteria")
+	}
+
+	if vendor != "" {
+		rawVendor := vendor
+		var err error
+		vendor, err = normalizePCIID(vendor)
+		if err != nil {
+			return "", fmt.Errorf("invalid PCI vendor ID %q: %w", rawVendor, err)
+		}
+	}
+	if deviceID != "" {
+		rawDeviceID := deviceID
+		var err error
+		deviceID, err = normalizePCIID(deviceID)
+		if err != nil {
+			return "", fmt.Errorf("invalid PCI device ID %q: %w", rawDeviceID, err)
+		}
+	}
+
+	var interfaces []string
+	var err error
+	if pciSlot != "" {
+		pciSlot, err = normalizePCISlot(pciSlot)
+		if err != nil {
+			return "", err
+		}
+	}
+	switch {
+	case pciSlot != "":
+		interfaces, err = ethernetInterfacesFromPCISlot(pciSlot, vendor, deviceID)
+	default:
+		interfaces, err = ethernetInterfacesFromPCIIDs(vendor, deviceID)
+	}
+	if err != nil {
+		return "", err
+	}
+	return gnssDeviceFromInterfaces(interfaces, "EthernetDevice")
+}
+
+func ethernetInterfacesFromPCISlot(pciSlot, vendor, deviceID string) ([]string, error) {
+	if filepath.Base(pciSlot) != pciSlot || pciSlot == "." || pciSlot == ".." {
+		return nil, fmt.Errorf("invalid PCI slot %q", pciSlot)
+	}
+
+	netDir := fmt.Sprintf(pciNetSysfsTemplate, pciSlot)
+	entries, err := ReadDir(netDir)
+	if err != nil {
+		return nil, fmt.Errorf("no Ethernet device found for PCI slot %s: %w", pciSlot, err)
+	}
+
+	interfaces := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if vendor == "" && deviceID == "" || pciInterfaceMatches(entry.Name(), vendor, deviceID) {
+			interfaces = append(interfaces, entry.Name())
+		}
+	}
+	return interfaces, nil
+}
+
+func ethernetInterfacesFromPCIIDs(vendor, deviceID string) ([]string, error) {
+	entries, err := ReadDir(netClassSysfsPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot enumerate Ethernet devices: %w", err)
+	}
+
+	interfaces := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if pciInterfaceMatches(entry.Name(), vendor, deviceID) {
+			interfaces = append(interfaces, entry.Name())
+		}
+	}
+	return interfaces, nil
+}
+
+func pciInterfaceMatches(iface, vendor, deviceID string) bool {
+	devicePath, err := filepath.EvalSymlinks(filepath.Join(netClassSysfsPath, iface, "device"))
+	if err != nil {
+		return false
+	}
+
+	if vendor != "" {
+		actual, err := os.ReadFile(filepath.Join(devicePath, "vendor"))
+		if err != nil || !strings.EqualFold(strings.TrimSpace(string(actual)), "0x"+vendor) {
+			return false
+		}
+	}
+	if deviceID != "" {
+		actual, err := os.ReadFile(filepath.Join(devicePath, "device"))
+		if err != nil || !strings.EqualFold(strings.TrimSpace(string(actual)), "0x"+deviceID) {
+			return false
+		}
+	}
+	return true
+}
+
+func gnssDeviceFromInterfaces(interfaces []string, selector string) (string, error) {
+	sort.Strings(interfaces)
+	var candidates []string
+	for _, iface := range interfaces {
+		device, err := GNSSDeviceFromInterface(iface)
+		if err == nil {
+			candidates = append(candidates, device)
+		}
+	}
+
+	switch len(candidates) {
+	case 0:
+		return "", fmt.Errorf("no GNSS device found for %s", selector)
+	case 1:
+		return candidates[0], nil
+	default:
+		return "", fmt.Errorf("multiple GNSS devices found for %s: %s", selector, strings.Join(candidates, ", "))
+	}
 }
 
 // GNSSDeviceFromUSB resolves the tty device exposed by a USB device with the
@@ -120,6 +253,21 @@ func usbDeviceMatches(devicePath, vendor, product string) bool {
 }
 
 func normalizeUSBID(id string) (string, error) {
+	return normalizePCIID(id)
+}
+
+func normalizePCISlot(slot string) (string, error) {
+	slot = strings.TrimSpace(slot)
+	if filepath.Base(slot) != slot || slot == "." || slot == ".." {
+		return "", fmt.Errorf("invalid PCI slot %q", slot)
+	}
+	if strings.Count(slot, ":") == 1 {
+		slot = "0000:" + slot
+	}
+	return slot, nil
+}
+
+func normalizePCIID(id string) (string, error) {
 	id = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(id), "0x"))
 	if id == "" || len(id) > 4 {
 		return "", fmt.Errorf("must be one to four hexadecimal digits")

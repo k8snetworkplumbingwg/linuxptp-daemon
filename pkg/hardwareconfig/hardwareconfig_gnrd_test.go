@@ -1184,7 +1184,7 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 												},
 											},
 											Match: &ptpv2alpha1.GNSSMatcher{
-												EthernetInterface: testIfaceEno8703,
+												EthernetDevice: &ptpv2alpha1.EthernetDevice{Name: testIfaceEno8703},
 											},
 										},
 									},
@@ -1205,7 +1205,7 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 					},
 				},
 				Match: &ptpv2alpha1.GNSSMatcher{
-					EthernetInterface: testIfaceEno8703,
+					EthernetDevice: &ptpv2alpha1.EthernetDevice{Name: testIfaceEno8703},
 				},
 			},
 		},
@@ -1301,7 +1301,7 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 												},
 											},
 											Match: &ptpv2alpha1.GNSSMatcher{
-												EthernetInterface: testIfaceEno8703,
+												EthernetDevice: &ptpv2alpha1.EthernetDevice{Name: testIfaceEno8703},
 											},
 										},
 									},
@@ -1322,7 +1322,7 @@ func TestDeriveBehavior_MergesUserGNSSConfig(t *testing.T) {
 					},
 				},
 				Match: &ptpv2alpha1.GNSSMatcher{
-					EthernetInterface: testIfaceEno8703,
+					EthernetDevice: &ptpv2alpha1.EthernetDevice{Name: testIfaceEno8703},
 				},
 			},
 		},
