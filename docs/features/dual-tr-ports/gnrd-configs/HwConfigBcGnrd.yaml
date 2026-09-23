@@ -1,0 +1,18 @@
+apiVersion: ptp.openshift.io/v2alpha1
+kind: HardwareConfig
+metadata:
+  name: t-bc
+spec:
+  profile:
+    name: GNR-D-T-BC
+    clockType: T-BC
+    clockChain:
+      structure:
+      - name: leader
+        hardwareSpecificDefinitions: dell/XR8720t
+        dpll:
+          holdoverParameters:
+            maxInSpecOffset: 100
+            localMaxHoldoverOffset: 1500
+            localHoldoverTimeout: 14400
+  relatedPtpProfileName: 01-bc-tr
