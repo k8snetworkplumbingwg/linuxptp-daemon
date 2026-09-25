@@ -31,15 +31,17 @@ func TestReplayDualUpstreamLog(t *testing.T) {
 	InitializeOffsetMaps()
 
 	process := &ptpProcess{
-		name:       ptp4lProcessName,
-		configName: "ptp4l.1.config",
-		messageTag: "[ptp4l.1.config]",
+		ExecProcess: ExecProcess{
+			name:       ptp4lProcessName,
+			configName: "ptp4l.1.config",
+			messageTag: "[ptp4l.1.config]",
+			eventCh:    make(chan event.Event, 10),
+		},
 		ifaces: config.IFaces{
 			{Name: "eno8303"},
 			{Name: "eno8403"},
 		},
 		logParser: parser.NewPTP4LExtractor(),
-		eventCh:   make(chan event.Event, 10),
 	}
 
 	// --- Phase 1: Initial boot ---
