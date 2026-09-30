@@ -350,14 +350,14 @@ type TimeLs struct {
 	// second event or the last one if no future
 	// event scheduled. Valid only if
 	// validTimeToLsEvent = 1.
-	DateOfLsGpsWn uint
+	DateOfLsGpsWn uint16
 	// GPS day of week number (DN) for the next
 	// leap second event or the last one if no
 	// future event scheduled. Valid only if
 	// validTimeToLsEvent = 1. (GPS and Galileo
 	// DN: from 1 = Sun to 7 = Sat. BeiDou DN:
 	// from 0 = Sun to 6 = Sat.
-	DateOfLsGpsDn uint8
+	DateOfLsGpsDn uint16
 	// Validity flags
 	// 1<<0 validCurrLs 1 = Valid current number of leap seconds value.
 	// 1<<1 validTimeToLsEvent 1 = Valid time to next leap second event
@@ -389,10 +389,10 @@ func ExtractLeapSec(output []string) *TimeLs {
 				data.TimeToLsEvent = int(tmp)
 			case "dateOfLsGpsWn":
 				tmp, _ := strconv.ParseUint(fields[i+1], 10, 16)
-				data.DateOfLsGpsWn = uint(tmp)
+				data.DateOfLsGpsWn = uint16(tmp)
 			case "dateOfLsGpsDn":
 				tmp, _ := strconv.ParseUint(fields[i+1], 10, 16)
-				data.DateOfLsGpsDn = uint8(tmp)
+				data.DateOfLsGpsDn = uint16(tmp)
 			case "valid":
 				tmp, _ := strconv.ParseUint(fmt.Sprintf("0%s", fields[i+1]), 0, 8)
 				data.Valid = uint8(tmp)
