@@ -793,7 +793,7 @@ func TestEvalActions_FailOverStart(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("failover event was not forwarded")
 	}
-	assert.Equal(t, phc2sys.starts, 1, "phc2sys should start")
+	assert.Eventually(t, func() bool { return phc2sys.Starts() == 1 }, 2*time.Second, 10*time.Millisecond, "phc2sys should start")
 }
 
 func TestEvalActions_FullFailoverFlow(t *testing.T) {
