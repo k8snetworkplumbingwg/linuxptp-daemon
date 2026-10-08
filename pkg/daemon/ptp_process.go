@@ -86,7 +86,6 @@ type ptpProcess struct {
 	cmd                 ProcessCmd
 	socketPath          string
 	ifaces              config.IFaces
-	depProcess          []process.Process // these are list of dependent process which needs to be started/stopped if the parent process is starts/stops
 	nodeProfile         *ptpv1.PtpProfile
 	hasCollectedMetrics bool
 
@@ -114,10 +113,6 @@ func (p *ptpProcess) Profile() *ptpv1.PtpProfile {
 
 func (p *ptpProcess) ClockType() event.ClockType {
 	return p.clockType
-}
-
-func (p *ptpProcess) DependentProcesses() []process.Process {
-	return p.depProcess
 }
 
 // prepareTBCResources prepares cached resources for T-BC processing
@@ -852,6 +847,19 @@ func (p *ptpProcess) sendPtp4lStateEvent() {
 	}
 }
 
+func (p *ptpProcess) cleanup() {
+	if p.sourceQualification != nil {
+		p.sourceQualification.close()
+	}
+	p.hasCollectedMetrics = false
+	// Cleanup metrics
+	deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName, p.messageTag)
+
+	if p.name == syncEProcessName && p.syncERelations != nil {
+		deleteSyncEMetrics(p.name, p.configName, p.syncERelations)
+	}
+}
+
 type tBCProcessAttributes struct {
 	trPortsConfigFile string
 	trIfaceNames      []string
@@ -989,7 +997,6 @@ func newPtpProcess(name, configFile, configPath, socketPath, messageTag string, 
 			eventCh:    dn.processManager.eventsIn,
 		},
 		socketPath:        socketPath,
-		depProcess:        []process.Process{},
 		nodeProfile:       nodeProfile,
 		clockType:         clockType,
 		ptpClockThreshold: getPTPThreshold(nodeProfile),

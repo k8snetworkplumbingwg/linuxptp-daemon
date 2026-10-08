@@ -38,7 +38,6 @@ type stubProcess struct {
 	state     process.State
 	starts    int
 	stops     int
-	deps      []process.Process
 	conds     map[process.Action]process.Condition
 	profile   *ptpv1.PtpProfile
 	mu        sync.RWMutex
@@ -89,18 +88,11 @@ func (s *stubProcess) ClockType() event.ClockType {
 	}
 	return s.clockType
 }
-func (s *stubProcess) DependentProcesses() []process.Process {
-	return s.deps
-}
 func (s *stubProcess) IFace() string { return s.iface }
 
 func newStubProcess(p process.Process) *stubProcess {
 	if p == nil {
 		return nil
-	}
-	var deps []process.Process
-	for _, d := range p.DependentProcesses() {
-		deps = append(deps, newStubProcess(d))
 	}
 	return &stubProcess{
 		name:    p.Name(),
@@ -108,7 +100,6 @@ func newStubProcess(p process.Process) *stubProcess {
 		state:   p.State(),
 		conds:   p.Conditions(),
 		profile: p.Profile(),
-		deps:    deps,
 	}
 }
 
@@ -305,23 +296,9 @@ func applyProfilesWithStubProcesses(t *testing.T, ct *ConditionsTester, files ..
 	ct.pm.process = nil
 	var processes []*stubProcess
 	for _, p := range realProcesses {
-		root := ct.AddProcess(p)
-		collectStubProcesses(root, &processes, make(map[*stubProcess]bool))
+		processes = append(processes, ct.AddProcess(p))
 	}
 	return processes, profiles
-}
-
-func collectStubProcesses(p *stubProcess, out *[]*stubProcess, seen map[*stubProcess]bool) {
-	if p == nil || seen[p] {
-		return
-	}
-	seen[p] = true
-	*out = append(*out, p)
-	for _, dep := range p.deps {
-		if stub, ok := dep.(*stubProcess); ok {
-			collectStubProcesses(stub, out, seen)
-		}
-	}
 }
 
 func assertRejectedStartupOffsets(t *testing.T, ct *ConditionsTester, p *stubProcess, source event.EventSource, cfgName string) {
@@ -536,28 +513,28 @@ func TestForwardEvents_ProcessStatusDownStoppedNoRestart(t *testing.T) {
 	assert.Empty(t, ct.pm.eventsOut, "ProcessStatusData must not be forwarded to handler")
 }
 
-func TestForwardEvents_ProcessStatusDownRestartsDep(t *testing.T) {
+func TestForwardEvents_ProcessStatusDownRestartsProcess(t *testing.T) {
 	ct := NewCondiitonsTester(t, event.GM, testTs2phcConfig)
-	dep := &stubProcess{name: string(event.GPSD), cfgName: testTs2phcConfig, state: process.Dead}
-	parent := ct.AddProcess(&stubProcess{name: string(event.TS2PHC), cfgName: testTs2phcConfig, state: process.Running, deps: []process.Process{dep}})
+	gpsd := ct.AddProcess(&stubProcess{name: string(event.GPSD), cfgName: testTs2phcConfig, state: process.Dead})
+	ts2phc := ct.AddProcess(&stubProcess{name: string(event.TS2PHC), cfgName: testTs2phcConfig, state: process.Running})
 	ct.StartPM()
 
 	ct.SendProcessStatus(event.GPSD, testTs2phcConfig, PtpProcessDown)
 
-	assert.Eventually(t, func() bool { return dep.Starts() == 1 }, 2*time.Second, 10*time.Millisecond)
-	assert.Equal(t, 0, parent.starts)
+	assert.Eventually(t, func() bool { return gpsd.Starts() == 1 }, 2*time.Second, 10*time.Millisecond)
+	assert.Equal(t, 0, ts2phc.starts)
 	assert.Empty(t, ct.pm.eventsOut, "ProcessStatusData must not be forwarded to handler")
 }
 
 func TestStartProcesses_MissingConditionStartsImmediately(t *testing.T) {
 	ct := NewCondiitonsTester(t, event.OC)
-	dep := &stubProcess{name: "gpspipe"}
-	parent := ct.AddProcess(&stubProcess{name: "ts2phc", deps: []process.Process{dep}})
+	gpspipe := ct.AddProcess(&stubProcess{name: "gpspipe"})
+	ts2phc := ct.AddProcess(&stubProcess{name: "ts2phc"})
 
 	ct.StartProcesses()
 
-	assert.Equal(t, 1, dep.starts)
-	assert.Equal(t, 1, parent.starts)
+	assert.Equal(t, 1, gpspipe.starts)
+	assert.Equal(t, 1, ts2phc.starts)
 }
 
 func TestStartProcesses_AlreadyRunningNotRestarted(t *testing.T) {
@@ -582,7 +559,8 @@ func TestForwardEvents_OnProcessUpStartsCreated(t *testing.T) {
 			process.ActionStart: process.OnProcessUp{Source: event.PTP4l, ConfigName: ptp4lConfig},
 		},
 	}
-	parent := ct.AddProcess(&stubProcess{name: string(event.PTP4l), state: process.Running, deps: []process.Process{pmc}})
+	ct.AddProcess(pmc)
+	parent := ct.AddProcess(&stubProcess{name: string(event.PTP4l), state: process.Running})
 	ct.StartPM()
 
 	ct.SendProcessStatus(event.PTP4l, ptp4lConfig, PtpProcessUp)
@@ -599,7 +577,8 @@ func TestForwardEvents_OnProcessUpWrongSourceNoStart(t *testing.T) {
 			process.ActionStart: process.OnProcessUp{Source: event.PTP4l, ConfigName: ptp4lConfig},
 		},
 	}
-	ct.AddProcess(&stubProcess{name: string(event.PTP4l), state: process.Running, deps: []process.Process{pmc}})
+	ct.AddProcess(pmc)
+	ct.AddProcess(&stubProcess{name: string(event.PTP4l), state: process.Running})
 	ct.StartPM()
 
 	ct.SendProcessStatus(event.GPSD, ptp4lConfig, PtpProcessUp)
@@ -1256,7 +1235,7 @@ func TestReconcileWaiting_StartsWaiterWhenSourceAlreadyUp(t *testing.T) {
 			process.ActionStart: process.OnProcessUp{Source: event.PTP4l, ConfigName: ptp4lConfig},
 		},
 	}
-	ptp4l := ct.AddProcess(&stubProcess{name: string(event.PTP4l), cfgName: ptp4lConfig, state: process.Running, deps: []process.Process{pmc}})
+	ptp4l := ct.AddProcess(&stubProcess{name: string(event.PTP4l), cfgName: ptp4lConfig, state: process.Running})
 	ct.AddProcess(pmc)
 
 	// No up event is ever sent: the waiter missed the transient event.
@@ -1274,7 +1253,7 @@ func TestReconcileWaiting_DoesNotStartWhenSourceDown(t *testing.T) {
 			process.ActionStart: process.OnProcessUp{Source: event.PTP4l, ConfigName: ptp4lConfig},
 		},
 	}
-	ct.AddProcess(&stubProcess{name: string(event.PTP4l), cfgName: ptp4lConfig, state: process.Dead, deps: []process.Process{pmc}})
+	ct.AddProcess(&stubProcess{name: string(event.PTP4l), cfgName: ptp4lConfig, state: process.Dead})
 	ct.AddProcess(pmc)
 
 	ct.pm.reconcileWaiting(ct.ctx)
@@ -1290,7 +1269,7 @@ func TestReconcileWaiting_WrongConfigNotStarted(t *testing.T) {
 			process.ActionStart: process.OnProcessUp{Source: event.PTP4l, ConfigName: "ptp4l.0.config"},
 		},
 	}
-	ct.AddProcess(&stubProcess{name: string(event.PTP4l), state: process.Running, deps: []process.Process{pmc}, cfgName: "ptp4l.1.config"})
+	ct.AddProcess(&stubProcess{name: string(event.PTP4l), state: process.Running, cfgName: "ptp4l.1.config"})
 	ct.AddProcess(pmc)
 
 	ct.pm.reconcileWaiting(ct.ctx)
@@ -1308,7 +1287,7 @@ func TestReconcileWaiting_TickerRecoversStrandedWaiter(t *testing.T) {
 			process.ActionStart: process.OnProcessUp{Source: event.PTP4l, ConfigName: ptp4lConfig},
 		},
 	}
-	ct.AddProcess(&stubProcess{name: string(event.PTP4l), cfgName: ptp4lConfig, state: process.Running, deps: []process.Process{pmc}})
+	ct.AddProcess(&stubProcess{name: string(event.PTP4l), cfgName: ptp4lConfig, state: process.Running})
 	ct.AddProcess(pmc)
 
 	ct.StartPM()

@@ -68,9 +68,6 @@ func startProcessWithRetry(ctx context.Context, p process.Process, timeout time.
 
 func (pm *ProcessManager) forEachProcess(fn func(process.Process)) {
 	for _, p := range pm.process {
-		for _, d := range p.DependentProcesses() {
-			fn(d)
-		}
 		fn(p)
 	}
 }
@@ -339,11 +336,6 @@ func (pm *ProcessManager) findProcess(ev event.Event) process.Process {
 		if p.Name() == string(ev.Source) && p.ConfigName() == ev.CfgName {
 			return p
 		}
-		for _, d := range p.DependentProcesses() {
-			if d.Name() == string(ev.Source) && d.ConfigName() == ev.CfgName {
-				return d
-			}
-		}
 	}
 	return nil
 }
@@ -358,30 +350,12 @@ func sendProcessStatusEvent(ch chan<- event.Event, source event.EventSource, cfg
 func (pm *ProcessManager) stopAllProcesses() {
 	for _, p := range pm.process {
 		glog.Infof("stopping process.... %s", p.Name())
-		depProcesses := p.DependentProcesses()
-		for i := len(depProcesses) - 1; i >= 0; i-- {
-			d := depProcesses[i]
-			glog.Infof("Stopping %s", d.Name())
-			d.Stop()
-		}
 
 		glog.Infof("Stopping %s", p.Name())
 		p.Stop()
 		if p, ok := p.(*ptpProcess); ok {
-			if p.sourceQualification != nil {
-				p.sourceQualification.close()
-			}
-			p.depProcess = nil
-			p.hasCollectedMetrics = false
-
-			// Cleanup metrics
-			deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName, p.messageTag)
-
-			if p.name == syncEProcessName && p.syncERelations != nil {
-				deleteSyncEMetrics(p.name, p.configName, p.syncERelations)
-			}
+			p.cleanup()
 		}
-
 		glog.Infof("Stopped %s", p.Name())
 	}
 }

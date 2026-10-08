@@ -958,7 +958,7 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 		}
 		glog.Infof("Processing %s for profile %s with opts: %s", pProcess, *nodeProfile.Name, *configOpts)
 
-		var dprocess process.Process
+		var dprocessList []process.Process
 		var err error
 		switch pProcess {
 		case ptp4lProcessName:
@@ -975,17 +975,21 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 				glog.Infof("Skipping PMC monitoring for GM")
 			} else {
 				// TODO addScheduling
-				pmcProcess := NewPMCProcess(runID, dn.processManager.eventsIn, clockType, nodeProfile, time.Duration(dn.pmcPollInterval)*time.Second)
-				ptpProc.depProcess = append(ptpProc.depProcess, pmcProcess)
+				dprocessList = append(dprocessList, NewPMCProcess(runID, dn.processManager.eventsIn, clockType, nodeProfile, time.Duration(dn.pmcPollInterval)*time.Second))
+				// ptpProc.depProcess = append(ptpProc.depProcess, pmcProcess)
 			}
-			dprocess = ptpProc
+			dprocessList = append(dprocessList, ptpProc)
 		case phc2sysProcessName:
 			osFilter := osClockFilterConfig(nodeProfile)
 			dn.processManager.clockMgr.ConfigureOSClockFilter(osFilter)
 			if clockType == event.TBC && nodeProfile.PtpSettings["controllingProfile"] == "" {
 				updateOSClockThresholdMetrics(Threshold, NodeName, *nodeProfile.Name, osFilter)
 			}
-			dprocess, err = NewPhc2sysProcess(env)
+			phc2sysProc, err := NewPhc2sysProcess(env)
+			if err != nil {
+				return err
+			}
+			dprocessList = append(dprocessList, phc2sysProc)
 		case ts2phcProcessName:
 			if manager := leap.GetManager(); manager != nil {
 				manager.SetPtp4lConfigPath(clockCfgName(runID))
@@ -995,26 +999,35 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 
 			if clockType == event.GM {
 				// If a HardwareConfig defines a GNSS source, locate the serial port and any GNSS initialization commands.
-				if err = dn.setupGPSDAndGPSPipe(nodeProfile, ts2phcProc); err != nil {
+				if gnssProcesses, err := dn.setupGPSDAndGPSPipe(nodeProfile, ts2phcProc); err != nil {
 					return err
+				} else {
+					dprocessList = append(dprocessList, gnssProcesses...)
 				}
 			}
-			dn.setupDPLL(nodeProfile, clockType, ts2phcProc)
-			dprocess = ts2phcProc
+			var dpllProcesses []process.Process
+			dpllProcesses, err = dn.setupDPLL(nodeProfile, clockType, ts2phcProc)
+			dprocessList = append(dprocessList, dpllProcesses...)
+
+			dprocessList = append(dprocessList, ts2phcProc)
 		case syncEProcessName:
-			dprocess, err = NewSyncEProcess(env)
+			var syncEProc process.Process
+			syncEProc, err = NewSyncEProcess(env)
+			dprocessList = append(dprocessList, syncEProc)
 		case chronydProcessName:
-			dprocess, err = NewChronydProcess(env)
+			var chronydProc process.Process
+			chronydProc, err = NewChronydProcess(env)
+			dprocessList = append(dprocessList, chronydProc)
 		}
 
 		if err != nil {
 			return err
 		}
-		if dprocess == nil {
+		if len(dprocessList) == 0 {
 			continue
 		}
 		printNodeProfile(nodeProfile)
-		dn.processManager.process = append(dn.processManager.process, dprocess)
+		dn.processManager.process = append(dn.processManager.process, dprocessList...)
 		glog.Infof("Added %s process to process manager for profile %s", pProcess, *nodeProfile.Name)
 	}
 	return nil
@@ -1182,13 +1195,13 @@ func processConfigFor(dprocess *ptpProcess, clockType event.ClockType, eventCh c
 	return cfg
 }
 
-func (dn *Daemon) setupGPSDAndGPSPipe(nodeProfile *ptpv1.PtpProfile, dprocess *ptpProcess) error {
+func (dn *Daemon) setupGPSDAndGPSPipe(nodeProfile *ptpv1.PtpProfile, dprocess *ptpProcess) ([]process.Process, error) {
 	var gnssInitConfig *ublox.InitConfig
 	if nodeProfile.Name != nil && dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
 		gnssPort, gnssErr := dn.hardwareConfigManager.GetGNSSSerialPort(nodeProfile)
 		if gnssErr != nil {
 			if dn.hardwareConfigManager.HasExplicitGNSSMatcher(nodeProfile) {
-				return fmt.Errorf("HardwareConfig GNSS selector failed; refusing to start GPSD with a fallback device: %w", gnssErr)
+				return []process.Process{}, fmt.Errorf("HardwareConfig GNSS selector failed; refusing to start GPSD with a fallback device: %w", gnssErr)
 			}
 			glog.Warningf("HardwareConfig GNSS device detection failed: %v", gnssErr)
 		} else if gnssPort != "" {
@@ -1231,11 +1244,9 @@ func (dn *Daemon) setupGPSDAndGPSPipe(nodeProfile *ptpv1.PtpProfile, dprocess *p
 	}
 
 	gpsdProcess := NewGpsdProcess(dprocess.gnssSerialPort, gmInterface, dprocess.messageTag, gnssInitConfig, gnssResultsFn, nodeProfile, dn.processManager.eventsIn, processConfigFor(dprocess, dprocess.clockType, dn.processManager.eventsIn))
-	dprocess.depProcess = append(dprocess.depProcess, gpsdProcess)
 
 	// init gpspipe
 	gpsPipeProcess := NewGpsPipeProcess(dprocess.messageTag, nodeProfile, dn.processManager.eventsIn, dprocess.configName)
-	dprocess.depProcess = append(dprocess.depProcess, gpsPipeProcess)
 
 	// Ts2phc startup condition
 	dprocess.conditions = map[process.Action]process.Condition{
@@ -1244,10 +1255,11 @@ func (dn *Daemon) setupGPSDAndGPSPipe(nodeProfile *ptpv1.PtpProfile, dprocess *p
 			ConfigName: dprocess.configName,
 		},
 	}
-	return nil
+
+	return []process.Process{gpsdProcess, gpsPipeProcess}, nil
 }
 
-func (dn *Daemon) setupDPLL(nodeProfile *ptpv1.PtpProfile, clockType event.ClockType, dprocess *ptpProcess) error {
+func (dn *Daemon) setupDPLL(nodeProfile *ptpv1.PtpProfile, clockType event.ClockType, dprocess *ptpProcess) ([]process.Process, error) {
 	// TODO: Try to inject DPLL depProcess via plugin ?
 	var localMaxHoldoverOffSet uint64 = dpll.LocalMaxHoldoverOffSet
 	var localHoldoverTimeout uint64 = dpll.LocalHoldoverTimeout
@@ -1260,7 +1272,7 @@ func (dn *Daemon) setupDPLL(nodeProfile *ptpv1.PtpProfile, clockType event.Clock
 	if found1 {
 		inSyncConditionTh, err = strconv.ParseUint(sInSyncConditionTh, 0, 64)
 		if err != nil {
-			return fmt.Errorf("failed to parse inSyncConditionThreshold: %s", err)
+			return nil, fmt.Errorf("failed to parse inSyncConditionThreshold: %s", err)
 		}
 	}
 
@@ -1268,7 +1280,7 @@ func (dn *Daemon) setupDPLL(nodeProfile *ptpv1.PtpProfile, clockType event.Clock
 	if found2 {
 		inSyncConditionTimes, err = strconv.ParseUint(sInSyncConditionTim, 0, 64)
 		if err != nil {
-			return fmt.Errorf("failed to parse inSyncConditionTimes: %s", err)
+			return nil, fmt.Errorf("failed to parse inSyncConditionTimes: %s", err)
 		}
 	}
 
@@ -1288,6 +1300,8 @@ func (dn *Daemon) setupDPLL(nodeProfile *ptpv1.PtpProfile, clockType event.Clock
 	} else {
 		interfacesToUse = dprocess.ifaces
 	}
+
+	dpllDaemonList := []process.Process{}
 
 	for _, iface := range interfacesToUse {
 		var eventSource []event.EventSource
@@ -1389,10 +1403,10 @@ func (dn *Daemon) setupDPLL(nodeProfile *ptpv1.PtpProfile, clockType event.Clock
 			dpllDaemon.SetHardwareConfigHandler(func(devices []*dpllnl.DoDeviceGetReply) error {
 				return dn.hardwareConfigManager.ProcessDPLLDeviceNotifications(devices)
 			})
-			dprocess.depProcess = append(dprocess.depProcess, dpllDaemon)
+			dpllDaemonList = append(dpllDaemonList, dpllDaemon)
 		}
 	}
-	return nil
+	return dpllDaemonList, nil
 }
 
 // GetPhaseOffsetPinFilter returns a map of phase offset pin filters from the node profile.

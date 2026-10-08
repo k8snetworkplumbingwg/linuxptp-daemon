@@ -347,7 +347,7 @@ func Test_applyProfile_TBC(t *testing.T) {
 		},
 		{
 			dataFile:          "testdata/profile-tbc-tr.yaml",
-			expectedProcesses: []string{ptp4lProcessName, ptp4lProcessName, ts2phcProcessName, phc2sysProcessName},
+			expectedProcesses: []string{ptp4lProcessName, DPLL, DPLL, DPLL, ts2phcProcessName, PMCProcessName, ptp4lProcessName, phc2sysProcessName},
 		},
 	}
 	stopCh := make(<-chan struct{})
@@ -542,29 +542,22 @@ func Test_applyProfile_TGM(t *testing.T) {
 		}
 	}
 
-	// 1. ts2phc must have both gpsd and gpspipe as dependent processes.
-	if assert.NotNil(t, ts2phcProc, "ts2phc process should exist for T-GM profile") {
-		depNames := make([]string, len(ts2phcProc.depProcess))
-		for i, d := range ts2phcProc.depProcess {
-			depNames[i] = d.Name()
-		}
-		assert.Contains(t, depNames, GPSD_PROCESSNAME, "gpsd must be a dependent process of ts2phc for T-GM")
-		assert.Contains(t, depNames, GPSPIPE_PROCESSNAME, "gpspipe must be a dependent process of ts2phc for T-GM")
-
-		for _, d := range ts2phcProc.depProcess {
-			if gpsd, ok := d.(*GPSD); ok {
-				assert.Equal(t, "ens7f0", gpsd.gmInterface,
-					"GPSD gmInterface should match the first interface in ts2phcConf (leading GNSS-sourced interface)")
-			}
+	// 1. ts2phc, gpsd, and gpspipe must all be normal processes.
+	assert.NotNil(t, ts2phcProc, "ts2phc process should exist for T-GM profile")
+	processNames := make([]string, 0, len(dn.processManager.process))
+	for _, p := range dn.processManager.process {
+		processNames = append(processNames, p.Name())
+		if gpsd, ok := p.(*GPSD); ok {
+			assert.Equal(t, "ens7f0", gpsd.gmInterface,
+				"GPSD gmInterface should match the first interface in ts2phcConf (leading GNSS-sourced interface)")
 		}
 	}
+	assert.Contains(t, processNames, GPSD_PROCESSNAME, "gpsd must be a process for T-GM")
+	assert.Contains(t, processNames, GPSPIPE_PROCESSNAME, "gpspipe must be a process for T-GM")
 
-	// 2. ptp4l should NOT have a PMC dependent process for GM profiles.
-	if assert.NotNil(t, ptp4lProc, "ptp4l process should exist for T-GM profile") {
-		for _, d := range ptp4lProc.depProcess {
-			assert.NotEqual(t, "pmc", d.Name(), "ptp4l should not have PMC as a dependent process for T-GM")
-		}
-	}
+	// 2. GM profiles should NOT have a PMC process.
+	assert.NotNil(t, ptp4lProc, "ptp4l process should exist for T-GM profile")
+	assert.NotContains(t, processNames, "pmc", "T-GM should not have a PMC process")
 
 	// 3. ts2phc opts must include holdover and servo parameters for GM.
 	// These are auto-appended by applyNodePtpProfile for GM clock types.
@@ -1345,11 +1338,11 @@ func TestSetupGPSDAndGPSPipeFailsClosedForExplicitGNSSMatcher(t *testing.T) {
 
 	daemon := &Daemon{hardwareConfigManager: hcm}
 	process := &ptpProcess{}
-	err := daemon.setupGPSDAndGPSPipe(&ptpv1.PtpProfile{Name: stringPointer("tgm_test-profile")}, process)
+	gnssProcesses, err := daemon.setupGPSDAndGPSPipe(&ptpv1.PtpProfile{Name: stringPointer("tgm_test-profile")}, process)
 
 	require.ErrorContains(t, err, "refusing to start GPSD with a fallback device")
 	assert.Empty(t, process.gnssSerialPort, "failed explicit selection must not assign the default GNSS port")
-	assert.Empty(t, process.depProcess, "failed explicit selection must not create GPSD or GPSPipe processes")
+	assert.Empty(t, gnssProcesses, "failed explicit selection must not create GPSD or GPSPipe processes")
 }
 
 // createMockPTPStateDetectorForHardwareConfig creates a mock PTPStateDetector for hardware config testing
