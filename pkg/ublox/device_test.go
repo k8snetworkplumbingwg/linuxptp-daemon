@@ -2,9 +2,11 @@ package ublox
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +50,104 @@ func setupReadDirMock(entries map[string][]os.DirEntry, errs map[string]error) f
 		return nil, errors.New("not found")
 	}
 	return func() { ReadDir = orig }
+}
+
+type ethernetFixtureDevice struct {
+	iface        string
+	pciAddress   string
+	slot         string
+	slotMapping  bool
+	permanentMAC string
+	vendorID     string
+	deviceID     string
+}
+
+func setupEthernetSysfsFixture(t *testing.T, devices []ethernetFixtureDevice, gnss map[string][]os.DirEntry) {
+	t.Helper()
+
+	oldNetClassPath := netClassSysfsPath
+	oldPCISlotsPath := pciSlotsSysfsPath
+	oldReadDir := ReadDir
+	oldPermanentMACAddress := getPermanentMACAddress
+	root := t.TempDir()
+	netClassSysfsPath = filepath.Join(root, "sys", "class", "net")
+	pciSlotsSysfsPath = filepath.Join(root, "sys", "bus", "pci", "slots")
+	if err := os.MkdirAll(netClassSysfsPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(pciSlotsSysfsPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	macAddresses := make(map[string]string, len(devices))
+	gnssDirectories := make(map[string][]os.DirEntry, len(gnss))
+	for iface, entries := range gnss {
+		gnssDirectories[fmt.Sprintf(GNSSDeviceSysfsTemplate, iface)] = entries
+	}
+	for _, device := range devices {
+		ifacePath := filepath.Join(netClassSysfsPath, device.iface)
+		pciPath := filepath.Join(root, "sys", "devices", "pci", device.pciAddress)
+		if err := os.MkdirAll(ifacePath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(pciPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for attribute, value := range map[string]string{
+			"vendor": device.vendorID,
+			"device": device.deviceID,
+		} {
+			if value != "" {
+				if err := os.WriteFile(filepath.Join(pciPath, attribute), []byte("0x"+value+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := os.Symlink(pciPath, filepath.Join(ifacePath, "device")); err != nil {
+			t.Fatal(err)
+		}
+		if device.slot != "" {
+			if device.slotMapping {
+				slotPath := filepath.Join(pciSlotsSysfsPath, device.slot)
+				if err := os.MkdirAll(slotPath, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				address := device.pciAddress[:strings.LastIndex(device.pciAddress, ".")]
+				if err := os.WriteFile(filepath.Join(slotPath, "address"), []byte(address+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				firmwarePath := filepath.Join(pciPath, "firmware_node")
+				if err := os.MkdirAll(firmwarePath, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(firmwarePath, "sun"), []byte(device.slot+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		macAddresses[device.iface] = device.permanentMAC
+	}
+
+	ReadDir = func(path string) ([]os.DirEntry, error) {
+		if entries, ok := gnssDirectories[path]; ok {
+			return entries, nil
+		}
+		return os.ReadDir(path)
+	}
+	getPermanentMACAddress = func(iface string) (string, error) {
+		address, ok := macAddresses[iface]
+		if !ok || address == "" {
+			return "", fmt.Errorf("no permanent address for %s", iface)
+		}
+		return address, nil
+	}
+	t.Cleanup(func() {
+		netClassSysfsPath = oldNetClassPath
+		pciSlotsSysfsPath = oldPCISlotsPath
+		ReadDir = oldReadDir
+		getPermanentMACAddress = oldPermanentMACAddress
+	})
 }
 
 func makeUSBTTYFixture(t *testing.T, ttyNames ...string) string {
@@ -117,6 +217,153 @@ func TestNormalizeUSBID(t *testing.T) {
 
 	_, err := normalizeUSBID("not-hex")
 	assert.Error(t, err)
+}
+
+func TestGNSSDeviceFromEthernetDevice(t *testing.T) {
+	t.Run("selects GNSS device by PCI address", func(t *testing.T) {
+		setupEthernetSysfsFixture(t, []ethernetFixtureDevice{{
+			iface: "eno8703", pciAddress: "0000:86:00.0", slot: "2",
+		}}, map[string][]os.DirEntry{
+			"eno8703": {mockDirEntry{name: "gnss0"}},
+		})
+
+		device, err := GNSSDeviceFromEthernetDevice("", "86:00.0", "", "", "", "")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/gnss0", device)
+	})
+
+	t.Run("selects GNSS device by interface name", func(t *testing.T) {
+		restore := setupReadDirMock(
+			map[string][]os.DirEntry{
+				"/sys/class/net/eno8703/device/gnss": {mockDirEntry{name: "gnss0"}},
+			}, nil,
+		)
+		defer restore()
+
+		device, err := GNSSDeviceFromEthernetDevice("eno8703", "", "", "", "", "")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/gnss0", device)
+	})
+
+	t.Run("matches all supplied selectors together", func(t *testing.T) {
+		setupEthernetSysfsFixture(t, []ethernetFixtureDevice{
+			{iface: "eno8703", pciAddress: "0000:86:00.0", slot: "2", permanentMAC: "00:11:22:aa:bb:cc", vendorID: "8086", deviceID: "159b"},
+			{iface: "eno8704", pciAddress: "0000:87:00.0", slot: "3", permanentMAC: "00:11:22:aa:bb:dd", vendorID: "8086", deviceID: "1592"},
+		}, map[string][]os.DirEntry{
+			"eno8703": {mockDirEntry{name: "gnss0"}},
+			"eno8704": {mockDirEntry{name: "gnss1"}},
+		})
+
+		device, err := GNSSDeviceFromEthernetDevice("eno8703", "86:00.0", "00:11:22:AA:BB:CC", "02", "0x8086", "159B")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/gnss0", device)
+	})
+
+	t.Run("selects by PCI vendor and device IDs", func(t *testing.T) {
+		setupEthernetSysfsFixture(t, []ethernetFixtureDevice{
+			{iface: "eno8703", pciAddress: "0000:86:00.0", slot: "2", vendorID: "8086", deviceID: "159b"},
+			{iface: "eno8704", pciAddress: "0000:87:00.0", slot: "3", vendorID: "8086", deviceID: "1592"},
+			{iface: "eno8705", pciAddress: "0000:88:00.0", slot: "4", vendorID: "1af4", deviceID: "159b"},
+		}, map[string][]os.DirEntry{
+			"eno8703": {mockDirEntry{name: "gnss0"}},
+			"eno8704": {mockDirEntry{name: "gnss1"}},
+			"eno8705": {mockDirEntry{name: "gnss2"}},
+		})
+
+		device, err := GNSSDeviceFromEthernetDevice("", "", "", "", "0x8086", "159B")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/gnss0", device)
+	})
+
+	t.Run("selects by vendor ID alone", func(t *testing.T) {
+		setupEthernetSysfsFixture(t, []ethernetFixtureDevice{
+			{iface: "eno8703", pciAddress: "0000:86:00.0", slot: "2", vendorID: "8086", deviceID: "159b"},
+			{iface: "eno8704", pciAddress: "0000:87:00.0", slot: "3", vendorID: "1af4", deviceID: "159b"},
+		}, map[string][]os.DirEntry{
+			"eno8703": {mockDirEntry{name: "gnss0"}},
+			"eno8704": {mockDirEntry{name: "gnss1"}},
+		})
+
+		device, err := GNSSDeviceFromEthernetDevice("", "", "", "", "8086", "")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/gnss0", device)
+	})
+
+	t.Run("selects by device ID alone", func(t *testing.T) {
+		setupEthernetSysfsFixture(t, []ethernetFixtureDevice{
+			{iface: "eno8703", pciAddress: "0000:86:00.0", slot: "2", vendorID: "8086", deviceID: "159b"},
+			{iface: "eno8704", pciAddress: "0000:87:00.0", slot: "3", vendorID: "8086", deviceID: "1592"},
+		}, map[string][]os.DirEntry{
+			"eno8703": {mockDirEntry{name: "gnss0"}},
+			"eno8704": {mockDirEntry{name: "gnss1"}},
+		})
+
+		device, err := GNSSDeviceFromEthernetDevice("", "", "", "", "", "159b")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/gnss0", device)
+	})
+
+	t.Run("lists matching PCI slots when IDs are ambiguous", func(t *testing.T) {
+		setupEthernetSysfsFixture(t, []ethernetFixtureDevice{
+			{iface: "eno8703", pciAddress: "0000:86:00.0", slot: "2", vendorID: "8086", deviceID: "159b"},
+			{iface: "eno8704", pciAddress: "0000:87:00.0", slot: "3", vendorID: "8086", deviceID: "159b"},
+		}, map[string][]os.DirEntry{
+			"eno8703": {mockDirEntry{name: "gnss0"}},
+			"eno8704": {mockDirEntry{name: "gnss1"}},
+		})
+
+		_, err := GNSSDeviceFromEthernetDevice("", "", "", "", "8086", "159b")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "slot 2")
+		assert.Contains(t, err.Error(), "slot 3")
+		assert.Contains(t, err.Error(), "specify slot")
+
+		device, err := GNSSDeviceFromEthernetDevice("", "", "", "3", "8086", "159b")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/gnss1", device)
+	})
+
+	t.Run("rejects invalid PCI vendor and device IDs", func(t *testing.T) {
+		_, err := GNSSDeviceFromEthernetDevice("", "", "", "", "not-hex", "")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid PCI vendor ID")
+
+		_, err = GNSSDeviceFromEthernetDevice("", "", "", "", "", "not-hex")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid PCI device ID")
+	})
+
+	t.Run("selects by firmware-reported slot", func(t *testing.T) {
+		setupEthernetSysfsFixture(t, []ethernetFixtureDevice{
+			{iface: "eno8703", pciAddress: "0000:86:00.0", slot: "2"},
+			{iface: "eno8704", pciAddress: "0000:87:00.0", slot: "3"},
+		}, map[string][]os.DirEntry{
+			"eno8703": {mockDirEntry{name: "gnss0"}},
+			"eno8704": {mockDirEntry{name: "gnss1"}},
+		})
+
+		device, err := GNSSDeviceFromEthernetDevice("", "", "", "2", "", "")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/gnss0", device)
+	})
+
+	t.Run("resolves slot from PCI slot address mapping", func(t *testing.T) {
+		setupEthernetSysfsFixture(t, []ethernetFixtureDevice{{
+			iface: "eno8703", pciAddress: "0000:86:00.0", slot: "2", slotMapping: true,
+		}}, map[string][]os.DirEntry{
+			"eno8703": {mockDirEntry{name: "gnss0"}},
+		})
+
+		device, err := GNSSDeviceFromEthernetDevice("", "", "", "2", "", "")
+		assert.NoError(t, err)
+		assert.Equal(t, "/dev/gnss0", device)
+	})
+
+	t.Run("rejects invalid permanent MAC address", func(t *testing.T) {
+		_, err := GNSSDeviceFromEthernetDevice("", "", "not-a-mac", "", "", "")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid permanent MAC address")
+	})
 }
 
 func makeACPITTYFixture(t *testing.T, ttyNames ...string) string {
