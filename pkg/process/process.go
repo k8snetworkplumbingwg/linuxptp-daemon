@@ -67,8 +67,7 @@ type Process interface {
 	Stop() error
 	Conditions() map[Action]Condition
 	State() State
-	Profile() *ptpv1.PtpProfile    // Should go away
-	ClockType() event.ClockType    // Should go away
-	DependentProcesses() []Process // Should go away
+	Profile() *ptpv1.PtpProfile // Should go away
+	ClockType() event.ClockType // Should go away
 	SyncInitialState()
 }

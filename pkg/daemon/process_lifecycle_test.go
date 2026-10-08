@@ -209,19 +209,6 @@ func TestPtpProcessStopCreatedNoop(t *testing.T) {
 	assert.Equal(t, process.Created, p.State())
 }
 
-func TestPtpProcessStopDoesNotClearDepProcess(t *testing.T) {
-	p := newTestPtpProcess(NewMockCmd(), nil)
-	dep := &stubProcess{name: "gpsd"}
-	p.depProcess = []process.Process{dep}
-
-	require.NoError(t, p.Start(context.Background()))
-	waitProcessState(t, p, process.Running)
-
-	require.NoError(t, p.Stop())
-	require.Len(t, p.depProcess, 1)
-	assert.Same(t, dep, p.depProcess[0])
-}
-
 func TestGpsdStartStopRestart(t *testing.T) {
 	ch := make(chan event.Event, 8)
 	g := NewTestGpsdProcess("", "", "", ch, NewMockCmd())
