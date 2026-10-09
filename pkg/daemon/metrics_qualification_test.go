@@ -212,7 +212,9 @@ func TestTBCThresholdMetricsConfigurationWiring(t *testing.T) {
 				ifaces[0], ifaces[1] = ifaces[1], ifaces[0]
 			}
 			proc := &ptpProcess{nodeProfile: profile, clockType: event.TBC, ifaces: ifaces, ptpClockThreshold: getPTPThreshold(profile)}
-			require.NoError(t, dn.setupDPLL(profile, event.TBC, proc))
+			dpllProcesses, err := dn.setupDPLL(profile, event.TBC, proc)
+			require.NoError(t, err)
+			require.Equal(t, len(dpllProcesses), len(ifaces))
 			values := thresholdSamples(t, Threshold, NodeName, name)
 			require.Len(t, values, 13)
 			require.Equal(t, float64(100), values[thresholdSysInSync])
@@ -224,7 +226,7 @@ func TestTBCThresholdMetricsConfigurationWiring(t *testing.T) {
 			require.NotContains(t, values, "MaxOffsetThreshold")
 			require.NotContains(t, values, "MinOffsetThreshold")
 			for i, iface := range ifaces {
-				device := proc.depProcess[i].(*dpll.DpllConfig)
+				device := dpllProcesses[i].(*dpll.DpllConfig)
 				if iface.Source == event.PTP4l {
 					require.Equal(t, float64(device.MaxInSpecOffset), values["MaxInSpecOffset"])
 					require.Equal(t, float64(device.LocalMaxHoldoverOffSet), values["LocalMaxHoldoverOffSet"])

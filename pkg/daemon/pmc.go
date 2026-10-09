@@ -41,6 +41,7 @@ func NewPMCProcess(runID int, eventCh chan<- event.Event, clockType event.ClockT
 				ConfigName: fmt.Sprintf("ptp4l.%d.config", runID),
 			},
 		},
+		fg: &process.FailureGroup{},
 	}
 }
 
@@ -68,6 +69,7 @@ type PMCProcess struct {
 	processState process.State
 	conditions   map[process.Action]process.Condition
 	wg           sync.WaitGroup
+	fg           *process.FailureGroup
 }
 
 // Name returns the process name.
@@ -82,6 +84,11 @@ func (pmc *PMCProcess) ConfigName() string {
 
 // SyncInitialState ...
 func (pmc *PMCProcess) SyncInitialState() {}
+
+// FailureGroup returns the process's process.FailureGroup
+func (pmc *PMCProcess) FailureGroup() *process.FailureGroup {
+	return pmc.fg
+}
 
 // Conditions returns the action conditions for the PMCProcess.
 func (pmc *PMCProcess) Conditions() map[process.Action]process.Condition {

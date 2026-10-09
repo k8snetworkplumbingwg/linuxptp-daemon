@@ -3,6 +3,8 @@ package process
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -70,4 +72,23 @@ type Process interface {
 	Profile() *ptpv1.PtpProfile // Should go away
 	ClockType() event.ClockType // Should go away
 	SyncInitialState()
+	FailureGroup() *FailureGroup
+}
+
+// FailureGroup ...
+type FailureGroup struct {
+	members map[string]Process
+}
+
+// Members ...
+func (fg *FailureGroup) Members() []Process {
+	return slices.Collect(maps.Values(fg.members))
+}
+
+// AddMember ...
+func (fg *FailureGroup) AddMember(p Process) {
+	if fg.members == nil {
+		fg.members = make(map[string]Process)
+	}
+	fg.members[p.Name()+"_"+p.ConfigName()] = p
 }

@@ -135,6 +135,7 @@ type DpllConfig struct {
 
 	// devices holds the cache of DPLL device replies
 	devices []*nl.DoDeviceGetReply
+	fg      *process.FailureGroup
 }
 
 func (d *DpllConfig) InSpec() bool {
@@ -359,6 +360,11 @@ func (d *DpllConfig) SyncInitialState() {
 	d.applyStateUpdate(replies, nil)
 }
 
+// FailureGroup returns the process's process.FailureGroup
+func (d *DpllConfig) FailureGroup() *process.FailureGroup {
+	return d.fg
+}
+
 // ProcessStatus ... process status
 func (d *DpllConfig) ProcessStatus(_ int64) {
 }
@@ -440,6 +446,7 @@ func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxIn
 		flags:                    dpllFlags,
 		processConfig:            processCfg,
 		profile:                  nodeProfile,
+		fg:                       &process.FailureGroup{},
 	}
 
 	if d.flags != 0 {
