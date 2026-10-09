@@ -46,6 +46,7 @@ type ExecProcess struct {
 	state      process.State
 	wg         sync.WaitGroup
 	execMutex  sync.RWMutex
+	fg         *process.FailureGroup
 }
 
 // State returns the current process state of ExecProcess.
@@ -78,6 +79,9 @@ func (p *ExecProcess) Conditions() map[process.Action]process.Condition {
 
 // SyncInitialState ...
 func (p *ExecProcess) SyncInitialState() {}
+
+// FailureGroup returns the process's process.FailureGroup
+func (p *ExecProcess) FailureGroup() *process.FailureGroup { return p.fg }
 
 type ptpProcess struct {
 	ExecProcess // TODO Make these the same

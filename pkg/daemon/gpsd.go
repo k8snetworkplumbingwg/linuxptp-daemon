@@ -69,6 +69,7 @@ type GPSD struct {
 	profile    *ptpv1.PtpProfile
 	conditions map[process.Action]process.Condition
 	wg         sync.WaitGroup
+	fg         *process.FailureGroup
 }
 
 // NewGpsdProcess creates a new GPSD process instance.
@@ -101,6 +102,7 @@ func NewGpsdProcess(serialPort string, gmInterface string, messageTag string, gn
 		processConfig:  processCfg,
 		profile:        nodeProfile,
 		conditions:     map[process.Action]process.Condition{},
+		fg:             &process.FailureGroup{},
 	}
 }
 
@@ -131,6 +133,11 @@ func (g *GPSD) ConfigName() string {
 
 // SyncInitialState is a no-op because GPSD has no initial state to synchronize.
 func (g *GPSD) SyncInitialState() {}
+
+// FailureGroup returns the process's process.FailureGroup
+func (g *GPSD) FailureGroup() *process.FailureGroup {
+	return g.fg
+}
 
 // gnssClockType returns the configured GNSS clock type, defaulting to GM.
 func (g *GPSD) gnssClockType() event.ClockType {

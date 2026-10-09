@@ -41,6 +41,7 @@ type stubProcess struct {
 	conds     map[process.Action]process.Condition
 	profile   *ptpv1.PtpProfile
 	mu        sync.RWMutex
+	fg        *process.FailureGroup
 }
 
 func (s *stubProcess) Name() string {
@@ -88,7 +89,8 @@ func (s *stubProcess) ClockType() event.ClockType {
 	}
 	return s.clockType
 }
-func (s *stubProcess) IFace() string { return s.iface }
+func (s *stubProcess) IFace() string                       { return s.iface }
+func (s *stubProcess) FailureGroup() *process.FailureGroup { return s.fg }
 
 func newStubProcess(p process.Process) *stubProcess {
 	if p == nil {
@@ -198,6 +200,10 @@ func (c *ConditionsTester) AddProcess(p process.Process) *stubProcess {
 	if !ok {
 		s = newStubProcess(p)
 	}
+	if s.fg == nil {
+		s.fg = &process.FailureGroup{}
+	}
+	s.fg.AddMember(s)
 	c.pm.process = append(c.pm.process, s)
 	return s
 }
@@ -477,6 +483,25 @@ func TestForwardEvents_ProcessStatusDownDeadRestarts(t *testing.T) {
 
 	assert.Eventually(t, func() bool { return stub.Starts() == 1 }, 2*time.Second, 10*time.Millisecond)
 	assert.Empty(t, ct.pm.eventsOut, "ProcessStatusData must not be forwarded to handler")
+}
+
+func TestHandleProcessDownRestartsFailureGroup(t *testing.T) {
+	fg := &process.FailureGroup{}
+	failed := &stubProcess{name: string(event.PTP4l), cfgName: ptp4lConfig, state: process.Dead, fg: fg}
+	member := &stubProcess{name: phc2sysProcessName, cfgName: ptp4lConfig, state: process.Running, fg: fg}
+	unrelated := &stubProcess{name: ts2phcProcessName, cfgName: ptp4lConfig, state: process.Running}
+	fg.AddMember(failed)
+	fg.AddMember(member)
+
+	pm := &ProcessManager{process: []process.Process{failed, member, unrelated}}
+	pm.handleProcessDown(context.Background(), event.ProcessStatusEvent(event.PTP4l, ptp4lConfig, event.OC, "", PtpProcessDown))
+
+	assert.Equal(t, 1, failed.Starts())
+	assert.Zero(t, failed.Stops())
+	assert.Equal(t, 1, member.Starts())
+	assert.Equal(t, 1, member.Stops())
+	assert.Zero(t, unrelated.Starts())
+	assert.Zero(t, unrelated.Stops())
 }
 
 func TestProcessStatusEventsUpdateMetrics(t *testing.T) {

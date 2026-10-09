@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -325,10 +326,53 @@ func (pm *ProcessManager) handleProcessDown(ctx context.Context, ev event.Event)
 		return
 	default:
 	}
-	glog.Infof("restarting dead process %s", p.Name())
-	if err := startProcessWithRetry(ctx, p, processRestartTimeout); err != nil {
-		glog.Errorf("failed to restart %s: %v", p.Name(), err)
+
+	fgNames := []string{}
+	wg := sync.WaitGroup{}
+	if fg := p.FailureGroup(); fg != nil {
+		for _, m := range fg.Members() {
+			if p == m {
+				continue
+			}
+			wg.Add(1)
+			go func(mp process.Process) {
+				defer wg.Done()
+				glog.Info("Stopping %s because its in a failure group with %s", mp.Name(), p.Name())
+				mp.Stop()
+				fgNames = append(fgNames, mp.Name())
+				for {
+					select {
+					case <-ctx.Done():
+					default:
+						if state := mp.State(); state == process.Stopped || state == process.Dead {
+							return
+						}
+						time.Sleep(1 * time.Microsecond)
+					}
+				}
+			}(m)
+		}
 	}
+
+	wg.Wait()
+
+	if len(fgNames) > 0 {
+		glog.Infof("restarting dead process %s and its failure group mememebrs %s", p.Name(), strings.Join(fgNames, " "))
+	} else {
+		glog.Infof("restarting dead process %s", p.Name())
+	}
+	if fg := p.FailureGroup(); fg != nil {
+		for _, m := range fg.Members() {
+			wg.Add(1)
+			go func(mp process.Process) {
+				defer wg.Done()
+				if err := startProcessWithRetry(ctx, mp, processRestartTimeout); err != nil {
+					glog.Errorf("failed to restart %s: %v", p.Name(), err)
+				}
+			}(m)
+		}
+	}
+	wg.Wait()
 }
 
 func (pm *ProcessManager) findProcess(ev event.Event) process.Process {

@@ -45,6 +45,7 @@ type GpsPipe struct {
 	profile    *ptpv1.PtpProfile
 	conditions map[process.Action]process.Condition
 	wg         sync.WaitGroup
+	fg         *process.FailureGroup
 }
 
 // NewGpsPipeProcess creates a new GpsPipe process instance.
@@ -66,6 +67,7 @@ func NewGpsPipeProcess(messageTag string, nodeProfile *ptpv1.PtpProfile, eventCh
 				ConfigName: gpsdConfig,
 			},
 		},
+		fg: &process.FailureGroup{},
 	}
 	return gp
 }
@@ -87,6 +89,11 @@ func (gp *GpsPipe) Conditions() map[process.Action]process.Condition {
 
 // SyncInitialState ...
 func (gp *GpsPipe) SyncInitialState() {}
+
+// FailureGroup returns the process's process.FailureGroup
+func (gp *GpsPipe) FailureGroup() *process.FailureGroup {
+	return gp.fg
+}
 
 // State returns the current process state of GpsPipe.
 func (gp *GpsPipe) State() process.State {

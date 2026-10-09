@@ -18,6 +18,7 @@ const (
 
 type stubProc struct {
 	conds map[Action]Condition
+	fg    *FailureGroup
 }
 
 func (s *stubProc) Name() string                     { return "stub" }
@@ -30,6 +31,7 @@ func (s *stubProc) Profile() *ptpv1.PtpProfile       { return &ptpv1.PtpProfile{
 func (s *stubProc) ClockType() event.ClockType       { return event.OC }
 func (s *stubProc) DependentProcesses() []Process    { return nil }
 func (s *stubProc) SyncInitialState()                {}
+func (s *stubProc) FailureGroup() *FailureGroup      { return s.fg }
 
 func TestGetCondition_MissingStartIsImmediate(t *testing.T) {
 	p := &stubProc{}

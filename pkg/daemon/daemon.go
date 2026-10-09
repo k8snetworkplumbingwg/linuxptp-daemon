@@ -3,6 +3,7 @@ package daemon
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -994,9 +995,10 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 			if manager := leap.GetManager(); manager != nil {
 				manager.SetPtp4lConfigPath(clockCfgName(runID))
 			}
+			errs := []error{}
 			var ts2phcProc *ptpProcess
 			ts2phcProc, err = NewTs2phcProcess(env)
-
+			errs = append(errs, err)
 			if clockType == event.GM {
 				// If a HardwareConfig defines a GNSS source, locate the serial port and any GNSS initialization commands.
 				if gnssProcesses, err := dn.setupGPSDAndGPSPipe(nodeProfile, ts2phcProc); err != nil {
@@ -1008,8 +1010,10 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 			var dpllProcesses []process.Process
 			dpllProcesses, err = dn.setupDPLL(nodeProfile, clockType, ts2phcProc)
 			dprocessList = append(dprocessList, dpllProcesses...)
-
+			errs = append(errs, err)
 			dprocessList = append(dprocessList, ts2phcProc)
+
+			err = errors.Join(errs...)
 		case syncEProcessName:
 			var syncEProc process.Process
 			syncEProc, err = NewSyncEProcess(env)
