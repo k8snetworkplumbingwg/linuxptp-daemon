@@ -46,6 +46,10 @@ type HardwareConfigUpdateHandler interface {
 	GetCurrentHardwareConfigs() []ptpv2alpha1.HardwareConfig
 }
 
+type gnssStatusChangedHandler interface {
+	SetGNSSStatusChangedHandler(func())
+}
+
 // HardwareConfigReconciler watches HardwareConfig CRs and forwards the node's effective
 // configuration to the daemon via HardwareConfigHandler (see cmd/main.go for wiring).
 type HardwareConfigReconciler struct {
@@ -195,7 +199,10 @@ func (r *HardwareConfigReconciler) reconcileAllConfigs(ctx context.Context) (ctr
 	diff := diffHardwareConfigs(r.lastAppliedConfigs, applicableConfigs)
 
 	if !diff.HasChanges() {
-		glog.V(2).Infof("Hardware configurations unchanged, skipping update and restart")
+		glog.V(2).Infof("Hardware configurations unchanged, syncing source status")
+		if err := r.syncHardwareConfigStatuses(ctx, applicableConfigs); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to sync HardwareConfig source status: %w", err)
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -266,7 +273,45 @@ func (r *HardwareConfigReconciler) reconcileAllConfigs(ctx context.Context) (ctr
 		r.lastAppliedConfigs = make(map[string]ptpv2alpha1.HardwareConfig)
 	}
 
+	if err := r.syncHardwareConfigStatuses(ctx, applicableConfigs); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to sync HardwareConfig source status: %w", err)
+	}
 	return ctrl.Result{}, nil
+}
+
+// syncHardwareConfigStatuses copies source initialization status from the daemon
+// into the HardwareConfig status subresource.
+func (r *HardwareConfigReconciler) syncHardwareConfigStatuses(ctx context.Context, applicableConfigs []ptpv2alpha1.HardwareConfig) error {
+	if r.HardwareConfigHandler == nil || len(applicableConfigs) == 0 {
+		return nil
+	}
+
+	currentByName := make(map[string]ptpv2alpha1.HardwareConfig)
+	for _, current := range r.HardwareConfigHandler.GetCurrentHardwareConfigs() {
+		currentByName[current.Name] = current
+	}
+
+	for _, applicable := range applicableConfigs {
+		current, ok := currentByName[applicable.Name]
+		if !ok || reflect.DeepEqual(applicable.Status.Sources, current.Status.Sources) {
+			continue
+		}
+
+		latest := &ptpv2alpha1.HardwareConfig{}
+		key := client.ObjectKeyFromObject(&applicable)
+		if err := r.Get(ctx, key, latest); err != nil {
+			return fmt.Errorf("get HardwareConfig %s for status update: %w", key.Name, err)
+		}
+		if reflect.DeepEqual(latest.Status.Sources, current.Status.Sources) {
+			continue
+		}
+		latest.Status.Sources = current.Status.Sources
+		if err := r.Status().Update(ctx, latest); err != nil {
+			return fmt.Errorf("update HardwareConfig %s source status: %w", key.Name, err)
+		}
+		glog.Infof("Updated GNSS source status for HardwareConfig %s", key.Name)
+	}
+	return nil
 }
 
 // configDiff represents the differences between old and new hardware configurations.
@@ -575,6 +620,12 @@ func (r *HardwareConfigReconciler) SetupWithManager(mgr ctrl.Manager, enablePtpC
 			glog.Errorf("Failed to start file watcher for PtpConfig files: %v", err)
 			// Continue without file watching - reconciliation will happen on ticker
 		}
+	}
+
+	if notifier, ok := r.HardwareConfigHandler.(gnssStatusChangedHandler); ok {
+		notifier.SetGNSSStatusChangedHandler(func() {
+			r.triggerReconciliationForProfileChangeInternal("GNSS source status update")
+		})
 	}
 
 	return builder.
