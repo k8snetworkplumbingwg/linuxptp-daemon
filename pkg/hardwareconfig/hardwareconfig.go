@@ -220,6 +220,7 @@ type HardwareConfigManager struct {
 	// ConfigMap loader for board label remapping (optional, can be nil)
 	configMapLoader   *BoardLabelMapLoader
 	interfaceResolver *network.InterfaceResolver
+	gnssStatusChanged func()
 	mu                sync.RWMutex
 	cond              *sync.Cond
 	ready             bool
@@ -408,9 +409,16 @@ func (hcm *HardwareConfigManager) CloneHardwareConfigs() []ptpv2alpha1.HardwareC
 	defer hcm.mu.RUnlock()
 	out := make([]ptpv2alpha1.HardwareConfig, len(hcm.hardwareConfigs))
 	for i, cfg := range hcm.hardwareConfigs {
-		out[i] = cfg.HardwareConfig
+		out[i] = *cfg.DeepCopy()
 	}
 	return out
+}
+
+// SetGNSSStatusChangedHandler installs a callback invoked after GNSS match status changes.
+func (hcm *HardwareConfigManager) SetGNSSStatusChangedHandler(handler func()) {
+	hcm.mu.Lock()
+	defer hcm.mu.Unlock()
+	hcm.gnssStatusChanged = handler
 }
 
 // HasHardwareConfigForProfile checks if hardware config is available for a PTP profile
