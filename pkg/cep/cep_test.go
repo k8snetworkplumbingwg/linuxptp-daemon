@@ -177,12 +177,27 @@ func TestListenerResilience(t *testing.T) {
 			cache := NewEventCache("worker-0")
 			listener := NewCloudEventProxy(cache, nil)
 
-			listener.Listen(tt.input())
+			listener.handleIncomingEvents(tt.input())
 
 			_, ok := cache.Get(ipc.TypePTPState)
 			assert.Equal(t, tt.wantCached, ok)
 		})
 	}
+}
+
+func TestIntegrationHealthCheck(t *testing.T) {
+	cache := NewEventCache("worker-0")
+	ps := NewPubSub(filepath.Join(t.TempDir(), "subscriptions.json"), NewHTTPWriterFunc(2*time.Second))
+	proxy := NewCloudEventProxy(cache, ps)
+	apiServer := httptest.NewServer(proxy.Handler())
+	defer apiServer.Close()
+	resp, err := http.Get(apiServer.URL + apiBase + "/health")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "OK", string(body))
 }
 
 func TestIntegrationEventDelivery(t *testing.T) {
@@ -227,7 +242,7 @@ func TestIntegrationEventDelivery(t *testing.T) {
 		pr, pw := io.Pipe()
 		done := make(chan struct{})
 		go func() {
-			proxy.Listen(pr)
+			proxy.handleIncomingEvents(pr)
 			close(done)
 		}()
 
@@ -445,7 +460,7 @@ func TestIntegrationCurrentState(t *testing.T) {
 	pr, pw := io.Pipe()
 	done := make(chan struct{})
 	go func() {
-		proxy.Listen(pr)
+		proxy.handleIncomingEvents(pr)
 		close(done)
 	}()
 
