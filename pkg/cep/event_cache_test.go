@@ -202,3 +202,26 @@ func TestEventCache_ClockClassResourceIncludesInterface(t *testing.T) {
 	assert.Equal(t, "/cluster/node/worker-0/ens2f0/master/clock-class", event.Data.Values[0].Resource)
 	assert.Equal(t, int64(6), event.Data.Values[0].Value)
 }
+
+func TestEventCacheHoldoverClassCurrentState(t *testing.T) {
+	cache := NewEventCache("worker-0")
+	var previous uint8
+	for _, class := range []uint8{7, 140, 140, 248} {
+		updated := cache.Update(ipc.Message{
+			Version: ipc.Version, Type: ipc.TypeClockClass, Profile: testProfile, IFace: testIFace,
+			Values: ipc.ClockClassValue{ClockClass: class},
+		})
+		if class == previous {
+			require.Nil(t, updated)
+		} else {
+			require.NotNil(t, updated)
+		}
+		previous = class
+		cached, ok := cache.Get(ipc.TypeClockClass)
+		require.True(t, ok)
+		current, ok := cache.GetBySource(cached.Source)
+		require.True(t, ok)
+		require.Equal(t, int64(class), current.Data.Values[0].Value)
+		require.Equal(t, "/cluster/node/worker-0/ens2f0/master/clock-class", current.Data.Values[0].Resource)
+	}
+}

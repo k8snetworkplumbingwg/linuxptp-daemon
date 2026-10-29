@@ -13,6 +13,25 @@ const (
 	statsTestEns1f0Iface = "ens1f0"
 )
 
+func TestDPLLQualityChangesWithoutLockChange(t *testing.T) {
+	data := &event.Data{ProcessName: event.DPLL}
+	for _, sample := range []struct {
+		timestamp int64
+		outOfSpec bool
+		expected  bool
+	}{{10, false, false}, {10, true, true}, {9, false, true}, {11, true, true}} {
+		data.AddEvent(event.Event{
+			Source: event.DPLL, IFace: statsTestEns1f0Iface, Time: sample.timestamp,
+			Data: &event.DPLLData{State: event.PTP_HOLDOVER, OutOfSpec: sample.outOfSpec, LeadingSource: true},
+		})
+		data.UpdateState()
+		detail := data.GetDataDetails(statsTestEns1f0Iface)
+		assert.Equal(t, sample.expected, detail.OutOfSpec)
+		assert.Equal(t, event.PTP_HOLDOVER, data.State)
+		assert.False(t, detail.HasOffset)
+	}
+}
+
 func TestWorstOfState(t *testing.T) {
 	tests := []struct {
 		name     string
