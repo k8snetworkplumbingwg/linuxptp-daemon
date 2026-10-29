@@ -19,8 +19,8 @@ func TestLinearHoldoverModelUnitsAndRounding(t *testing.T) {
 		{0, 0}, {1499 * time.Millisecond, 1}, {1500 * time.Millisecond, 2},
 		{100 * time.Second, 100}, {100100 * time.Millisecond, 100}, {101 * time.Second, 101},
 	} {
-		offset, err := model.Estimate(sample.elapsed)
-		require.NoError(t, err)
+		offset, estimateErr := model.Estimate(sample.elapsed)
+		require.NoError(t, estimateErr)
 		require.Equal(t, sample.offset, offset)
 	}
 }

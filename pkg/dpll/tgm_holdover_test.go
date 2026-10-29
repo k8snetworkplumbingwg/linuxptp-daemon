@@ -211,10 +211,11 @@ func TestTGMRejectsStaleModelResults(t *testing.T) {
 				case <-time.After(time.Second):
 					t.Fatal("stale evaluation did not finish")
 				}
-				if action == "replace" {
+				switch action {
+				case "replace":
 					require.Equal(t, event.PTP_HOLDOVER, dpll.state)
 					require.True(t, dpll.inSpec)
-				} else if action == "recover" {
+				case "recover":
 					require.Equal(t, event.PTP_LOCKED, dpll.state)
 				}
 			})

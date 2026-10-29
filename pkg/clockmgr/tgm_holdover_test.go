@@ -14,8 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const holdoverInterfaceLabel = "iface"
+
 func TestTGMHoldoverClassOnlyMetricsAndIPC(t *testing.T) {
-	stateGauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_tgm_state"}, []string{"process", "node", "iface"})
+	stateGauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_tgm_state"}, []string{processLabel, nodeLabel, holdoverInterfaceLabel})
 	classGauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_tgm_class"}, []string{"process", "node", "config"})
 	cache := ipc.NewCache(64)
 	manager := Init("test-node", make(chan event.Event, 64), nil, stateGauge, classGauge, cache)

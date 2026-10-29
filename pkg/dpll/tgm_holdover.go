@@ -16,6 +16,7 @@ func (d *DpllConfig) usesHoldoverModel() bool {
 		d.dependsOn[0] == event.GNSS && !d.hasFlag(FlagOnlyPhaseStatus)
 }
 
+// ReplaceHoldoverModel swaps the estimator without resetting the active episode.
 func (d *DpllConfig) ReplaceHoldoverModel(model HoldoverModel) error {
 	if model == nil {
 		return fmt.Errorf("nil holdover model")

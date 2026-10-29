@@ -151,7 +151,7 @@ func (c *GM) announceClockClassIfChanged(ev event.Event, clockState SyncState) {
 			uint8(c.announcedClockClass), uint8(clockState.ClockClass),
 			uint8(c.announcedClockAccuracy), uint8(clockAccuracy))
 		c.syncState.ClockAccuracy = clockAccuracy
-		clockClass, _, err := c.announceClockClass()
+		clockClass, err := c.announceClockClass()
 		debug.UpdateClockClass(uint8(clockState.ClockClass))
 		if err != nil {
 			c.lastTraceabilityCheck = time.Time{}
@@ -161,7 +161,7 @@ func (c *GM) announceClockClassIfChanged(ev event.Event, clockState SyncState) {
 			clockClassOut := utils.GetClockClassLogMessage(event.PTP4lProcessName, c.cfgName, clockClass)
 			fmt.Printf("%s", clockClassOut)
 		}
-	} else if _, _, err := c.announceClockClass(); err != nil {
+	} else if _, err := c.announceClockClass(); err != nil {
 		c.lastTraceabilityCheck = time.Time{}
 		glog.Errorf("error verifying clock traceability: %v", err)
 	}
@@ -238,12 +238,12 @@ func (c *GM) updateClockClass(clockClass fbprotocol.ClockClass) {
 	})
 }
 
-func (c *GM) announceClockClass() (clockClass fbprotocol.ClockClass, clockAccuracy fbprotocol.ClockAccuracy, err error) {
+func (c *GM) announceClockClass() (clockClass fbprotocol.ClockClass, err error) {
 	pmcCfgName := strings.Replace(c.cfgName, event.TS2PHCProcessName, event.PTP4lProcessName, 1)
 	g, err := c.pmcClient.GetGMSettings(pmcCfgName)
 	if err != nil {
 		glog.Errorf("failed to get current GRANDMASTER_SETTINGS_NP: %s", err)
-		return clockClass, clockAccuracy, err
+		return clockClass, err
 	}
 	previous := g
 	g.TimePropertiesDS.PtpTimescale = true
@@ -286,7 +286,7 @@ func (c *GM) announceClockClass() (clockClass fbprotocol.ClockClass, clockAccura
 		c.announcedClockClass = g.ClockQuality.ClockClass
 		c.announcedClockAccuracy = g.ClockQuality.ClockAccuracy
 	}
-	return g.ClockQuality.ClockClass, g.ClockQuality.ClockAccuracy, err
+	return g.ClockQuality.ClockClass, err
 }
 
 func (c *GM) status() string {
