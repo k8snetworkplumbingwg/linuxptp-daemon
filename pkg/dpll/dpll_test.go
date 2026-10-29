@@ -48,6 +48,12 @@ type DpllTestCase struct {
 	desc                      string
 }
 
+type constantGNSSHoldoverModel struct{}
+
+func (constantGNSSHoldoverModel) Estimate(time.Duration) (int64, error) {
+	return 6, nil
+}
+
 // mode 1: "manual",	2: "automatic", 3: "holdover", 4: "freerun",
 // 1: "unlocked", 2: "locked", 3: "locked-ho-acquired", 4: "holdover"
 func getTestData(source event.EventSource, pinType uint32) []DpllTestCase {
@@ -197,26 +203,39 @@ func TestDpllConfig_GNSS(t *testing.T) {
 			GMThreshold:     config.Threshold{Max: 100}, // non-zero Max: isOffsetInRange now does abs(offset) < Max (strict)
 			InitialPTPState: event.PTP_FREERUN,
 		}, &ptpv1.PtpProfile{})
+	assert.NoError(t, d.ReplaceHoldoverModel(constantGNSSHoldoverModel{}))
+	t.Cleanup(func() { assert.NoError(t, d.Stop()) })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go eventProcessor.ProcessEvents(ctx)
 
 	fmt.Println("starting Mock replies ")
 	for _, tt := range getTestData(event.GNSS, 2) {
+		if tt.reply.LockStatus == dpll.DPLL_HOLDOVER {
+			tt.expectedIntermediateState = event.PTP_HOLDOVER
+			tt.expectedState = event.PTP_HOLDOVER
+			tt.expectedInSpecState = false
+		}
+		d.Lock()
 		d.SetSourceLost(tt.sourceLost)
 		d.SetPhaseOffset(tt.expectedPhaseOffset)
-		dpll.MockDpllReplies <- tt.reply
-		time.Sleep(10 * time.Millisecond)
 		d.SetDependsOn([]event.EventSource{tt.source})
+		d.Unlock()
+		dpll.MockDpllReplies <- tt.reply
 		d.MonitorDpllMock()
-		time.Sleep(10 * time.Millisecond)
+		assert.Eventually(t, func() bool {
+			d.RLock()
+			defer d.RUnlock()
+			return d.InSpec() == tt.expectedInSpecState
+		}, time.Second, time.Millisecond)
+		d.RLock()
 		assert.Equal(t, tt.expectedIntermediateState, d.PTPState(), tt.desc)
-		time.Sleep(tt.sleep * time.Second)
 		assert.Equal(t, tt.expectedPhaseStatus, d.PhaseStatus(), tt.desc)
 		assert.Equal(t, tt.expectedFrequencyStatus, d.FrequencyStatus(), tt.desc)
 		assert.Equal(t, tt.expectedPhaseOffset/1000000, d.PhaseOffset(), tt.desc)
 		assert.Equal(t, tt.expectedState, d.PTPState(), tt.desc)
 		assert.Equal(t, tt.expectedInSpecState, d.InSpec())
+		d.RUnlock()
 	}
 }
 

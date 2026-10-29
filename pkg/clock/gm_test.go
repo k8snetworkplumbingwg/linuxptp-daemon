@@ -320,7 +320,7 @@ func TestGMClock_AnnounceClockClassIfChanged(t *testing.T) {
 		assert.Equal(t, fbprotocol.ClockAccuracyUnknown, setCalls[0].GMSettings.ClockQuality.ClockAccuracy)
 	})
 
-	t.Run("no PMC call when class and accuracy unchanged", func(t *testing.T) {
+	t.Run("repairs stale settings when class and accuracy unchanged", func(t *testing.T) {
 		gm, _, pmcMock := newTestGMClock()
 		gm.announcedClockClass = fbprotocol.ClockClass6
 		gm.announcedClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
@@ -329,7 +329,7 @@ func TestGMClock_AnnounceClockClassIfChanged(t *testing.T) {
 			event.Event{Source: event.GNSS, Data: &event.GNSSData{}},
 			SyncState{State: event.PTP_LOCKED, ClockClass: fbprotocol.ClockClass6},
 		)
-		assert.Empty(t, pmcMock.SnapshotSetCalls())
+		assert.Len(t, pmcMock.SnapshotSetCalls(), 1)
 	})
 
 	t.Run("DPLL holdover computes accuracy from offset", func(t *testing.T) {
