@@ -134,7 +134,16 @@ type DpllConfig struct {
 	flags Flag
 
 	// devices holds the cache of DPLL device replies
-	devices []*nl.DoDeviceGetReply
+	devices            []*nl.DoDeviceGetReply
+	holdoverModel      HoldoverModel
+	modelRevision      uint64
+	holdoverGeneration uint64
+	holdoverAcquired   bool
+	holdoverStart      time.Time
+	holdoverCancel     chan struct{}
+	holdoverWake       chan struct{}
+	modeledOffset      int64
+	modelEvaluationMu  sync.Mutex
 }
 
 func (d *DpllConfig) InSpec() bool {
@@ -309,8 +318,19 @@ func (d *DpllConfig) IFace() string {
 func (d *DpllConfig) Stop() error {
 	glog.Infof("stopping %s", d.Name())
 	d.Lock()
+	if d.usesHoldoverModel() {
+		d.endModeledHoldover()
+		d.holdoverAcquired = false
+	}
 	if d.processState == process.Created || d.processState == process.Stopping || d.processState == process.Stopped || d.processState == process.Dead {
+		waitForModel := d.processState == process.Created && d.usesHoldoverModel()
+		if waitForModel {
+			d.processState = process.Stopped
+		}
 		d.Unlock()
+		if waitForModel {
+			d.wg.Wait()
+		}
 		return nil
 	}
 	d.processState = process.Stopping
@@ -416,13 +436,10 @@ func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxIn
 ) *DpllConfig {
 	glog.Infof("Calling NewDpll with clockId %x, localMaxHoldoverOffSet=%d, localHoldoverTimeout=%d, maxInSpecOffset=%d, iface=%s, phase offset pin filter=%v", clockId, localMaxHoldoverOffSet, localHoldoverTimeout, maxInSpecOffset, iface, phaseOffsetPinFilter)
 	d := &DpllConfig{
-		clockId:                clockId,
-		LocalMaxHoldoverOffSet: localMaxHoldoverOffSet,
-		LocalHoldoverTimeout:   localHoldoverTimeout,
-		MaxInSpecOffset:        maxInSpecOffset,
-		slope: func() float64 {
-			return float64(localMaxHoldoverOffSet) / float64(localHoldoverTimeout)
-		}(),
+		clockId:                  clockId,
+		LocalMaxHoldoverOffSet:   localMaxHoldoverOffSet,
+		LocalHoldoverTimeout:     localHoldoverTimeout,
+		MaxInSpecOffset:          maxInSpecOffset,
 		timer:                    0,
 		state:                    event.PTP_FREERUN,
 		iface:                    iface,
@@ -448,7 +465,10 @@ func NewDpll(clockId uint64, localMaxHoldoverOffSet, localHoldoverTimeout, maxIn
 	}
 
 	// time to reach maxnInSpecOffset
-	d.timer = int64(math.Round(float64(d.MaxInSpecOffset) / d.slope))
+	if !d.usesHoldoverModel() && localHoldoverTimeout > 0 && localMaxHoldoverOffSet > 0 {
+		d.slope = float64(localMaxHoldoverOffSet) / float64(localHoldoverTimeout)
+		d.timer = int64(math.Round(float64(d.MaxInSpecOffset) / d.slope))
+	}
 	glog.Infof("slope %f ns/s, in spec offset %d ns, in spec timer %d /sec Max timer %d /s",
 		d.slope, d.MaxInSpecOffset, d.timer, d.LocalHoldoverTimeout)
 	if d.apiType != MOCK { // use mock type unit test DPLL
@@ -756,6 +776,10 @@ func (d *DpllConfig) MonitorDpll() {
 
 // stateDecision
 func (d *DpllConfig) stateDecision() {
+	if d.usesHoldoverModel() {
+		d.modeledStateDecision()
+		return
+	}
 	dpllStatus := d.getDpllState()
 
 	switch dpllStatus {
