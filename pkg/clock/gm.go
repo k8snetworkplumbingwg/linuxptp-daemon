@@ -103,7 +103,6 @@ func (c *GM) AddEvent(ev event.Event) SyncState {
 	if ev.Source == event.PMC {
 		return c.syncState
 	}
-
 	var accepted bool
 	if ev, accepted = c.interpretDPLL(ev, true); !accepted {
 		return c.syncState
@@ -164,6 +163,13 @@ func (c *GM) announceClockClassIfChanged(ev event.Event, clockState SyncState) {
 	}
 	switch clockState.ClockClass {
 	case fbprotocol.ClockClass7, protocol.ClockClassOutOfSpec:
+		for _, data := range c.data {
+			if data.ProcessName == event.DPLL {
+				if detail := data.GetDataDetails(clockState.LeadingIFace); detail != nil && detail.ModeledHoldover {
+					clockAccuracy = fbprotocol.ClockAccuracyUnknown
+				}
+			}
+		}
 	case fbprotocol.ClockClass6:
 		clockAccuracy = fbprotocol.ClockAccuracyNanosecond100
 	default:
@@ -343,7 +349,7 @@ func (c *GM) updateState() SyncState {
 	c.syncState.SourceLost = syncSrcLost
 	c.syncState.LeadingIFace = leadingInterface
 
-	var outOfSpec, frequencyTraceable bool
+	var outOfSpec bool
 	if c.data != nil {
 		for _, d := range c.data {
 			switch d.ProcessName {
@@ -354,7 +360,6 @@ func (c *GM) updateState() SyncState {
 				}
 				if dd := d.GetDataDetails(leadingInterface); dd != nil {
 					outOfSpec = dd.OutOfSpec
-					frequencyTraceable = dd.FrequencyTraceable
 				}
 			case event.GNSS:
 				gnssState = d.State
@@ -380,15 +385,14 @@ func (c *GM) updateState() SyncState {
 	switch dpllState {
 	case event.PTP_FREERUN:
 		c.syncState.State = dpllState
-		if outOfSpec && frequencyTraceable {
-			c.syncState.ClockClass = protocol.ClockClassOutOfSpec
-		} else {
-			c.syncState.ClockClass = protocol.ClockClassFreerun
-		}
+		c.syncState.ClockClass = protocol.ClockClassFreerun
 		c.syncState.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
 	case event.PTP_HOLDOVER:
 		c.syncState.State = dpllState
 		c.syncState.ClockClass = fbprotocol.ClockClass7
+		if outOfSpec {
+			c.syncState.ClockClass = protocol.ClockClassOutOfSpec
+		}
 	case event.PTP_LOCKED, event.PTP_NOTSET:
 		switch gnssState {
 		case event.PTP_LOCKED:

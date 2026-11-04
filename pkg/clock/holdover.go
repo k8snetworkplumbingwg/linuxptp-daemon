@@ -21,14 +21,13 @@ func dpllOffsetWithin(offset *int64, limit uint64) bool {
 	return offset == nil || math.Abs(float64(*offset)) <= float64(limit)
 }
 
-func (quality *holdoverQuality) applyLegacyGNSSHoldover(data *event.DPLLData) bool {
+func (quality *holdoverQuality) applyGMHoldover(data *event.DPLLData) bool {
 	observation := data.Holdover
-	terminal := observation.Elapsed >= time.Duration(observation.TimeoutSeconds)*time.Second ||
-		(!data.FrequencyTraceable && data.Offset != nil && uint64(observation.PeakErrorNS) > observation.InSpecErrorNS)
-	if observation.Valid && data.Offset != nil {
-		data.Offset = utils.ToPtr(observation.EstimatedErrorNS)
+	if observation.Elapsed > time.Duration(observation.TimeoutSeconds)*time.Second || uint64(observation.PeakErrorNS) > observation.InSpecErrorNS {
+		quality.out = true
 	}
-	return terminal
+	data.ModeledHoldover = observation.Active
+	return observation.MaxErrorNS == 0 || observation.TimeoutSeconds > uint64(math.MaxInt64/int64(time.Second)) || uint64(observation.PeakErrorNS) > observation.MaxErrorNS
 }
 
 func (quality *holdoverQuality) applyLegacyHoldover(data *event.DPLLData) bool {
@@ -51,7 +50,7 @@ func (quality *holdoverQuality) applyLegacyHoldover(data *event.DPLLData) bool {
 	return terminal
 }
 
-func (c *BaseClock) interpretDPLL(ev event.Event, _ bool) (event.Event, bool) {
+func (c *BaseClock) interpretDPLL(ev event.Event, gm bool) (event.Event, bool) {
 	data, ok := ev.Data.(*event.DPLLData)
 	if !ok || ev.Source != event.DPLL || data.Holdover == nil {
 		return ev, true
@@ -76,18 +75,19 @@ func (c *BaseClock) interpretDPLL(ev event.Event, _ bool) (event.Event, bool) {
 	interpreted := *data
 	interpreted.State = observation.HardwareState
 	interpreted.OutOfSpec, interpreted.ModeledHoldover = false, false
+	modeledGM := gm && observation.Reference == event.GNSS && !observation.PhaseOnly
 	leadingModel := (observation.Reference == event.GNSS || observation.Reference == event.PTP4l) && !observation.PhaseOnly
 	switch observation.HardwareState {
 	case event.PTP_LOCKED:
 		quality.out, quality.freerun = false, false
-		if !dpllOffsetWithin(data.Offset, observation.MaxErrorNS) {
+		if !dpllOffsetWithin(data.Offset, observation.MaxErrorNS) && (!modeledGM || (observation.TimeoutSeconds != 0 && observation.MaxErrorNS != 0)) {
 			interpreted.State = event.PTP_FREERUN
 			interpreted.OutOfSpec = true
 		}
 	case event.PTP_HOLDOVER:
 		terminal := !leadingModel || !observation.Acquired || !dpllOffsetWithin(observation.AcquisitionOffset, observation.MaxErrorNS) || observation.TimeoutSeconds == 0 || observation.ErrorObserved || observation.Error != "" || observation.Elapsed < 0 || observation.PeakErrorNS < 0 || observation.EstimatedErrorNS < 0
-		if observation.Reference == event.GNSS {
-			terminal = quality.applyLegacyGNSSHoldover(&interpreted) || terminal
+		if modeledGM {
+			terminal = quality.applyGMHoldover(&interpreted) || terminal
 		} else {
 			terminal = quality.applyLegacyHoldover(&interpreted) || terminal
 		}
@@ -101,7 +101,7 @@ func (c *BaseClock) interpretDPLL(ev event.Event, _ bool) (event.Event, bool) {
 		interpreted.State = event.PTP_FREERUN
 		interpreted.OutOfSpec = true
 	}
-	if interpreted.State == event.PTP_FREERUN && data.Offset != nil {
+	if !modeledGM && interpreted.State == event.PTP_FREERUN && data.Offset != nil {
 		interpreted.Offset = utils.ToPtr[int64](FaultyPhaseOffset)
 	}
 	interpreted.SourceLost = interpreted.State != event.PTP_LOCKED

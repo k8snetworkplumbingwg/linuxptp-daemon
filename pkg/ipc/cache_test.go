@@ -32,6 +32,19 @@ func TestCacheSendAndDedup(t *testing.T) {
 	assert.False(t, c.Send(updated), "same changed values should be suppressed")
 }
 
+func TestCacheHoldoverClassChangesAndSnapshot(t *testing.T) {
+	cache := NewCache(16)
+	message := Message{Type: TypeClockClass, Profile: testProfile, IFace: testIFace}
+	for _, class := range []uint8{7, 140, 248} {
+		message.Values = ClockClassValue{ClockClass: class}
+		require.True(t, cache.Send(message))
+		require.False(t, cache.Send(message))
+		require.Len(t, cache.Snapshot(), 1)
+		require.Equal(t, class, cache.Snapshot()[0].Values.(ClockClassValue).ClockClass)
+	}
+	require.Len(t, cache.Out(), 3)
+}
+
 func TestCacheSendDifferentKeys(t *testing.T) {
 	c := NewCache(10)
 
