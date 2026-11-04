@@ -1,5 +1,24 @@
 # Shared holdover estimation
 
+## Observation and interpretation boundary
+
+DPLL now publishes immutable raw hardware state, measured/nil offset and explicit
+nonnegative modeled error independently. Its common episode worker owns elapsed
+time, model evaluation, revision/generation fencing and cancellation. Receiving
+clocks interpret accepted observations before aggregation; manager metrics/logs
+use the accepted clock reporting view and reject retired producers/episodes.
+
+This architectural boundary deliberately retains old source-driven policies:
+GNSS error strictly above I ends holdover when frequency is not traceable; a
+separate F crossing does not end legacy GNSS holdover. Nil measurements skip
+offset thresholds. Timeout remains a hard exit, including at equality. Old
+class mapping stays HOLDOVER7 and traceable out-of-spec FREERUN140, otherwise248.
+The receiving clock still reports the legacy estimate/fault offset while the
+producer retains the distinct raw measurement. PTP-leading TBC keeps135/165,
+its existing latch, hardware fault handling and hard timeout. Runtime model
+replacement is GNSS T-GM-only and retains episode origin/cumulative facts.
+No new T-GM quality policy, Unknown override or traceability matrix is enabled.
+
 GM PMC settings reconciliation runs outside the clock manager event lock, with
 one cancellable worker per owner, latest-request coalescing and retry backoff.
 Removal, replacement and shutdown cancel first and join outside the event lock.

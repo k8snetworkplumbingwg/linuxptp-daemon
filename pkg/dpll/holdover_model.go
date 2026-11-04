@@ -15,7 +15,7 @@ type HoldoverModel interface {
 // Option configures a DPLL instance before it starts monitoring.
 type Option func(*DpllConfig)
 
-// WithHoldoverModel supplies an immutable estimator to a DPLL holdover worker.
+// WithHoldoverModel supplies an immutable estimator to a DPLL observation worker.
 func WithHoldoverModel(model HoldoverModel) (Option, error) {
 	if err := validateHoldoverModel(model); err != nil {
 		return nil, err
@@ -51,6 +51,7 @@ func defaultHoldoverModel(maxOffsetNS, timeoutSeconds uint64) linearHoldoverMode
 func (d *DpllConfig) ensureHoldoverModel() {
 	if d.holdoverModel == nil {
 		d.holdoverModel = defaultHoldoverModel(d.LocalMaxHoldoverOffSet, d.LocalHoldoverTimeout)
+		d.modelRevision++
 	}
 }
 

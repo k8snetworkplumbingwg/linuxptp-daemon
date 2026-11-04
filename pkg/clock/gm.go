@@ -104,6 +104,11 @@ func (c *GM) AddEvent(ev event.Event) SyncState {
 		return c.syncState
 	}
 
+	var accepted bool
+	if ev, accepted = c.interpretDPLL(ev, true); !accepted {
+		return c.syncState
+	}
+
 	d := c.GetData(ev.Source)
 	d.AddEvent(ev)
 	d.UpdateState()

@@ -77,7 +77,7 @@ func TestGMReconciliationDoesNotBlockManagerLifecycle(t *testing.T) {
 				awaitGM(t, client.entered)
 				base.Time++
 				if action == "supersede" {
-					base.Data = &event.DPLLData{State: event.PTP_HOLDOVER, LeadingSource: true, FrequencyTraceable: true}
+					base.Data = &event.DPLLData{State: event.PTP_HOLDOVER, LeadingSource: true, FrequencyTraceable: true, ModeledHoldover: true}
 				}
 				processed := make(chan struct{})
 				go func() { manager.ProcessEvent(base); close(processed) }()

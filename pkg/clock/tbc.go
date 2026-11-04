@@ -163,6 +163,10 @@ func (c *TBC) SourceQualification(cfg string) (event.SourceQualification, bool) 
 
 // AddEvent processes an event and updates clock state.
 func (c *TBC) AddEvent(ev event.Event) SyncState {
+	var accepted bool
+	if ev, accepted = c.interpretDPLL(ev, false); !accepted {
+		return c.syncState
+	}
 	switch ev.Source {
 	case event.SYNCE:
 		c.processSyncE(ev)
@@ -740,14 +744,26 @@ func (c *TBC) getCalculatedHoldoverOffset() int64 {
 
 func (c *TBC) freeRunCondition() bool {
 	if c.leadingClockData.toFreeRunThreshold == 0 {
-		glog.Info("Leading clock free-run condition is pending initialization")
-		return true
+		var detail *event.DataDetails
+		for _, data := range c.data {
+			if data.ProcessName == event.DPLL {
+				detail = data.GetDataDetails(c.syncState.LeadingIFace)
+				break
+			}
+		}
+		if detail == nil || detail.Holdover == nil {
+			glog.Info("Leading clock free-run condition is pending initialization")
+			return true
+		}
 	}
 	for _, d := range c.data {
 		switch d.ProcessName {
 		case event.DPLL:
 			for _, dd := range d.Details {
 				if dd.IFace == c.syncState.LeadingIFace {
+					if dd.Holdover != nil && dd.State == event.PTP_FREERUN {
+						return true
+					}
 					if math.Abs(float64(dd.Offset)) > float64(c.leadingClockData.toFreeRunThreshold) {
 						glog.Infof("free-run condition on DPLL %s", dd.IFace)
 						return true
@@ -787,6 +803,9 @@ func (c *TBC) inSpecCondition() bool {
 		if d.ProcessName == event.DPLL {
 			for _, dd := range d.Details {
 				if dd.IFace == c.syncState.LeadingIFace {
+					if dd.Holdover != nil {
+						return !dd.OutOfSpec
+					}
 					if math.Abs(float64(dd.Offset)) > float64(c.leadingClockData.MaxInSpecOffset) {
 						glog.Infof("out-of-spec condition on DPLL ", dd.IFace)
 						return false

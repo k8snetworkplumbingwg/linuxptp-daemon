@@ -54,6 +54,17 @@ type ClockManager struct {
 	// are replaced so a slow consumer cannot block clock processing.
 	statsUpdates   chan process.EventStats
 	osClockConfigs map[string]struct{}
+	retiredDPLL    map[dpllOwner]dpllFence
+}
+
+type dpllOwner struct {
+	config string
+	iface  string
+}
+
+type dpllFence struct {
+	producer uint64
+	episode  uint64
 }
 
 // ConfigureSourceQualification sets policy for the active upstream PTP input of
@@ -179,6 +190,7 @@ func Init(nodeName string, processChannel chan event.Event, offsetMetric *promet
 		syncStatusCh:     make(chan struct{}, 1),
 		statsUpdates:     make(chan process.EventStats, 1),
 		osClockConfigs:   make(map[string]struct{}),
+		retiredDPLL:      make(map[dpllOwner]dpllFence),
 	}
 	m.publishStats()
 	return m
@@ -202,6 +214,7 @@ func (m *ClockManager) AddClock(clk clock.Clock) error {
 	var retired []<-chan struct{}
 	for _, cfg := range clk.ConfigNames() {
 		if previous := m.clocks[cfg]; previous != nil && previous != clk {
+			m.retireDPLL(previous)
 			if owner, ok := previous.(interface{ CancelPMC() <-chan struct{} }); ok {
 				retired = append(retired, owner.CancelPMC())
 				for name, candidate := range m.clocks {
@@ -287,6 +300,9 @@ func (m *ClockManager) RemoveAllClocks() {
 	m.clockLifecycleMu.Lock()
 	defer m.clockLifecycleMu.Unlock()
 	m.clockManagementMu.Lock()
+	for _, clk := range m.clocks {
+		m.retireDPLL(clk)
+	}
 	done := m.cancelPMCWorkers()
 	m.osClock.Reset()
 
@@ -302,6 +318,30 @@ func (m *ClockManager) RemoveAllClocks() {
 	}
 
 	debug.ClearState()
+}
+
+func (m *ClockManager) retireDPLL(clk clock.Clock) {
+	if m.retiredDPLL == nil {
+		m.retiredDPLL = make(map[dpllOwner]dpllFence)
+	}
+	for _, cfg := range clk.ConfigNames() {
+		for _, data := range clk.ProcessData() {
+			if data.ProcessName != event.DPLL {
+				continue
+			}
+			for _, detail := range data.Details {
+				observation := detail.Holdover
+				if observation == nil {
+					continue
+				}
+				key := dpllOwner{config: cfg, iface: detail.IFace}
+				previous := m.retiredDPLL[key]
+				if observation.ProducerID > previous.producer || (observation.ProducerID == previous.producer && observation.Episode > previous.episode) {
+					m.retiredDPLL[key] = dpllFence{producer: observation.ProducerID, episode: observation.Episode}
+				}
+			}
+		}
+	}
 }
 
 func (m *ClockManager) cancelPMCWorkers() []<-chan struct{} {
@@ -479,13 +519,29 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 		return
 	}
 
-	if ev.WriteToLog {
-		if logData := ev.GetLogData(); logData != "" {
+	prevState := clk.GetState()
+	if data, ok := ev.Data.(*event.DPLLData); ok && data.Holdover != nil {
+		fence, retired := m.retiredDPLL[dpllOwner{config: ev.CfgName, iface: ev.IFace}]
+		observation := data.Holdover
+		if retired && (observation.ProducerID < fence.producer || (observation.ProducerID == fence.producer && observation.Episode <= fence.episode)) {
+			return
+		}
+	}
+	clockState := clk.AddEvent(ev)
+	reported := ev
+	if reporter, ok := clk.(interface {
+		DPLLReport(event.Event) (event.Event, bool)
+	}); ok {
+		var accepted bool
+		if reported, accepted = reporter.DPLLReport(ev); !accepted {
+			return
+		}
+	}
+	if reported.WriteToLog {
+		if logData := reported.GetLogData(); logData != "" {
 			fmt.Printf("%s", logData)
 		}
 	}
-	prevState := clk.GetState()
-	clockState := clk.AddEvent(ev)
 	if prevState != event.PTP_NOTSET && prevState != clockState.State {
 		m.signalSyncStatus()
 	}
@@ -509,7 +565,7 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 	// same class clk.ClockClass() would, so this is equivalent for them.
 	m.updateClockClassMetrics(lookupName, clockState.ClockClass)
 	m.updateHAProfileMetrics(clockState.HAProfileStatus)
-	m.updateMetrics(ev)
+	m.updateMetrics(reported)
 	// A clock (E1) transition may move the derived E3 os_clock_state.
 	m.emitOSClockState()
 	m.publishStats()
