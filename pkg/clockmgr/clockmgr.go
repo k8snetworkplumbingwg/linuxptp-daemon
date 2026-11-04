@@ -30,6 +30,7 @@ const (
 
 // ClockManager ... event handler to process events
 type ClockManager struct {
+	clockLifecycleMu  sync.Mutex
 	clockManagementMu sync.Mutex
 	nodeName          string
 	events            chan event.Event
@@ -193,8 +194,28 @@ func (m *ClockManager) ConfigureOSClockFilter(cfg clock.OSClockFilterConfig) {
 // AddClock takes ownership of a given Clock
 // pmcClient may be nil for clock types that do not use PMC (e.g. BC, OC).
 func (m *ClockManager) AddClock(clk clock.Clock) error {
+	m.clockLifecycleMu.Lock()
+	defer m.clockLifecycleMu.Unlock()
 	clk.SetIPC(m.sendIPC)
 	clk.SetEventLoopbackFunc(m.sendEvent)
+	m.clockManagementMu.Lock()
+	var retired []<-chan struct{}
+	for _, cfg := range clk.ConfigNames() {
+		if previous := m.clocks[cfg]; previous != nil && previous != clk {
+			if owner, ok := previous.(interface{ CancelPMC() <-chan struct{} }); ok {
+				retired = append(retired, owner.CancelPMC())
+				for name, candidate := range m.clocks {
+					if candidate == previous {
+						delete(m.clocks, name)
+					}
+				}
+			}
+		}
+	}
+	m.clockManagementMu.Unlock()
+	for _, done := range retired {
+		<-done
+	}
 	m.clockManagementMu.Lock()
 	defer m.clockManagementMu.Unlock()
 	clk.SetOsClock(&m.osClock)
@@ -263,7 +284,10 @@ func (m *ClockManager) snapshotStats(requests []process.StatsRequest) process.Ev
 
 // RemoveAllClocks tears down all registered clocks and cleans up associated state.
 func (m *ClockManager) RemoveAllClocks() {
+	m.clockLifecycleMu.Lock()
+	defer m.clockLifecycleMu.Unlock()
 	m.clockManagementMu.Lock()
+	done := m.cancelPMCWorkers()
 	m.osClock.Reset()
 
 	for cfgName := range m.clocks {
@@ -273,8 +297,32 @@ func (m *ClockManager) RemoveAllClocks() {
 	m.osClockConfigs = make(map[string]struct{})
 	m.publishStats()
 	m.clockManagementMu.Unlock()
+	for _, stopped := range done {
+		<-stopped
+	}
 
 	debug.ClearState()
+}
+
+func (m *ClockManager) cancelPMCWorkers() []<-chan struct{} {
+	var done []<-chan struct{}
+	for _, clk := range m.clocks {
+		if owner, ok := clk.(interface{ CancelPMC() <-chan struct{} }); ok {
+			done = append(done, owner.CancelPMC())
+		}
+	}
+	return done
+}
+
+func (m *ClockManager) stopPMCWorkers() {
+	m.clockLifecycleMu.Lock()
+	defer m.clockLifecycleMu.Unlock()
+	m.clockManagementMu.Lock()
+	done := m.cancelPMCWorkers()
+	m.clockManagementMu.Unlock()
+	for _, stopped := range done {
+		<-stopped
+	}
 }
 
 // GetClock returns the Clock registered for the given config name, or nil.
@@ -367,6 +415,7 @@ func (m *ClockManager) emitOSClockState() event.PTPState {
 
 // ProcessEvents loops until
 func (m *ClockManager) ProcessEvents(ctx context.Context) {
+	defer m.stopPMCWorkers()
 	glog.Info("starting state monitoring...")
 	for {
 		select {

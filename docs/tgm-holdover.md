@@ -1,5 +1,11 @@
 # Shared holdover estimation
 
+GM PMC settings reconciliation runs outside the clock manager event lock, with
+one cancellable worker per owner, latest-request coalescing and retry backoff.
+Removal, replacement and shutdown cancel first and join outside the event lock.
+This transport/lifecycle refactor retains the existing class, measured-offset
+accuracy and outgoing traceability policy; it does not enable new T-GM states.
+
 `dpll.HoldoverModel.Estimate(time.Duration) (int64, error)` estimates a
 nonnegative error in nanoseconds independently of clock type. The default
 rounded linear estimator uses the resolved maximum offset divided by timeout
