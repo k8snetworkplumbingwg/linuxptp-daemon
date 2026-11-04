@@ -1,6 +1,7 @@
 package pmc
 
 import (
+	"context"
 	"sync"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
@@ -44,6 +45,29 @@ type MockClient struct {
 }
 
 var _ Client = (*MockClient)(nil)
+
+// SetGMSettingsResponse changes canned responses safely while a GM worker runs.
+func (m *MockClient) SetGMSettingsResponse(settings protocol.GrandmasterSettings, getErr, setErr error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GMSettingsResult, m.GMSettingsErr, m.SetGMSettingsErr = settings, getErr, setErr
+}
+
+// GetGMSettingsContext implements GMSettingsClient without blocking I/O.
+func (m *MockClient) GetGMSettingsContext(ctx context.Context, cfg string) (protocol.GrandmasterSettings, error) {
+	if err := ctx.Err(); err != nil {
+		return protocol.GrandmasterSettings{}, err
+	}
+	return m.GetGMSettings(cfg)
+}
+
+// SetGMSettingsContext implements GMSettingsClient without blocking I/O.
+func (m *MockClient) SetGMSettingsContext(ctx context.Context, cfg string, settings protocol.GrandmasterSettings) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return m.SetGMSettings(cfg, settings)
+}
 
 // SnapshotGetCalls returns a copy of the recorded getter calls.
 func (m *MockClient) SnapshotGetCalls() []GetCall {

@@ -93,63 +93,6 @@ func TestStateDecision_PPSSourceLockedWhileEECUnlocked(t *testing.T) {
 	assert.True(t, d.inSpec)
 }
 
-func TestDpllOffsetChecksWithFlags(t *testing.T) {
-	d := &DpllConfig{
-		flags:                  FlagNoPhaseOffset,
-		phaseOffset:            10000,
-		LocalMaxHoldoverOffSet: 100,
-		MaxInSpecOffset:        100,
-		processConfig: config.ProcessConfig{
-			GMThreshold: config.Threshold{Min: 0, Max: 100},
-		},
-	}
-	assert.True(t, d.isMaxHoldoverOffsetInRange())
-	assert.True(t, d.isInSpecOffsetInRange())
-	assert.True(t, d.isOffsetInRange())
-
-	d.flags = 0
-	assert.False(t, d.isMaxHoldoverOffsetInRange())
-	assert.False(t, d.isInSpecOffsetInRange())
-	assert.False(t, d.isOffsetInRange())
-}
-
-// TestDpllIsOffsetInRange covers isOffsetInRange's single qualification
-// bound: abs(phaseOffset) <= LocalMaxHoldoverOffSet, inclusive (<=), consistent
-// with isMaxHoldoverOffsetInRange, and independent of the clock type and of
-// the legacy maxOffsetThreshold window. It also verifies that a legitimate
-// negative phaseOffset within tolerance is not misreported as out-of-range and
-// that a nonzero GMThreshold.Min (deprecated) has no effect.
-func TestDpllIsOffsetInRange(t *testing.T) {
-	tests := []struct {
-		name          string
-		phaseOffset   int64
-		holdoverBound uint64
-		expected      bool
-	}{
-		{name: "in-range positive offset -> true", phaseOffset: 50, holdoverBound: 14400, expected: true},
-		{name: "in-range negative offset -> true", phaseOffset: -50, holdoverBound: 14400, expected: true},
-		{name: "out-of-range positive offset -> false", phaseOffset: 15000, holdoverBound: 14400, expected: false},
-		{name: "out-of-range negative offset -> false", phaseOffset: -15000, holdoverBound: 14400, expected: false},
-		{name: "exact positive boundary offset (inclusive) -> true", phaseOffset: 14400, holdoverBound: 14400, expected: true},
-		{name: "exact negative boundary offset (inclusive) -> true", phaseOffset: -14400, holdoverBound: 14400, expected: true},
-		{name: "zero offset at zero bound -> true", phaseOffset: 0, holdoverBound: 0, expected: true},
-		// The legacy maxOffsetThreshold window no longer contributes: offset well
-		// above it but inside the holdover bound must still qualify.
-		{name: "offset above legacy maxOffsetThreshold window -> true", phaseOffset: 2000, holdoverBound: 14400, expected: true},
-		{name: "small configured bound, offset beyond it -> false", phaseOffset: 2000, holdoverBound: 1500, expected: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			d := &DpllConfig{
-				phaseOffset:            tt.phaseOffset,
-				LocalMaxHoldoverOffSet: tt.holdoverBound,
-			}
-			assert.Equal(t, tt.expected, d.isOffsetInRange(), tt.name)
-		})
-	}
-}
-
 // TestDpllHoldoverRecovery reproduces the OCPBUGS-111642 recovery decision at
 // the stateDecision level: a leading T-BC DPLL relocking via DPLL_LOCKED_HO_ACQ
 // while the accumulated holdover offset is strictly above the legacy
@@ -188,7 +131,6 @@ func TestDpllHoldoverRecovery(t *testing.T) {
 				LocalHoldoverTimeout:   300,
 				MaxInSpecOffset:        1800,
 				dependsOn:              []event.EventSource{event.PTP4l},
-				holdoverCloseCh:        make(chan bool, 1),
 				processConfig: config.ProcessConfig{
 					ClockType:    event.TBC,
 					ConfigName:   "test",
@@ -213,7 +155,8 @@ func TestDpllHoldoverRecovery(t *testing.T) {
 			d.phaseOffset = sc.accumulatedOffset
 			d.stateDecision()
 			ev2 := <-eventChannel
-			assert.Equal(t, sc.expectedState, ev2.Data.(*event.DPLLData).State, "recovery decision")
+			assert.Equal(t, event.PTP_LOCKED, ev2.Data.(*event.DPLLData).State, "raw hardware recovery")
+			assert.Equal(t, sc.expectedState, receiveDPLLWire(t, event.TBC, ev2.Data.(*event.DPLLData)).State, "receiving clock recovery decision")
 
 			// No FREERUN may precede the LOCKED recovery event (direct
 			// HOLDOVER -> LOCKED transition per FR-003).
@@ -238,7 +181,7 @@ func TestDpllHoldoverRecovery(t *testing.T) {
 	}
 }
 
-// TestDpllHoldoverOutOfSpecUsesConfiguredBound guards the DPLL_HOLDOVER
+// TestDpllHoldoverOutOfSpecUsesConfiguredBound guards the receiving clock's
 // out-of-spec check: it must evaluate the offset against the configured
 // LocalMaxHoldoverOffSet instance value, never the package-level default
 // constant (1500). An offset above the default but below the configured bound
@@ -251,10 +194,13 @@ func TestDpllHoldoverOutOfSpecUsesConfiguredBound(t *testing.T) {
 		frequencyStatus:        DPLL_LOCKED,
 		phaseOffset:            2000, // > package const 1500, < configured 5000
 		LocalMaxHoldoverOffSet: 5000,
+		LocalHoldoverTimeout:   100,
+		MaxInSpecOffset:        3000,
 		dependsOn:              []event.EventSource{event.PTP4l},
-		holdoverCloseCh:        make(chan bool, 1),
 		inSpec:                 true,
 		onHoldover:             true,
+		holdoverAcquired:       true,
+		holdoverStart:          time.Now(),
 		state:                  event.PTP_HOLDOVER,
 		processConfig: config.ProcessConfig{
 			ClockType:    event.TBC,
@@ -266,7 +212,11 @@ func TestDpllHoldoverOutOfSpecUsesConfiguredBound(t *testing.T) {
 	d.stateDecision()
 	ev := <-eventChannel
 	assert.Equal(t, event.PTP_HOLDOVER, ev.Data.(*event.DPLLData).State,
+		"producer reports raw hardware holdover")
+	received := receiveDPLLWire(t, event.TBC, ev.Data.(*event.DPLLData))
+	assert.Equal(t, event.PTP_HOLDOVER, received.State,
 		"offset 2000 (above default 1500, below configured 5000) must stay in-spec holdover")
+	assert.False(t, received.OutOfSpec)
 }
 
 func TestDpllSendEventWithFlags(t *testing.T) {

@@ -211,6 +211,7 @@ type SourceQualification struct {
 
 // DPLLData is a DPLL status sample. Offset/PhaseStatus/FrequencyStatus are nil when FlagNo* is set.
 type DPLLData struct {
+	Holdover                 *HoldoverObservation
 	State                    PTPState
 	OutOfSpec                bool
 	SourceLost               bool
@@ -226,6 +227,34 @@ type DPLLData struct {
 	MaxInSpecOffset          uint64
 	// HoldoverDisabled is true when the DPLL's LocalHoldoverTimeout is 0.
 	HoldoverDisabled bool
+	ModeledHoldover  bool
+}
+
+// HoldoverObservation contains immutable hardware/model facts, not clock quality.
+// PeakErrorNS and ErrorObserved retain episode history across dropped samples.
+type HoldoverObservation struct {
+	HardwareState     PTPState
+	MeasuredOffset    *int64
+	ProducerID        uint64
+	Sequence          uint64
+	Episode           uint64
+	ModelRevision     uint64
+	EstimateRevision  uint64
+	Reference         EventSource
+	PhaseOnly         bool
+	HardwareSample    bool
+	Acquired          bool
+	AcquisitionOffset *int64
+	Active            bool
+	Elapsed           time.Duration
+	EstimatedErrorNS  int64
+	PeakErrorNS       int64
+	Valid             bool
+	Error             string
+	ErrorObserved     bool
+	TimeoutSeconds    uint64
+	MaxErrorNS        uint64
+	InSpecErrorNS     uint64
 }
 
 func (*DPLLData) eventData() {}
