@@ -25,18 +25,18 @@ func dpllOffsetWithin(offset *int64, limit uint64) bool {
 	return offset == nil || math.Abs(float64(*offset)) <= float64(limit)
 }
 
-// applyLegacyGNSSHoldover applies the legacy GNSS timeout/error policy to a copied
-// clock view, replacing a present offset with a valid estimate but preserving nil.
-// It returns true when holdover must end, not when the sample is in spec; the
-// caller latches that terminal result. It does not change the raw observation.
-func (quality *holdoverQuality) applyLegacyGNSSHoldover(data *event.DPLLData) bool {
+// applyGMHoldover latches T-GM out-of-spec quality from elapsed/peak facts and
+// marks modeled holdover on the copied clock view without replacing its measured
+// offset (including nil). True requests terminal FREERUN, not sample acceptance;
+// false may still be out of spec or fail the caller's other terminal checks.
+// The raw observation is unchanged.
+func (quality *holdoverQuality) applyGMHoldover(data *event.DPLLData) bool {
 	observation := data.Holdover
-	terminal := observation.Elapsed >= time.Duration(observation.TimeoutSeconds)*time.Second ||
-		(!data.FrequencyTraceable && data.Offset != nil && uint64(observation.PeakErrorNS) > observation.InSpecErrorNS)
-	if observation.Valid && data.Offset != nil {
-		data.Offset = utils.ToPtr(observation.EstimatedErrorNS)
+	if observation.Elapsed > time.Duration(observation.TimeoutSeconds)*time.Second || uint64(observation.PeakErrorNS) > observation.InSpecErrorNS {
+		quality.out = true
 	}
-	return terminal
+	data.ModeledHoldover = observation.Active
+	return observation.MaxErrorNS == 0 || observation.TimeoutSeconds > uint64(math.MaxInt64/int64(time.Second)) || uint64(observation.PeakErrorNS) > observation.MaxErrorNS
 }
 
 // applyLegacyHoldover applies legacy reference-dependent error/timeout limits,
@@ -69,10 +69,11 @@ func (quality *holdoverQuality) applyLegacyHoldover(data *event.DPLLData) bool {
 // offsets remain absent. Non-observation events pass through unchanged with true.
 // False skips processing older producers, non-increasing sequences, or a reset's remembered
 // producer/episode before aggregation. True permits processing even if the copied
-// state is FREERUN; it does not mean in-spec. Both clock modes retain legacy policy.
+// state is FREERUN; it does not mean in-spec. Eligible GM GNSS observations use
+// T-GM policy; other observations retain legacy policy.
 // Accepted reporting fields are fixed here: storage copies them unchanged and
 // subsequent aggregation updates composite state, not the per-interface sample.
-func (c *BaseClock) prepareDPLL(ev event.Event, _ bool) (event.Event, EventResult, bool) {
+func (c *BaseClock) prepareDPLL(ev event.Event, gm bool) (event.Event, EventResult, bool) {
 	data, ok := ev.Data.(*event.DPLLData)
 	if !ok || ev.Source != event.DPLL || data.Holdover == nil {
 		return ev, c.retainedDPLLResult(ev), true
@@ -97,18 +98,19 @@ func (c *BaseClock) prepareDPLL(ev event.Event, _ bool) (event.Event, EventResul
 	interpreted := *data
 	interpreted.State = observation.HardwareState
 	interpreted.OutOfSpec, interpreted.ModeledHoldover = false, false
+	modeledGM := gm && observation.Reference == event.GNSS && !observation.PhaseOnly
 	leadingModel := (observation.Reference == event.GNSS || observation.Reference == event.PTP4l) && !observation.PhaseOnly
 	switch observation.HardwareState {
 	case event.PTP_LOCKED:
 		quality.out, quality.freerun = false, false
-		if !dpllOffsetWithin(data.Offset, observation.MaxErrorNS) {
+		if !dpllOffsetWithin(data.Offset, observation.MaxErrorNS) && (!modeledGM || (observation.TimeoutSeconds != 0 && observation.MaxErrorNS != 0)) {
 			interpreted.State = event.PTP_FREERUN
 			interpreted.OutOfSpec = true
 		}
 	case event.PTP_HOLDOVER:
 		terminal := !leadingModel || !observation.Acquired || !dpllOffsetWithin(observation.AcquisitionOffset, observation.MaxErrorNS) || observation.TimeoutSeconds == 0 || observation.ErrorObserved || observation.Error != "" || observation.Elapsed < 0 || observation.PeakErrorNS < 0 || observation.EstimatedErrorNS < 0
-		if observation.Reference == event.GNSS {
-			terminal = quality.applyLegacyGNSSHoldover(&interpreted) || terminal
+		if modeledGM {
+			terminal = quality.applyGMHoldover(&interpreted) || terminal
 		} else {
 			terminal = quality.applyLegacyHoldover(&interpreted) || terminal
 		}
@@ -122,7 +124,7 @@ func (c *BaseClock) prepareDPLL(ev event.Event, _ bool) (event.Event, EventResul
 		interpreted.State = event.PTP_FREERUN
 		interpreted.OutOfSpec = true
 	}
-	if interpreted.State == event.PTP_FREERUN && data.Offset != nil {
+	if !modeledGM && interpreted.State == event.PTP_FREERUN && data.Offset != nil {
 		interpreted.Offset = utils.ToPtr[int64](FaultyPhaseOffset)
 	}
 	interpreted.SourceLost = interpreted.State != event.PTP_LOCKED
@@ -161,12 +163,22 @@ func (c *BaseClock) retainedDPLLResult(ev event.Event) EventResult {
 
 // dpllReportingEvent owns a separate offset value while retaining the raw event
 // metadata and observation. Policy data remains available unchanged to aggregation.
+// Present offsets report the measurement when locked, a valid estimate in
+// holdover, or the terminal sentinel in free run; absent offsets remain absent.
 func dpllReportingEvent(ev event.Event, policy event.DPLLData) *event.Event {
 	data := ev.Data.(*event.DPLLData)
 	reported := *data
 	reported.Offset = nil
 	if policy.Offset != nil {
 		reported.Offset = utils.ToPtr(*policy.Offset)
+		switch policy.State {
+		case event.PTP_HOLDOVER:
+			if policy.Holdover.Valid {
+				reported.Offset = utils.ToPtr(policy.Holdover.EstimatedErrorNS)
+			}
+		case event.PTP_FREERUN:
+			reported.Offset = utils.ToPtr[int64](FaultyPhaseOffset)
+		}
 	}
 	reported.State, reported.OutOfSpec = policy.State, policy.OutOfSpec
 	reported.SourceLost, reported.ModeledHoldover = policy.SourceLost, policy.ModeledHoldover

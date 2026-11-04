@@ -25,12 +25,7 @@ func TestReceivingClockRejectsUnqualifiedAcquisitionAndMissedTerminalPeak(t *tes
 		for _, unqualified := range []bool{false, true} {
 			base := BaseClock{}
 			ev := rawHoldoverSample()
-			data := ev.Data.(*event.DPLLData)
-			data.FrequencyTraceable = false
-			observation := data.Holdover
-			if !gm {
-				observation.Reference = event.PTP4l
-			}
+			observation := ev.Data.(*event.DPLLData).Holdover
 			if unqualified {
 				observation.AcquisitionOffset = utils.ToPtr[int64](101)
 			} else {
@@ -43,21 +38,29 @@ func TestReceivingClockRejectsUnqualifiedAcquisitionAndMissedTerminalPeak(t *tes
 	}
 }
 
-func TestLegacyPTPHardwareHoldoverAfterOutOfSpecRetainsExitPolicy(t *testing.T) {
-	base := BaseClock{}
-	ev := rawHoldoverSample()
-	data := ev.Data.(*event.DPLLData)
-	data.Holdover.Reference = event.PTP4l
-	data.Holdover.EstimatedErrorNS, data.Holdover.PeakErrorNS = 50, 50
-	interpreted, _, accepted := base.prepareDPLL(ev, false)
-	require.True(t, accepted)
-	require.Equal(t, event.PTP_HOLDOVER, interpreted.Data.(*event.DPLLData).State)
-	require.True(t, interpreted.Data.(*event.DPLLData).OutOfSpec)
-	data.Holdover.Sequence++
-	data.Holdover.HardwareSample = true
-	interpreted, _, accepted = base.prepareDPLL(ev, false)
-	require.True(t, accepted)
-	require.Equal(t, event.PTP_FREERUN, interpreted.Data.(*event.DPLLData).State)
+func TestLegacyHardwareHoldoverAfterOutOfSpecRetainsExitPolicy(t *testing.T) {
+	for _, gm := range []bool{false, true} {
+		base := BaseClock{}
+		ev := rawHoldoverSample()
+		data := ev.Data.(*event.DPLLData)
+		if !gm {
+			data.Holdover.Reference = event.PTP4l
+		}
+		data.Holdover.EstimatedErrorNS, data.Holdover.PeakErrorNS = 50, 50
+		interpreted, _, accepted := base.prepareDPLL(ev, gm)
+		require.True(t, accepted)
+		require.Equal(t, event.PTP_HOLDOVER, interpreted.Data.(*event.DPLLData).State)
+		require.True(t, interpreted.Data.(*event.DPLLData).OutOfSpec)
+		data.Holdover.Sequence++
+		data.Holdover.HardwareSample = true
+		interpreted, _, accepted = base.prepareDPLL(ev, gm)
+		require.True(t, accepted)
+		expected := event.PTP_FREERUN
+		if gm {
+			expected = event.PTP_HOLDOVER
+		}
+		require.Equal(t, expected, interpreted.Data.(*event.DPLLData).State)
+	}
 }
 
 func TestReceivingClockResetRejectsQueuedEpisodeUntilRecovery(t *testing.T) {
@@ -156,11 +159,35 @@ func TestReceivingClockOffsetQualification(t *testing.T) {
 	}
 }
 
+func TestSameObservationDistinctClockTimeoutAndOffsetPolicy(t *testing.T) {
+	for _, elapsed := range []time.Duration{99 * time.Second, 100 * time.Second, 101 * time.Second} {
+		ev := rawHoldoverSample()
+		data := ev.Data.(*event.DPLLData)
+		data.Holdover.Elapsed, data.Holdover.EstimatedErrorNS, data.Holdover.PeakErrorNS = elapsed, 50, 50
+		gm, bc := BaseClock{}, BaseClock{}
+		gmEvent, _, ok := gm.prepareDPLL(ev, true)
+		require.True(t, ok)
+		bcEvent, _, ok := bc.prepareDPLL(ev, false)
+		require.True(t, ok)
+		require.Equal(t, event.PTP_HOLDOVER, gmEvent.Data.(*event.DPLLData).State)
+		require.True(t, gmEvent.Data.(*event.DPLLData).OutOfSpec)
+		require.Equal(t, int64(3), *gmEvent.Data.(*event.DPLLData).Offset)
+		if elapsed >= 100*time.Second {
+			require.Equal(t, event.PTP_FREERUN, bcEvent.Data.(*event.DPLLData).State)
+		} else {
+			require.Equal(t, event.PTP_HOLDOVER, bcEvent.Data.(*event.DPLLData).State)
+			require.Equal(t, int64(50), *bcEvent.Data.(*event.DPLLData).Offset)
+		}
+		require.Equal(t, event.PTP_HOLDOVER, data.State)
+		require.False(t, data.OutOfSpec)
+		require.Equal(t, int64(3), *data.Offset)
+	}
+}
+
 func TestClockLatchesFromCumulativeFactsAndRejectsReordering(t *testing.T) {
 	base := BaseClock{}
 	ev := rawHoldoverSample()
 	data := ev.Data.(*event.DPLLData)
-	data.Holdover.Reference = event.PTP4l
 	data.Holdover.PeakErrorNS, data.Holdover.EstimatedErrorNS = 50, 10
 	interpreted, _, ok := base.prepareDPLL(ev, true)
 	require.True(t, ok)

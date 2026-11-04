@@ -2,7 +2,9 @@ package dpll
 
 import (
 	"errors"
+	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,6 +61,103 @@ func prepareModeledEpisode(dpll *DpllConfig) {
 	dpll.holdoverGeneration++
 }
 
+func TestTGMHoldoverDecision(t *testing.T) {
+	for _, sample := range []struct {
+		name    string
+		offset  int64
+		elapsed time.Duration
+		inSpec  bool
+		state   event.PTPState
+	}{
+		{"below in-spec", 39, time.Second, true, event.PTP_HOLDOVER},
+		{"equal in-spec", 40, time.Second, true, event.PTP_HOLDOVER},
+		{"above in-spec", 41, time.Second, false, event.PTP_HOLDOVER},
+		{"below freerun", 99, time.Second, false, event.PTP_HOLDOVER},
+		{"equal freerun", 100, time.Second, false, event.PTP_HOLDOVER},
+		{"above freerun", 101, time.Second, false, event.PTP_FREERUN},
+		{"before timeout", 10, 100*time.Second - time.Nanosecond, true, event.PTP_HOLDOVER},
+		{"equal timeout", 10, 100 * time.Second, true, event.PTP_HOLDOVER},
+		{"after timeout", 10, 100*time.Second + time.Nanosecond, false, event.PTP_HOLDOVER},
+		{"simultaneous", 101, 101 * time.Second, false, event.PTP_FREERUN},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			dpll := newModeledDPLL(t, modelOption(t, holdoverModelFunc(func(time.Duration) (int64, error) { return sample.offset, nil })))
+			prepareModeledEpisode(dpll)
+			dpll.evaluateModeledHoldover(dpll.holdoverGeneration, dpll.holdoverStart.Add(sample.elapsed))
+			require.Equal(t, sample.state, receiveDPLLObservation(t, dpll).State)
+			require.Equal(t, sample.inSpec, !receiveDPLLObservation(t, dpll).OutOfSpec)
+		})
+	}
+}
+
+func TestTGMEqualOrHigherInSpecLimit(t *testing.T) {
+	for _, limit := range []uint64{100, 200} {
+		dpll := newModeledDPLL(t, func(d *DpllConfig) { d.MaxInSpecOffset = limit },
+			modelOption(t, holdoverModelFunc(func(time.Duration) (int64, error) { return 101, nil })))
+		prepareModeledEpisode(dpll)
+		dpll.evaluateModeledHoldover(dpll.holdoverGeneration, dpll.holdoverStart.Add(time.Second))
+		require.Equal(t, event.PTP_FREERUN, receiveDPLLObservation(t, dpll).State)
+	}
+}
+
+func TestTGMResolvedHoldoverConfiguration(t *testing.T) {
+	for _, sample := range []struct {
+		name    string
+		timeout uint64
+		offset  uint64
+	}{
+		{"disabled", 0, 100}, {"disabled zero limits", 0, 0},
+		{"invalid linear", 100, 0}, {"duration overflow", math.MaxUint64, 100},
+	} {
+		for _, selection := range []string{"default", "injected"} {
+			t.Run(sample.name+"/"+selection, func(t *testing.T) {
+				var calls atomic.Int64
+				options := []Option{func(d *DpllConfig) {
+					d.LocalHoldoverTimeout, d.LocalMaxHoldoverOffSet = sample.timeout, sample.offset
+				}}
+				if selection == "injected" {
+					options = append(options, modelOption(t, holdoverModelFunc(func(time.Duration) (int64, error) {
+						calls.Add(1)
+						return 0, nil
+					})))
+				}
+				dpll := newModeledDPLL(t, options...)
+				require.NotNil(t, dpll.holdoverModel)
+				setModeledHardware(dpll, DPLL_LOCKED_HO_ACQ)
+				require.Equal(t, event.PTP_LOCKED, receiveDPLLObservation(t, dpll).State)
+				require.Zero(t, calls.Load())
+				for range 2 {
+					setModeledHardware(dpll, DPLL_HOLDOVER)
+					require.Equal(t, event.PTP_FREERUN, receiveDPLLObservation(t, dpll).State)
+					if sample.timeout == 0 {
+						require.False(t, dpll.onHoldover)
+						require.Zero(t, calls.Load())
+					}
+					setModeledHardware(dpll, DPLL_LOCKED_HO_ACQ)
+					require.Equal(t, event.PTP_LOCKED, receiveDPLLObservation(t, dpll).State)
+				}
+			})
+		}
+	}
+}
+
+func TestTGMModelDoesNotRequireMeasuredOffset(t *testing.T) {
+	model, err := NewLinearHoldoverModel(100, 100*time.Second)
+	require.NoError(t, err)
+	dpll := newModeledDPLL(t, modelOption(t, model), func(d *DpllConfig) { d.flags = FlagNoPhaseOffset })
+	events := make(chan event.Event, 16)
+	dpll.processConfig.EventChannel = events
+	prepareModeledEpisode(dpll)
+	dpll.evaluateModeledHoldover(dpll.holdoverGeneration, dpll.holdoverStart.Add(50*time.Second))
+	require.True(t, receiveDPLLObservation(t, dpll).OutOfSpec)
+	require.Equal(t, event.PTP_HOLDOVER, receiveDPLLObservation(t, dpll).State)
+	ev := <-events
+	require.Nil(t, ev.Data.(*event.DPLLData).Offset)
+	require.True(t, ev.Data.(*event.DPLLData).Holdover.Active)
+	dpll.evaluateModeledHoldover(dpll.holdoverGeneration, dpll.holdoverStart.Add(101*time.Second))
+	require.Equal(t, event.PTP_FREERUN, receiveDPLLObservation(t, dpll).State)
+}
+
 func TestTGMModeledProvenanceDoesNotReplaceMeasurementOrMarkHardware(t *testing.T) {
 	for _, flags := range []Flag{0, FlagNoPhaseOffset, FlagOnlyPhaseStatus} {
 		dpll := newModeledDPLL(t, modelOption(t, holdoverModelFunc(func(time.Duration) (int64, error) { return 50, nil })))
@@ -100,7 +199,7 @@ func TestTGMCumulativePeakSurvivesLowerEstimate(t *testing.T) {
 	require.Equal(t, start, dpll.holdoverStart)
 	require.Equal(t, generation, dpll.holdoverGeneration)
 	require.True(t, receiveDPLLObservation(t, dpll).OutOfSpec)
-	require.Equal(t, event.PTP_FREERUN, receiveDPLLObservation(t, dpll).State)
+	require.Equal(t, event.PTP_HOLDOVER, receiveDPLLObservation(t, dpll).State)
 	setModeledHardware(dpll, DPLL_LOCKED_HO_ACQ)
 	require.Equal(t, event.PTP_LOCKED, receiveDPLLObservation(t, dpll).State)
 	require.False(t, receiveDPLLObservation(t, dpll).OutOfSpec)
@@ -221,7 +320,7 @@ func TestTGMUsesInjectedModelAcrossTriggers(t *testing.T) {
 		defer callsMu.Unlock()
 		return len(calls) >= 3
 	}, 2*time.Second, time.Millisecond)
-	require.Equal(t, event.PTP_FREERUN, receiveDPLLObservation(t, dpll).State)
+	require.Equal(t, event.PTP_HOLDOVER, receiveDPLLObservation(t, dpll).State)
 	require.True(t, receiveDPLLObservation(t, dpll).OutOfSpec)
 	dpll.RLock()
 	require.Zero(t, dpll.phaseOffset)

@@ -335,3 +335,35 @@ func TestGMLegacyAccuracySurvivesNonDPLLAndNilMeasurements(t *testing.T) {
 	gm.announceClockClassIfChanged(event.Event{}, gm.syncState)
 	require.Equal(t, fbprotocol.ClockAccuracyNanosecond100, gm.syncState.ClockAccuracy)
 }
+
+func TestGMModeledHoldoverAccuracyPreservesMeasurements(t *testing.T) {
+	for _, class := range []fbprotocol.ClockClass{fbprotocol.ClockClass6, fbprotocol.ClockClass7, protocol.ClockClassOutOfSpec, protocol.ClockClassFreerun} {
+		for _, offset := range []*int64{nil, utils.ToPtr[int64](0), utils.ToPtr[int64](500)} {
+			for _, modeled := range []bool{false, true} {
+				gm, _, mock := newTestGMClock(t)
+				gm.syncState = SyncState{ClockClass: class, ClockAccuracy: fbprotocol.ClockAccuracyUnknown, LeadingIFace: testTBCIface}
+				data := &event.DPLLData{Offset: offset, ModeledHoldover: modeled}
+				ev := event.Event{Source: event.DPLL, IFace: testTBCIface, Data: data}
+				gm.GetData(event.DPLL).AddEvent(ev)
+				gm.announceClockClassIfChanged(ev, gm.syncState)
+				waitGM(t, gm)
+				calls := mock.SnapshotSetCalls()
+				require.Len(t, calls, 1)
+				actual := calls[0].GMSettings.ClockQuality
+				want := fbprotocol.ClockAccuracyUnknown
+				if class == fbprotocol.ClockClass6 {
+					want = fbprotocol.ClockAccuracyNanosecond100
+				} else if class != protocol.ClockClassFreerun && !modeled && offset != nil {
+					want = fbprotocol.ClockAccuracyFromOffset(time.Duration(*offset))
+				}
+				require.Equal(t, want, actual.ClockAccuracy)
+				if class != fbprotocol.ClockClass6 {
+					require.Equal(t, uint16(0xffff), actual.OffsetScaledLogVariance)
+				}
+				require.Same(t, offset, data.Offset, "measurement must not be replaced by model output")
+				gm.announceClockClassIfChanged(event.Event{Source: event.GNSS}, gm.syncState)
+				require.Equal(t, want, gm.syncState.ClockAccuracy, "provenance survives intervening sources")
+			}
+		}
+	}
+}

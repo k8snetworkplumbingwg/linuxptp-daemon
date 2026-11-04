@@ -173,7 +173,7 @@ func gmSettings(actual protocol.GrandmasterSettings, desired gmDesired) protocol
 	actual.TimePropertiesDS.PtpTimescale = true
 	actual.TimePropertiesDS.CurrentUtcOffsetValid = true
 	actual.TimePropertiesDS.CurrentUtcOffset = desired.utcOffset
-	actual.TimePropertiesDS.FrequencyTraceable = true
+	actual.TimePropertiesDS.FrequencyTraceable = desired.class != protocol.ClockClassFreerun
 	actual.TimePropertiesDS.TimeTraceable = desired.class == fbprotocol.ClockClass6 || desired.class == fbprotocol.ClockClass7
 	actual.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 	actual.ClockQuality.OffsetScaledLogVariance = 0xffff

@@ -8,12 +8,15 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	dpllcfg "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1461,6 +1464,21 @@ func TestHoldoverParametersExtraction(t *testing.T) {
 	assert.NotNil(t, retrieved1, "Should retrieve holdover params for clock1")
 	if retrieved1 != nil {
 		assert.Equal(t, uint64(200), retrieved1.MaxInSpecOffset, "Retrieved MaxInSpecOffset should match")
+		model, err := dpllcfg.NewLinearHoldoverModel(retrieved1.LocalMaxHoldoverOffset, time.Duration(retrieved1.LocalHoldoverTimeout)*time.Second)
+		require.NoError(t, err)
+		offset, err := model.Estimate(20 * time.Second)
+		require.NoError(t, err)
+		require.Equal(t, int64(6), offset)
+		events := make(chan event.Event, 8)
+		producer := dpllcfg.NewDpll(clockID1, retrieved1.LocalMaxHoldoverOffset, retrieved1.LocalHoldoverTimeout,
+			retrieved1.MaxInSpecOffset, "resolved", []event.EventSource{event.GNSS}, dpllcfg.MOCK, nil, 0, 0, 0,
+			config.ProcessConfig{ClockType: event.GM, EventChannel: events}, nil)
+		require.NoError(t, producer.Stop())
+		observation := (<-events).Data.(*event.DPLLData).Holdover
+		require.Equal(t, retrieved1.LocalHoldoverTimeout, observation.TimeoutSeconds)
+		require.Equal(t, retrieved1.LocalMaxHoldoverOffset, observation.MaxErrorNS)
+		require.Equal(t, retrieved1.MaxInSpecOffset, observation.InSpecErrorNS)
+		require.Equal(t, event.GNSS, observation.Reference)
 	}
 
 	retrieved2 := hcm.GetHoldoverParameters("ptpconfig_test-profile", clockID2)

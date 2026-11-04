@@ -58,14 +58,10 @@ func TestConstructorEstimatorDrivesBothHoldoverWorkers(t *testing.T) {
 					require.Equal(t, int64(3), *data.Offset)
 					require.GreaterOrEqual(t, data.Holdover.EstimatedErrorNS, int64(50))
 					received := receiveDPLLWire(t, mode, data)
-					expectedState := event.PTP_HOLDOVER
-					if mode == event.GM {
-						expectedState = event.PTP_FREERUN
-					}
-					require.Equal(t, expectedState, received.State)
+					require.Equal(t, event.PTP_HOLDOVER, received.State)
 					require.True(t, received.OutOfSpec)
 					if mode == event.GM {
-						require.Equal(t, int64(FaultyPhaseOffset), received.Offset)
+						require.Equal(t, int64(3), received.Offset)
 					} else {
 						require.Equal(t, data.Holdover.EstimatedErrorNS, received.Offset)
 					}
@@ -100,12 +96,8 @@ func TestNonlinearObservationThroughManagerAtKnownElapsed(t *testing.T) {
 		require.False(t, raw.OutOfSpec)
 		received := receiveDPLLWire(t, mode, raw)
 		require.True(t, received.OutOfSpec)
-		expectedState := event.PTP_FREERUN
-		if mode == event.TBC {
-			expectedState = event.PTP_HOLDOVER
-		}
-		require.Equal(t, expectedState, received.State)
-		expected := int64(FaultyPhaseOffset)
+		require.Equal(t, event.PTP_HOLDOVER, received.State)
+		expected := int64(3)
 		if mode == event.TBC {
 			expected = 59
 		}
@@ -127,7 +119,7 @@ func TestSharedDefaultEstimateRoundingAndModePolicy(t *testing.T) {
 			require.Equal(t, expected, dpll.modeledOffset)
 			require.Equal(t, int64(3), dpll.phaseOffset)
 			received := receiveDPLLObservation(t, dpll)
-			terminal := expected > 40 || elapsed >= 100*time.Second
+			terminal := expected > 100
 			if mode == event.TBC {
 				terminal = elapsed >= 100*time.Second
 			}
