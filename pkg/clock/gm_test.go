@@ -18,7 +18,8 @@ const (
 	testTS2PHCCfg = "ts2phc.0.config"
 )
 
-func newTestGMClock() (*GM, *ipcRecorder, *pmc.MockClient) {
+func newTestGMClock(t *testing.T) (*GM, *ipcRecorder, *pmc.MockClient) {
+	t.Helper()
 	rio := &ipcRecorder{}
 	pmcMock := &pmc.MockClient{}
 	gm := &GM{
@@ -36,8 +37,11 @@ func newTestGMClock() (*GM, *ipcRecorder, *pmc.MockClient) {
 			ClockClass:    protocol.ClockClassUninitialized,
 			ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
 		},
-		gnssState: event.PTP_NOTSET,
+		gnssState:         event.PTP_NOTSET,
+		requestedAccuracy: fbprotocol.ClockAccuracyUnknown,
 	}
+	gm.reconciler = newPMCReconciler(pmcMock, "ptp4l.0.config", gm.cfgName, newPMCTestTime(), gm.getUtcOffset)
+	t.Cleanup(func() { <-gm.StopManagedWorkers() })
 	return gm, rio, pmcMock
 }
 
@@ -61,7 +65,7 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 	const iface = "ens1f0"
 
 	t.Run("FREERUN to LOCKED emits TypePTPState", func(t *testing.T) {
-		gm, rio, _ := newTestGMClock()
+		gm, rio, _ := newTestGMClock(t)
 
 		// First call: establish FREERUN (from PTP_NOTSET, no IPC emitted)
 		gm.data = []*event.Data{
@@ -112,7 +116,7 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 	})
 
 	t.Run("initial LOCKED emits TypeClockClass 6", func(t *testing.T) {
-		gm, rio, _ := newTestGMClock()
+		gm, rio, _ := newTestGMClock(t)
 
 		// GNSS and DPLL are already locked on the first update: the GM goes
 		// straight to LOCKED and never passes through FREERUN.
@@ -139,7 +143,7 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 	})
 
 	t.Run("LOCKED to HOLDOVER emits TypePTPState and TypeClockClass", func(t *testing.T) {
-		gm, rio, _ := newTestGMClock()
+		gm, rio, _ := newTestGMClock(t)
 
 		// Establish FREERUN then LOCKED
 		gm.data = []*event.Data{
@@ -177,7 +181,7 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 	})
 
 	t.Run("duplicate state produces no IPC", func(t *testing.T) {
-		gm, rio, _ := newTestGMClock()
+		gm, rio, _ := newTestGMClock(t)
 
 		gm.data = []*event.Data{
 			gmData(event.GNSS, event.PTP_LOCKED),
@@ -194,7 +198,7 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 	})
 
 	t.Run("GNSS LOCKED to FREERUN emits TypeGNSSState", func(t *testing.T) {
-		gm, rio, _ := newTestGMClock()
+		gm, rio, _ := newTestGMClock(t)
 
 		// Establish GNSS LOCKED
 		gm.data = []*event.Data{
@@ -223,7 +227,7 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 	})
 
 	t.Run("LOCKED to FREERUN emits TypeClockClass 248", func(t *testing.T) {
-		gm, rio, _ := newTestGMClock()
+		gm, rio, _ := newTestGMClock(t)
 
 		// Establish LOCKED
 		gm.data = []*event.Data{
@@ -255,7 +259,7 @@ func TestGMClock_UpdateState_IPCEmission(t *testing.T) {
 }
 
 func TestGMClock_UpdateOSClockState(t *testing.T) {
-	gm, rio, _ := newTestGMClock()
+	gm, rio, _ := newTestGMClock(t)
 	gm.syncState.State = event.PTP_LOCKED
 
 	gm.osClock.State = event.PTP_LOCKED // Note this is set on osClock on eventsManager which this will point to
@@ -279,7 +283,7 @@ func TestGMClock_UpdateOSClockState(t *testing.T) {
 }
 
 func TestGMClock_UpdateClockClass(t *testing.T) {
-	gm, rio, _ := newTestGMClock()
+	gm, rio, _ := newTestGMClock(t)
 	gm.syncState.ClockClass = fbprotocol.ClockClass6
 	gm.syncState.LeadingIFace = "ens1f0"
 
@@ -297,7 +301,7 @@ func TestGMClock_UpdateClockClass(t *testing.T) {
 
 func TestGMClock_AnnounceClockClassIfChanged(t *testing.T) {
 	t.Run("skips when clockClass is uninitialized", func(t *testing.T) {
-		gm, _, pmcMock := newTestGMClock()
+		gm, _, pmcMock := newTestGMClock(t)
 		gm.announceClockClassIfChanged(
 			event.Event{Source: event.DPLL, Data: &event.DPLLData{Offset: utils.ToPtr[int64](50)}},
 			SyncState{State: event.PTP_LOCKED, ClockClass: protocol.ClockClassUninitialized},
@@ -306,41 +310,38 @@ func TestGMClock_AnnounceClockClassIfChanged(t *testing.T) {
 	})
 
 	t.Run("sets GM settings on class change", func(t *testing.T) {
-		gm, _, pmcMock := newTestGMClock()
-		gm.announcedClockClass = fbprotocol.ClockClass6
-		gm.announcedClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
+		gm, _, pmcMock := newTestGMClock(t)
 		gm.syncState.ClockClass = protocol.ClockClassFreerun
 		gm.announceClockClassIfChanged(
 			event.Event{Source: event.GNSS, Data: &event.GNSSData{}},
 			SyncState{State: event.PTP_FREERUN, ClockClass: protocol.ClockClassFreerun},
 		)
+		waitGM(t, gm)
 		setCalls := pmcMock.SnapshotSetCalls()
 		require.Len(t, setCalls, 1)
 		assert.Equal(t, protocol.ClockClassFreerun, setCalls[0].GMSettings.ClockQuality.ClockClass)
 		assert.Equal(t, fbprotocol.ClockAccuracyUnknown, setCalls[0].GMSettings.ClockQuality.ClockAccuracy)
 	})
 
-	t.Run("no PMC call when class and accuracy unchanged", func(t *testing.T) {
-		gm, _, pmcMock := newTestGMClock()
-		gm.announcedClockClass = fbprotocol.ClockClass6
-		gm.announcedClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
+	t.Run("repairs stale settings when class and accuracy unchanged", func(t *testing.T) {
+		gm, _, pmcMock := newTestGMClock(t)
 		gm.syncState.ClockClass = fbprotocol.ClockClass6
 		gm.announceClockClassIfChanged(
 			event.Event{Source: event.GNSS, Data: &event.GNSSData{}},
 			SyncState{State: event.PTP_LOCKED, ClockClass: fbprotocol.ClockClass6},
 		)
-		assert.Empty(t, pmcMock.SnapshotSetCalls())
+		waitGM(t, gm)
+		assert.Len(t, pmcMock.SnapshotSetCalls(), 1)
 	})
 
 	t.Run("DPLL holdover computes accuracy from offset", func(t *testing.T) {
-		gm, _, pmcMock := newTestGMClock()
-		gm.announcedClockClass = fbprotocol.ClockClass6
-		gm.announcedClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
+		gm, _, pmcMock := newTestGMClock(t)
 		gm.syncState.ClockClass = fbprotocol.ClockClass7
 		gm.announceClockClassIfChanged(
 			event.Event{Source: event.DPLL, Data: &event.DPLLData{Offset: utils.ToPtr[int64](500)}},
 			SyncState{State: event.PTP_HOLDOVER, ClockClass: fbprotocol.ClockClass7},
 		)
+		waitGM(t, gm)
 		setCalls := pmcMock.SnapshotSetCalls()
 		require.Len(t, setCalls, 1)
 		assert.Equal(t, fbprotocol.ClockClass7, setCalls[0].GMSettings.ClockQuality.ClockClass)
@@ -348,41 +349,47 @@ func TestGMClock_AnnounceClockClassIfChanged(t *testing.T) {
 	})
 
 	t.Run("updates announcedClockClass on success", func(t *testing.T) {
-		gm, _, _ := newTestGMClock()
-		gm.announcedClockClass = fbprotocol.ClockClass6
-		gm.announcedClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
+		gm, _, _ := newTestGMClock(t)
 		gm.syncState.ClockClass = protocol.ClockClassFreerun
 		gm.announceClockClassIfChanged(
 			event.Event{Source: event.GNSS, Data: &event.GNSSData{}},
 			SyncState{State: event.PTP_FREERUN, ClockClass: protocol.ClockClassFreerun},
 		)
-		assert.Equal(t, protocol.ClockClassFreerun, gm.announcedClockClass)
+		waitGM(t, gm)
+		assert.Equal(t, protocol.ClockClassFreerun, waitGM(t, gm).class)
 	})
 
 	t.Run("does not update announcedClockClass on setGMSettings error", func(t *testing.T) {
-		gm, _, pmcMock := newTestGMClock()
-		pmcMock.SetGMSettingsErr = assert.AnError
-		gm.announcedClockClass = fbprotocol.ClockClass6
-		gm.announcedClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
+		gm, _, pmcMock := newTestGMClock(t)
+		gm.syncState.ClockClass = fbprotocol.ClockClass6
+		gm.announceClockClassIfChanged(event.Event{}, gm.syncState)
+		waitGM(t, gm)
+		pmcMock.SetGMSettingsResponse(protocol.GrandmasterSettings{}, nil, assert.AnError)
 		gm.syncState.ClockClass = protocol.ClockClassFreerun
 		gm.announceClockClassIfChanged(
 			event.Event{Source: event.GNSS, Data: &event.GNSSData{}},
 			SyncState{State: event.PTP_FREERUN, ClockClass: protocol.ClockClassFreerun},
 		)
-		assert.Equal(t, fbprotocol.ClockClass6, gm.announcedClockClass,
-			"announcedClockClass must not change when PMC write fails")
+		advancePMC(t, gm.reconciler)
+		require.Eventually(t, func() bool {
+			gm.reconciler.mu.Lock()
+			defer gm.reconciler.mu.Unlock()
+			return gm.reconciler.backoff != 0
+		}, time.Second, time.Millisecond)
+		gm.reconciler.mu.Lock()
+		assert.Equal(t, fbprotocol.ClockClass6, gm.reconciler.announced.class, "failed writes must retain the previous acknowledgment")
+		gm.reconciler.mu.Unlock()
 	})
 
 	t.Run("updates announcedClockClass to announced value on success", func(t *testing.T) {
-		gm, _, _ := newTestGMClock()
-		gm.announcedClockClass = fbprotocol.ClockClass6
-		gm.announcedClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
+		gm, _, _ := newTestGMClock(t)
 		gm.syncState.ClockClass = protocol.ClockClassFreerun
 		gm.announceClockClassIfChanged(
 			event.Event{Source: event.GNSS, Data: &event.GNSSData{}},
 			SyncState{State: event.PTP_FREERUN, ClockClass: protocol.ClockClassFreerun},
 		)
-		assert.Equal(t, protocol.ClockClassFreerun, gm.announcedClockClass)
+		waitGM(t, gm)
+		assert.Equal(t, protocol.ClockClassFreerun, waitGM(t, gm).class)
 	})
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
@@ -58,10 +57,10 @@ func TestManagerManagedWorkerCapability(t *testing.T) {
 				go func() { defer close(finished); manager.ProcessEvents(ctx) }()
 				cancel()
 			}
-			awaitManagedWorkers(t, owner.stopped)
+			awaitPMC(t, owner.stopped)
 			responsive := make(chan struct{})
 			go func() { manager.ProcessEvent(event.Event{CfgName: "unregistered"}); close(responsive) }()
-			awaitManagedWorkers(t, responsive)
+			awaitPMC(t, responsive)
 			manager.clockManagementMu.Lock()
 			registered := manager.GetClock(owner.ConfigName())
 			manager.clockManagementMu.Unlock()
@@ -78,7 +77,7 @@ func TestManagerManagedWorkerCapability(t *testing.T) {
 			default:
 			}
 			release()
-			awaitManagedWorkers(t, finished)
+			awaitPMC(t, finished)
 			if action == "replace" {
 				require.Same(t, replacement, manager.GetClock(owner.ConfigName()))
 			}
@@ -97,25 +96,16 @@ func TestManagerSerializesReplacementAndRemoval(t *testing.T) {
 	require.NoError(t, err)
 	added, removed := make(chan struct{}), make(chan struct{})
 	go func() { defer close(added); _ = manager.AddClock(replacement) }()
-	awaitManagedWorkers(t, owner.stopped)
+	awaitPMC(t, owner.stopped)
 	if manager.clockLifecycleMu.TryLock() {
 		manager.clockLifecycleMu.Unlock()
 		t.Fatal("replacement must serialize removal through managed completion")
 	}
 	go func() { defer close(removed); manager.RemoveAllClocks() }()
 	release()
-	awaitManagedWorkers(t, added)
-	awaitManagedWorkers(t, removed)
+	awaitPMC(t, added)
+	awaitPMC(t, removed)
 	require.Nil(t, manager.GetClock(owner.ConfigName()))
 	require.NoError(t, manager.AddClock(replacement), "clocks without the capability remain supported")
 	manager.RemoveAllClocks()
-}
-
-func awaitManagedWorkers(t *testing.T, done <-chan struct{}) {
-	t.Helper()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("managed lifecycle or event processing blocked")
-	}
 }
