@@ -26,6 +26,17 @@ type Clock interface {
 	SetOsClock(*OsClock)
 }
 
+// ManagedWorkerOwner is an optional capability for clocks with explicitly managed
+// background workers. StopManagedWorkers terminally cancels those workers without
+// joining them and returns a non-nil channel closed when they finish. It is
+// idempotent, including before any worker starts, and prevents worker restart.
+// Callers serialize it with other clock operations and join outside the event
+// lock. Reset remains nonterminal. Completion excludes untracked legacy work;
+// clocks without this capability make no managed-worker completion guarantee.
+type ManagedWorkerOwner interface {
+	StopManagedWorkers() <-chan struct{}
+}
+
 // SyncState holds the composite synchronization state of a clock.
 type SyncState struct {
 	State          event.PTPState
