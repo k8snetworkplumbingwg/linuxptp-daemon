@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clockmgr"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
@@ -21,6 +22,24 @@ import (
 )
 
 const testNodeName = "test-node"
+
+func TestUpdateDeviceAliases(t *testing.T) {
+	alias.ClearAliases()
+	t.Cleanup(alias.ClearAliases)
+	alias.SetAlias("ens1f0", "ens1fx")
+	alias.SetAlias("ens1f1", "ens1fx")
+	devices := []ptpv1.PtpDevice{{Name: "ens1f0"}, {Name: "ens1f1"}, {Name: "ens2f0"}}
+
+	updateDeviceAliases(devices)
+	assert.Equal(t, "ens1fx", devices[0].Alias)
+	assert.Equal(t, "ens1fx", devices[1].Alias)
+	assert.Equal(t, "ens2f0", devices[2].Alias)
+
+	alias.ClearAliases()
+	updateDeviceAliases(devices)
+	assert.Equal(t, "ens1f0", devices[0].Alias)
+	assert.Equal(t, "ens1f1", devices[1].Alias)
+}
 
 func Test_reportedClockType(t *testing.T) {
 	t.Parallel()
@@ -231,6 +250,10 @@ func Test_runSyncStatusUpdate(t *testing.T) {
 	}
 
 	t.Run("writes Ready True, profiles, device backfill, and drops Synced", func(t *testing.T) {
+		alias.ClearAliases()
+		t.Cleanup(alias.ClearAliases)
+		alias.SetAlias("ens1f0", "ens1fx")
+		alias.SetAlias("ens1f1", "ens1fx")
 		fake := &nodePtpDeviceFake{device: newTestNodePtpDevice([]ptpv1.PtpDevice{
 			{Name: "ens1f0"},
 			{Name: "ens1f1"},
@@ -262,6 +285,9 @@ func Test_runSyncStatusUpdate(t *testing.T) {
 		assert.Equal(t, profileA, got.Status.Devices[0].Profile)
 		assert.Equal(t, profileA, got.Status.Devices[1].Profile)
 		assert.Empty(t, got.Status.Devices[2].Profile)
+		assert.Equal(t, "ens1fx", got.Status.Devices[0].Alias)
+		assert.Equal(t, "ens1fx", got.Status.Devices[1].Alias)
+		assert.Equal(t, "unrelated", got.Status.Devices[2].Alias)
 
 		ready := conditionByType(got.Status.Conditions, conditionReady)
 		if assert.NotNil(t, ready) {

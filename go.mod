@@ -102,3 +102,6 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2 // indirect
 )
+
+// Temporary until https://github.com/k8snetworkplumbingwg/ptp-operator/pull/357 merges.
+replace github.com/k8snetworkplumbingwg/ptp-operator => github.com/nocturnalastro/np-ptp-operator v0.0.0-20261111164456-7c065de79bfa
