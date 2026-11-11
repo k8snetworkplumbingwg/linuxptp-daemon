@@ -141,6 +141,18 @@ type EventData interface {
 	String() string
 }
 
+// ClockInput is an event that requires an owning clock to interpret it. Clocks
+// that do not support a particular input must ignore it rather than record it.
+type ClockInput interface {
+	EventData
+	clockInput()
+}
+
+// ClockConfiguration is setup-time configuration interpreted by a clock.
+type ClockConfiguration interface {
+	clockConfiguration()
+}
+
 // GNSSData carries GNSS receiver status. It does not use PTPState.
 type GNSSData struct {
 	GPSStatus  int64
@@ -412,14 +424,15 @@ const (
 // Event carries a process event on the event channel.
 // Common fields are inline; type-specific data is in Data.
 type Event struct {
-	Source     EventSource // ptp4l, gnss, dpll, etc.
-	IFace      string      // interface that is causing the event
-	CfgName    string      // ptp config profile name
-	ClockType  ClockType   // oc bc gm
-	Time       int64       // time.Now().UnixMilli()
-	WriteToLog bool
-	Reset      bool      // reset data on ptp deletes or process died
-	Data       EventData // typed payload, or nil for reset events
+	Source          EventSource // ptp4l, gnss, dpll, etc.
+	IFace           string      // interface that is causing the event
+	CfgName         string      // ptp config profile name
+	ClockType       ClockType   // oc bc gm
+	Time            int64       // time.Now().UnixMilli()
+	WriteToLog      bool
+	Reset           bool      // reset data on ptp deletes or process died
+	ResetAllMetrics bool      // remove every metric for this config if no clock retains them
+	Data            EventData // typed payload, or nil for reset events
 }
 
 // ProcessStatusEvent is a process Up/Down event. status is 0 (down) or 1 (up).

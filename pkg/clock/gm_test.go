@@ -492,7 +492,7 @@ func TestUpdateGMState(t *testing.T) {
 			var result SyncState
 			for i, s := range tt.steps {
 				for _, ev := range s.events {
-					result = gm.AddEvent(ev)
+					result = gm.AddEvent(ev).SyncState
 				}
 
 				assert.Equal(t, s.wantState, result.State, "step %d: state", i)

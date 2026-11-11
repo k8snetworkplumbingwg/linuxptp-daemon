@@ -91,6 +91,7 @@ type TBC struct {
 	ptpSource             *ptpSourceQualification
 	controlledPortsConfig string
 	isTTSC                bool
+	ts2phc                ts2phcTracker
 }
 
 // NewTBC creates a new Telecom Boundary clock
@@ -176,7 +177,37 @@ func (c *TBC) SourceQualification(cfg string) (event.SourceQualification, bool) 
 }
 
 // AddEvent processes an event and updates clock state.
-func (c *TBC) AddEvent(ev event.Event) SyncState {
+func (c *TBC) AddEvent(ev event.Event) EventResult {
+	switch data := ev.Data.(type) {
+	case *event.TS2PHCRunStarted:
+		if ev.Source != event.TS2PHC {
+			return EventResult{SyncState: c.syncState, Ignored: true}
+		}
+		state := c.startTS2PHCRun(ev)
+		metrics := c.ts2phc.sourceMetrics(&c.DataHolder, ev.CfgName, c.ts2phcPolicy(),
+			ts2phcMetricOptions{includeOffsets: true, invalidateOffsets: true, includeStates: true})
+		return ts2phcEventResult(state, nil, metrics)
+	case *event.TS2PHCObservation:
+		if ev.Source != event.TS2PHC {
+			return EventResult{SyncState: c.syncState, Ignored: true}
+		}
+		update := c.observeTS2PHC(ev, data)
+		state := c.applyTS2PHC(update)
+		metrics := c.ts2phc.sourceMetrics(&c.DataHolder, ev.CfgName, c.ts2phcPolicy(),
+			ts2phcMetricOptions{includeOffsets: true, includeStates: true})
+		return ts2phcEventResult(state, update.events, metrics)
+	case event.ClockInput:
+		return EventResult{SyncState: c.syncState, Ignored: true}
+	}
+	state := c.addEvent(ev)
+	if ev.Source == event.TS2PHC {
+		metrics := c.ts2phc.sourceMetrics(&c.DataHolder, ev.CfgName, c.ts2phcPolicy(), ts2phcMetricOptions{includeStates: true})
+		return ts2phcEventResult(state, []event.Event{ev}, metrics)
+	}
+	return eventResult(state, ev)
+}
+
+func (c *TBC) addEvent(ev event.Event) SyncState {
 	switch ev.Source {
 	case event.SYNCE:
 		c.processSyncE(ev)
@@ -191,13 +222,112 @@ func (c *TBC) AddEvent(ev event.Event) SyncState {
 		}
 		return c.syncState
 	default:
-		d := c.GetData(ev.Source)
-		d.AddEvent(ev)
-		d.UpdateState()
-		c.updateLeadingClockData(ev)
+		c.recordEvent(ev)
 		c.evaluateState()
 		return c.syncState
 	}
+}
+
+// DuringApply accepts only a new ts2phc run boundary and defers aggregate
+// reporting until profile apply completes.
+func (c *TBC) DuringApply(ev event.Event) (bool, bool) {
+	_, started := ev.Data.(*event.TS2PHCRunStarted)
+	return started && ev.Source == event.TS2PHC, false
+}
+
+func (c *TBC) recordEvent(ev event.Event) {
+	d := c.GetData(ev.Source)
+	d.AddEvent(ev)
+	d.UpdateState()
+	c.updateLeadingClockData(ev)
+}
+
+// ConfigureTS2PHC installs the resolved profile configuration during setup,
+// before processes start. Explicitly configured leaders remain authoritative.
+func (c *TBC) ConfigureTS2PHC(config event.TS2PHCConfig) {
+	c.ts2phc.configure(config)
+	if c.configuredLeadingInterface != "" {
+		return
+	}
+	leading := config.LeadingInterface
+	if leading == "" {
+		for _, iface := range config.Interfaces {
+			if iface.Source == event.GNSS || iface.Source == event.PTP4l {
+				leading = iface.Name
+				break
+			}
+		}
+	}
+	c.SetConfiguredLeadingInterface(leading)
+}
+
+// Configure installs setup-time clock configuration and returns metric series.
+func (c *TBC) Configure(configName string, config event.ClockConfiguration) ([]SourceMetrics, error) {
+	ts2phc, ok := ts2phcConfig(config)
+	if !ok {
+		return nil, fmt.Errorf("unsupported clock configuration %T", config)
+	}
+	c.ConfigureTS2PHC(ts2phc)
+	metrics := c.ts2phc.sourceMetrics(&c.DataHolder, configName, c.ts2phcPolicy(),
+		ts2phcMetricOptions{includeOffsets: true, invalidateOffsets: true})
+	return []SourceMetrics{metrics}, nil
+}
+
+// MetricsAfterReset describes source metrics retained after a clock reset.
+func (c *TBC) MetricsAfterReset(configName string, source event.EventSource) []SourceMetrics {
+	if source != event.TS2PHC {
+		return nil
+	}
+	metrics := c.ts2phc.sourceMetrics(&c.DataHolder, configName, c.ts2phcPolicy(),
+		ts2phcMetricOptions{includeOffsets: true, invalidateOffsets: true})
+	metrics.ClearOtherSources = true
+	return []SourceMetrics{metrics}
+}
+
+// startTS2PHCRun clears only ts2phc measurements and partial poll tracking.
+// The next ordinary event evaluates the aggregate T-BC state; process startup
+// must not itself advance the FSM during profile apply.
+func (c *TBC) startTS2PHCRun(ev event.Event) SyncState {
+	if ev.Source == event.TS2PHC {
+		c.ts2phc.startRun(&c.DataHolder)
+	}
+	return c.syncState
+}
+
+// observeTS2PHC updates tracking and filters facts using T-BC policy without
+// changing stored process data or evaluating the aggregate FSM.
+func (c *TBC) observeTS2PHC(ev event.Event, observation *event.TS2PHCObservation) ts2phcUpdate {
+	if ev.Source != event.TS2PHC || observation == nil {
+		return ts2phcUpdate{}
+	}
+	if !c.ts2phc.prepare(observation) {
+		return ts2phcUpdate{}
+	}
+	return c.ts2phc.observe(ev, observation, c.ts2phcPolicy())
+}
+
+// applyTS2PHC records the filtered events and removes inactive data before
+// evaluating and publishing the final clock state for the observation.
+func (c *TBC) applyTS2PHC(update ts2phcUpdate) SyncState {
+	changed := c.discardInactiveTS2PHC(&c.ts2phc, update.inactivePHCs)
+	for _, evaluated := range update.events {
+		c.recordEvent(evaluated)
+	}
+	if changed || len(update.events) > 0 {
+		c.evaluateState()
+	}
+	return c.syncState
+}
+
+// TS2PHCOffsetInterfaces returns the selected sinks whose offsets are expected.
+func (c *TBC) TS2PHCOffsetInterfaces() []string {
+	return c.ts2phc.offsetInterfaces(c.ts2phcPolicy())
+}
+
+func (c *TBC) ts2phcPolicy() ts2phcPolicy {
+	// Preserve the daemon's previous all-sink monitoring behavior in the
+	// refactor. T-BC-specific timeout policy is applied separately.
+	return ts2phcPolicy{pollTimeouts: true}
 }
 
 // ObserveSource evaluates a raw observation on the serialized clock loop. The
@@ -439,6 +569,7 @@ func (c *TBC) ResetSource(source event.EventSource) {
 
 func (c *TBC) resetAggregate() {
 	c.BaseClock.Reset()
+	c.ts2phc.reset()
 	c.leadingClockData = newLeadingClockParams()
 	c.syncState = SyncState{
 		State:         event.PTP_NOTSET,

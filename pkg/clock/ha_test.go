@@ -98,6 +98,19 @@ func TestHAClock_Interface(t *testing.T) {
 	assert.Equal(t, testHACfg, ha.ConfigName())
 }
 
+func TestHAClockIgnoresUnsupportedClockInputs(t *testing.T) {
+	for _, cfg := range []string{testPTP4lCfg, "ptp4l.9.config"} {
+		for _, data := range []event.EventData{&event.TS2PHCObservation{}, &event.TS2PHCRunStarted{}} {
+			ha, recorder, _ := newTestHAClock()
+			result := ha.AddEvent(event.Event{Source: event.TS2PHC, CfgName: cfg, Data: data})
+			assert.True(t, result.Ignored)
+			assert.Equal(t, event.PTP_NOTSET, ha.GetState())
+			assert.Empty(t, ha.members[testPTP4lCfg].data)
+			assert.Empty(t, recorder.messages)
+		}
+	}
+}
+
 func TestHAClock_BestOfMembers(t *testing.T) {
 	t.Run("one member LOCKED, other FREERUN -> LOCKED", func(t *testing.T) {
 		ha, _, _ := newTestHAClock()

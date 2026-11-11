@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -111,9 +112,10 @@ func TestTS2PHCParser(t *testing.T) {
 
 func TestTS2PHCOffsetReturnsMetricAndEvent(t *testing.T) {
 	for _, tt := range []struct {
-		name  string
-		iface string
-		line  string
+		name     string
+		iface    string
+		line     string
+		holdover bool
 	}{
 		{
 			name: "interface name", iface: "ens2f1",
@@ -125,7 +127,8 @@ func TestTS2PHCOffsetReturnsMetricAndEvent(t *testing.T) {
 		},
 		{
 			name: "holdover", iface: "ens2f1",
-			line: "ts2phc[82674.465]: [ts2phc.0.config:6] ens2f1 offset 2345 s2 freq -16642 holdover",
+			line:     "ts2phc[82674.465]: [ts2phc.0.config:6] ens2f1 offset 2345 s2 freq -16642 holdover",
+			holdover: true,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -138,7 +141,7 @@ func TestTS2PHCOffsetReturnsMetricAndEvent(t *testing.T) {
 			require.NotNil(t, event)
 			assert.Equal(t, tt.iface, event.Iface)
 			assert.Equal(t, tt.line, event.Raw)
-			assert.Equal(t, &Ts2PhcEvent{Timestamp: "82674.465", PollSuccessful: true}, event.Ts2Phc)
+			assert.Equal(t, &Ts2PhcEvent{Timestamp: "82674.465", PollSuccessful: true, Holdover: tt.holdover}, event.Ts2Phc)
 		})
 	}
 }
@@ -172,22 +175,22 @@ func TestTS2PHCReferenceEventExtraction(t *testing.T) {
 		{
 			name: "explicit reference with severity",
 			line: "ts2phc[9979.140]: [ts2phc.1.config:6] selecting /dev/ptp9 as the reference clock",
-			want: &Ts2PhcEvent{Timestamp: "9979.140", PHCDevice: "/dev/ptp9", Role: TS2PHCSource},
+			want: &Ts2PhcEvent{Timestamp: "9979.140", PHCDevice: "/dev/ptp9", Role: event.TS2PHCSource},
 		},
 		{
 			name: "explicit reference without severity or space after colon",
 			line: "ts2phc[9979]:[ts2phc.1.cfg] selecting /dev/ptp0 as the reference clock",
-			want: &Ts2PhcEvent{Timestamp: "9979", PHCDevice: "/dev/ptp0", Role: TS2PHCSource},
+			want: &Ts2PhcEvent{Timestamp: "9979", PHCDevice: "/dev/ptp0", Role: event.TS2PHCSource},
 		},
 		{
 			name: "default reference with severity",
 			line: "ts2phc[9979.140]: [ts2phc.1.config:6] no reference clock, selecting /dev/ptp9 by default",
-			want: &Ts2PhcEvent{Timestamp: "9979.140", PHCDevice: "/dev/ptp9", Role: TS2PHCSource},
+			want: &Ts2PhcEvent{Timestamp: "9979.140", PHCDevice: "/dev/ptp9", Role: event.TS2PHCSource},
 		},
 		{
 			name: "default reference without severity or space after colon",
 			line: "ts2phc[9979]:[ts2phc.1.cfg] no reference clock, selecting /dev/ptp0 by default",
-			want: &Ts2PhcEvent{Timestamp: "9979", PHCDevice: "/dev/ptp0", Role: TS2PHCSource},
+			want: &Ts2PhcEvent{Timestamp: "9979", PHCDevice: "/dev/ptp0", Role: event.TS2PHCSource},
 		},
 		{
 			name: "explicit reference missing PHC",
@@ -265,12 +268,12 @@ func TestTS2PHCPollEventExtraction(t *testing.T) {
 		{
 			name: "selecting PHC",
 			line: "ts2phc[9979.140]: [ts2phc.1.config:6] selecting /dev/ptp9 for synchronization",
-			want: &Ts2PhcEvent{Timestamp: "9979.140", PHCDevice: "/dev/ptp9", Role: TS2PHCSink},
+			want: &Ts2PhcEvent{Timestamp: "9979.140", PHCDevice: "/dev/ptp9", Role: event.TS2PHCSink},
 		},
 		{
 			name: "unselecting PHC without severity or spacing after colon",
 			line: "ts2phc[9979]:[ts2phc.1.cfg] unselecting /dev/ptp9 for synchronization",
-			want: &Ts2PhcEvent{Timestamp: "9979", PHCDevice: "/dev/ptp9", Role: TS2PHCUnmanaged},
+			want: &Ts2PhcEvent{Timestamp: "9979", PHCDevice: "/dev/ptp9", Role: event.TS2PHCUnmanaged},
 		},
 		{
 			name: "selection missing PHC",

@@ -3,6 +3,7 @@ package clockmgr
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -29,6 +30,25 @@ type fixedStateClock struct {
 
 func (c fixedStateClock) GetState() event.PTPState { return c.state }
 
+type reportingClock struct {
+	clock.Clock
+	result       clock.EventResult
+	inputs       []event.Event
+	applyingRule func(event.Event) (bool, bool)
+}
+
+func (c *reportingClock) AddEvent(ev event.Event) clock.EventResult {
+	c.inputs = append(c.inputs, ev)
+	return c.result
+}
+
+func (c *reportingClock) DuringApply(ev event.Event) (bool, bool) {
+	if c.applyingRule != nil {
+		return c.applyingRule(ev)
+	}
+	return true, true
+}
+
 type fixedOffsetMetricClock struct {
 	clock.Clock
 	cfgName   string
@@ -36,11 +56,16 @@ type fixedOffsetMetricClock struct {
 	syncState clock.SyncState
 }
 
-func (c *fixedOffsetMetricClock) AddEvent(event.Event) clock.SyncState { return c.syncState }
-func (c *fixedOffsetMetricClock) GetState() event.PTPState             { return c.syncState.State }
-func (c *fixedOffsetMetricClock) ClockType() event.ClockType           { return c.clockType }
-func (c *fixedOffsetMetricClock) ConfigName() string                   { return c.cfgName }
-func (c *fixedOffsetMetricClock) ProcessData() []*event.Data           { return nil }
+func (c *fixedOffsetMetricClock) AddEvent(ev event.Event) clock.EventResult {
+	return clock.EventResult{SyncState: c.syncState, Events: []clock.EventReport{{Event: ev}}}
+}
+func (c *fixedOffsetMetricClock) GetState() event.PTPState   { return c.syncState.State }
+func (c *fixedOffsetMetricClock) ClockType() event.ClockType { return c.clockType }
+func (c *fixedOffsetMetricClock) ConfigName() string         { return c.cfgName }
+func (c *fixedOffsetMetricClock) ProcessData() []*event.Data { return nil }
+func (c *fixedOffsetMetricClock) ClockClassMetricConfigName(configName string) string {
+	return configName
+}
 
 func (c *fixedOffsetMetricClock) ClockOffsetMetric() (clock.OffsetSample, bool) {
 	if c.syncState.State == event.PTP_NOTSET || c.syncState.LeadingIFace == "" ||
@@ -159,6 +184,116 @@ func TestClockManagerResetDeletesAggregateTBCOffsetMetric(t *testing.T) {
 
 	cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: cfgName, Reset: true})
 	assert.False(t, offsetMetric.Delete(labels), "reset should delete the aggregate T-BC series")
+}
+
+func TestClockManagerReconcilesSourceMetrics(t *testing.T) {
+	offset := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "generic_source_offset"}, []string{fromLabel, nodeLabel, processLabel, ifaceLabel})
+	state := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "generic_source_state"}, []string{processLabel, nodeLabel, ifaceLabel})
+	m := Init("test-node", nil, offset, state, nil, nil)
+	snapshot := clock.SourceMetrics{
+		ConfigName: "ptp4l.7.config", Source: event.PTP4l,
+		Offsets: &clock.OffsetMetrics{From: "upstream", Interfaces: []string{"ens7"}, Invalidate: true},
+		States:  &clock.StateMetrics{Details: []clock.SourceState{{IFace: "ens7", State: event.PTP_LOCKED}}},
+	}
+	m.syncSourceMetrics("clock-7", []clock.SourceMetrics{snapshot})
+	offsetGauge := offset.WithLabelValues("upstream", "test-node", string(event.PTP4l), alias.GetAlias("ens7"))
+	assert.True(t, math.IsNaN(testutil.ToFloat64(offsetGauge)))
+	assert.Equal(t, event.ClockStateLocked, testutil.ToFloat64(state.WithLabelValues(string(event.PTP4l), "test-node", alias.GetAlias("ens7"))))
+
+	m.updateMetrics(clock.EventReport{
+		Event: event.Event{CfgName: snapshot.ConfigName, Source: snapshot.Source, IFace: "ens7",
+			Data: &event.OffsetData{State: event.PTP_LOCKED, Offset: 17}},
+		OffsetSource: "upstream",
+	})
+	assert.Equal(t, float64(17), testutil.ToFloat64(offsetGauge))
+	snapshot.Offsets.Invalidate = false
+	m.syncSourceMetrics("clock-7", []clock.SourceMetrics{snapshot})
+	assert.Equal(t, float64(17), testutil.ToFloat64(offsetGauge), "an ordinary snapshot retains a measured offset")
+
+	m.updateMetrics(clock.EventReport{
+		Event: event.Event{CfgName: snapshot.ConfigName, Source: snapshot.Source, IFace: "ens7",
+			Data: &event.StateData{State: event.PTP_FREERUN}},
+		OffsetSource: "upstream", OffsetUnavailable: true,
+	})
+	assert.True(t, math.IsNaN(testutil.ToFloat64(offsetGauge)))
+	snapshot.Offsets.Interfaces = nil
+	snapshot.States.Details = nil
+	m.syncSourceMetrics("clock-7", []clock.SourceMetrics{snapshot})
+	assert.Zero(t, testutil.CollectAndCount(offset))
+	assert.Zero(t, testutil.CollectAndCount(state))
+}
+
+func TestClockManagerReportsClockResult(t *testing.T) {
+	offset := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "clock_result_offset"}, []string{fromLabel, nodeLabel, processLabel, ifaceLabel})
+	states := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "clock_result_state"}, []string{processLabel, nodeLabel, ifaceLabel})
+	m := Init("test-node", nil, offset, states, nil, nil)
+	base, err := clock.NewBC("ptp4l.7.config", false, event.PtpClockThreshold{})
+	require.NoError(t, err)
+	c := &reportingClock{Clock: base, result: clock.EventResult{
+		SyncState: clock.SyncState{State: event.PTP_NOTSET},
+		Events: []clock.EventReport{
+			{Event: event.Event{CfgName: "ptp4l.7.config", Source: event.DPLL, IFace: "ens1",
+				Data: &event.OffsetData{State: event.PTP_LOCKED, Offset: 17}}, OffsetSource: "reference"},
+			{Event: event.Event{CfgName: "ptp4l.7.config", Source: event.DPLL, IFace: "ens2",
+				Data: &event.StateData{State: event.PTP_FREERUN}}, OffsetSource: "reference", OffsetUnavailable: true},
+		},
+		Metrics: []clock.SourceMetrics{{
+			ConfigName: "ptp4l.7.config", Source: event.DPLL,
+			Offsets: &clock.OffsetMetrics{From: "reference", Interfaces: []string{"ens1", "ens2"}},
+			States:  &clock.StateMetrics{Details: []clock.SourceState{{IFace: "ens1", State: event.PTP_LOCKED}}},
+		}},
+	}}
+	require.NoError(t, m.AddClock(c))
+	input := event.Event{CfgName: "ptp4l.7.config", Source: event.GNSS, IFace: "ens0", Data: &event.GNSSData{GPSStatus: 3}}
+	m.ProcessEvent(input)
+	require.Len(t, c.inputs, 1)
+	assert.Equal(t, input, c.inputs[0])
+	assert.Equal(t, 2, testutil.CollectAndCount(offset), "only the clock's reported events and series are exported")
+	assert.Equal(t, float64(17), testutil.ToFloat64(offset.WithLabelValues("reference", "test-node", string(event.DPLL), alias.GetAlias("ens1"))))
+	assert.True(t, math.IsNaN(testutil.ToFloat64(offset.WithLabelValues("reference", "test-node", string(event.DPLL), alias.GetAlias("ens2")))))
+	assert.Equal(t, event.ClockStateLocked, testutil.ToFloat64(states.WithLabelValues(string(event.DPLL), "test-node", alias.GetAlias("ens1"))))
+	c.result.Events, c.result.Metrics = nil, nil
+	m.ProcessEvent(input)
+	assert.Len(t, c.inputs, 2)
+	assert.Equal(t, 2, testutil.CollectAndCount(offset), "an empty result must not publish the raw input")
+}
+
+func TestClockManagerReportsAcceptedEventsDuringApply(t *testing.T) {
+	offset := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "apply_result_offset"}, []string{fromLabel, nodeLabel, processLabel, ifaceLabel})
+	states := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "apply_result_state"}, []string{processLabel, nodeLabel, ifaceLabel})
+	m := Init("test-node", nil, offset, states, nil, nil)
+	base, err := clock.NewBC("ptp4l.7.config", false, event.PtpClockThreshold{})
+	require.NoError(t, err)
+	c := &reportingClock{
+		Clock: base,
+		result: clock.EventResult{
+			SyncState: clock.SyncState{State: event.PTP_LOCKED, LeadingIFace: "ens1"},
+			Events: []clock.EventReport{{Event: event.Event{CfgName: "ptp4l.7.config", Source: event.PTP4l,
+				IFace: "ens1", Data: &event.OffsetData{Offset: 17}}}},
+		},
+		applyingRule: func(event.Event) (bool, bool) { return true, false },
+	}
+	require.NoError(t, m.AddClock(c))
+	m.SetApplying(true)
+	m.ProcessEvent(event.Event{CfgName: "ptp4l.7.config", Source: event.PTP4l})
+	require.Len(t, c.inputs, 1)
+	assert.Equal(t, float64(17), testutil.ToFloat64(offset.WithLabelValues(string(event.PTP4l), "test-node", string(event.PTP4l), alias.GetAlias("ens1"))))
+	assert.Zero(t, testutil.CollectAndCount(states), "aggregate clock state is deferred during apply")
+}
+
+func TestClockManagerResetWithoutOwnerClearsConfigMetrics(t *testing.T) {
+	offset := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "orphaned_source_offset"}, []string{fromLabel, nodeLabel, processLabel, ifaceLabel})
+	m := Init("test-node", nil, offset, nil, nil, nil)
+	for _, source := range []event.EventSource{event.PTP4l, event.DPLL} {
+		m.updateMetrics(clock.EventReport{Event: event.Event{
+			CfgName: "removed.config", Source: source, IFace: "ens7", Data: &event.OffsetData{Offset: 1},
+		}})
+	}
+	require.Equal(t, 2, testutil.CollectAndCount(offset))
+	m.ProcessEvent(event.Event{CfgName: "removed.config", Source: event.PTP4l, Reset: true})
+	assert.Equal(t, 1, testutil.CollectAndCount(offset), "the default reset only removes the indicated source")
+	m.ProcessEvent(event.Event{CfgName: "removed.config", Source: event.PTP4l, Reset: true, ResetAllMetrics: true})
+	assert.Zero(t, testutil.CollectAndCount(offset))
 }
 
 // SnapshotStatsForTest exposes filtered snapshots only to tests, not production callers.

@@ -622,7 +622,9 @@ func Test_ProcessPTPMetrics(t *testing.T) {
 				ptpDelay := daemon.Delay.With(map[string]string{"from": tc.from, "process": tc.process, "node": tc.node, "iface": tc.iface})
 				assert.Equal(tc.expectedDelay, testutil.ToFloat64(ptpDelay), "Delay does not match\n%s", tc.String())
 			}
-			if tc.expectedClockState != SKIP {
+			// ts2phc state metrics now require Clock evaluation, covered by the
+			// clock/clockmgr tests. This test runs only the numeric producer.
+			if tc.expectedClockState != SKIP && tc.process != event.TS2PHCProcessName {
 				clockState := daemon.ClockState.With(map[string]string{"process": tc.process, "node": tc.node, "iface": tc.iface})
 				assert.Equal(tc.expectedClockState, testutil.ToFloat64(clockState), "ClockState does not match\n%s", tc.String())
 			}

@@ -93,9 +93,8 @@ type ptpProcess struct {
 	dn *Daemon
 	pm *plugin.PluginManager
 
-	clockType  event.ClockType
-	logParser  parser.MetricsExtractor
-	ts2phcPoll ts2phcPollState
+	clockType event.ClockType
+	logParser parser.MetricsExtractor
 
 	ptpClockThreshold     *ptpv1.PtpClockThreshold
 	haProfile             map[string][]string // stores list of interface name for each profile
@@ -441,7 +440,7 @@ func (p *ptpProcess) run() {
 		sendProcessStatusEvent(p.eventCh, event.EventSource(p.name), p.configName, p.clockType, "", PtpProcessUp)
 
 		if p.name == ts2phcProcessName {
-			p.resetPollCycle()
+			p.forwardTS2PHCEvent("", &event.TS2PHCRunStarted{})
 		}
 		p.runScanner(cmdReader)
 
@@ -541,46 +540,32 @@ func (p *ptpProcess) Stop() error {
 // }
 
 func (p *ptpProcess) processTs2PhcEvents(ptpOffset float64, source string, iface string, state event.PTPState, nmeaLocked *bool) {
-	// TODO should be ts2phc process specific
+	if source == ts2phcProcessName {
+		// The legacy parser path must use the same observation boundary too.
+		p.forwardTS2PHCEvent(iface, &event.TS2PHCObservation{
+			Offset: &ptpOffset, State: state, NMEALocked: nmeaLocked,
+			PollSuccessful: true, Holdover: state == event.PTP_HOLDOVER,
+		})
+		return
+	}
 	var ptpState event.PTPState
 	ptpState = state
-	ptpOffsetInt64 := int64(ptpOffset)
 	// if state is HOLDOVER do not update the state
 	// transition to FREERUN if offset is outside configured thresholds
 	if shouldFreeRun(state, ptpOffset, p.ptpClockThreshold) {
 		ptpState = event.PTP_FREERUN
 	}
 
-	if source == ts2phcProcessName { // for ts2phc send it to event to create metrics and events
-		select {
-		case p.eventCh <- event.Event{
-			Source:     event.TS2PHC,
-			CfgName:    p.configName,
-			IFace:      iface,
-			ClockType:  p.clockType,
-			Time:       time.Now().UnixMilli(),
-			WriteToLog: nmeaLocked != nil,
-			Reset:      false,
-			Data: &event.OffsetData{
-				State:      ptpState,
-				Offset:     ptpOffsetInt64,
-				NMEALocked: nmeaLocked,
-			},
-		}:
-		default:
-		}
-	} else {
-		if iface != "" && iface != clockRealTime {
-			iface = alias.GetAlias(iface)
-		}
-		switch ptpState {
-		case event.PTP_LOCKED:
-			updateClockStateMetrics(p.name, iface, LOCKED, "")
-		case event.PTP_FREERUN:
-			updateClockStateMetrics(p.name, iface, FREERUN, "")
-		case event.PTP_HOLDOVER:
-			updateClockStateMetrics(p.name, iface, HOLDOVER, "")
-		}
+	if iface != "" && iface != clockRealTime {
+		iface = alias.GetAlias(iface)
+	}
+	switch ptpState {
+	case event.PTP_LOCKED:
+		updateClockStateMetrics(p.name, iface, LOCKED, "")
+	case event.PTP_FREERUN:
+		updateClockStateMetrics(p.name, iface, FREERUN, "")
+	case event.PTP_HOLDOVER:
+		updateClockStateMetrics(p.name, iface, HOLDOVER, "")
 	}
 }
 
@@ -651,9 +636,10 @@ func (p *ptpProcess) updateGMStatusOnProcessDown(process string) {
 		// (this nullifies the remaining pieces in the event data if ts2phc was killed during ptp profile change)
 		select {
 		case p.eventCh <- event.Event{
-			Source:  event.TS2PHC,
-			CfgName: p.configName,
-			Reset:   true,
+			Source:          event.TS2PHC,
+			CfgName:         p.configName,
+			Reset:           true,
+			ResetAllMetrics: true,
 		}:
 		default:
 		}
@@ -1047,9 +1033,6 @@ func (p *ptpProcess) renderPtp4lConf(env ptpProcessEnv, output *Ptp4lConf, opts 
 	p.addMonitorFlags(output, opts)
 	configOutput, ifaces := output.RenderPtp4lConf()
 	p.ifaces = ifaces
-	if p.name == ts2phcProcessName {
-		p.resetPollCycle()
-	}
 	return p.writeProcessConf(output, configOutput)
 }
 

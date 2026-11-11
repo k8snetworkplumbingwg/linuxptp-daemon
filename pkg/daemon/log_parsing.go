@@ -13,7 +13,6 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
 func convertParserRoleToMetricsRole(role parserconstants.PTPPortRole) ptpPortRole {
@@ -72,6 +71,10 @@ func processWithParser(process *ptpProcess, output string) {
 
 	process.hasCollectedMetrics = true
 	process.forwardSourceData(metrics, ptpEvent)
+	if process.name == ts2phcProcessName {
+		process.processTS2PHCOutput(metrics, ptpEvent)
+		return
+	}
 	// Process metrics if available
 	if metrics != nil {
 		process.offset = metrics.Offset
@@ -85,6 +88,10 @@ func processWithParser(process *ptpProcess, output string) {
 }
 
 func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
+	if process.name == ts2phcProcessName {
+		process.processTS2PHCOutput(ptpMetrics, nil)
+		return
+	}
 	configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
 	if configName != "" {
 		configName = strings.Split(configName, MessageTagSuffixSeperator)[0]
@@ -161,35 +168,6 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 			}:
 			default:
 			}
-		}
-	case ts2phcProcessName:
-		// Send event for ts2phc
-		eventSource := process.ifaces.GetEventSource(process.ifaces.GetPhcID2IFace(ptpMetrics.Iface))
-		// Preserve the state transition when the offset is unavailable, but
-		// never convert NaN to an integer or publish it as a measured offset.
-		var data event.EventData = &event.StateData{State: state}
-		if !math.IsNaN(ptpMetrics.Offset) {
-			od := &event.OffsetData{
-				State:  state,
-				Offset: int64(ptpMetrics.Offset),
-			}
-			if eventSource == event.GNSS {
-				od.NMEALocked = utils.ToPtr(true)
-			}
-			data = od
-		}
-		select {
-		case process.eventCh <- event.Event{
-			Source:     event.TS2PHC,
-			CfgName:    configName,
-			IFace:      ptpMetrics.Iface, // use real interface name in event/log
-			ClockType:  process.clockType,
-			Time:       time.Now().UnixMilli(),
-			WriteToLog: eventSource == event.GNSS,
-			Reset:      false,
-			Data:       data,
-		}:
-		default:
 		}
 	case phc2sysProcessName:
 		select {
