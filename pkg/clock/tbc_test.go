@@ -172,7 +172,7 @@ func TestUpdateTSCState(t *testing.T) {
 		bc.syncState.ClockClass = protocol.ClockClassFreerun
 		return bc
 	}
-	lock := func(bc *TBC) SyncState {
+	lock := func(bc *TBC) EventResult {
 		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
 		bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_LOCKED, 10, false))
 		fillBCDataWindows(bc, 10)

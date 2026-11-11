@@ -8,7 +8,7 @@ import (
 
 // Clock represents a PTP clock instance tied to a specific config profile.
 type Clock interface {
-	AddEvent(ev event.Event) SyncState
+	AddEvent(ev event.Event) EventResult
 	GetState() event.PTPState
 	SystemClockUpdate()
 	Reset()
@@ -35,6 +35,17 @@ type Clock interface {
 // clocks without this capability make no managed-worker completion guarantee.
 type ManagedWorkerOwner interface {
 	StopManagedWorkers() <-chan struct{}
+}
+
+// EventResult combines synchronization state with the clock's reporting decision.
+// A nil Report preserves the input event; a non-nil Report replaces it for logs
+// and event metrics. SuppressReport takes precedence and suppresses reporting
+// and the manager's subsequent state notifications, metrics and statistics.
+// Reporting decisions leave the raw event and stored policy inputs intact.
+type EventResult struct {
+	SyncState
+	Report         *event.Event
+	SuppressReport bool
 }
 
 // SyncState holds the composite synchronization state of a clock.

@@ -496,7 +496,7 @@ func TestUpdateGMState(t *testing.T) {
 				},
 			}
 
-			var result SyncState
+			var result EventResult
 			for i, s := range tt.steps {
 				for _, ev := range s.events {
 					result = gm.AddEvent(ev)

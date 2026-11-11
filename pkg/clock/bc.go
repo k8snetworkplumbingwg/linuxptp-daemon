@@ -77,7 +77,7 @@ func (c *BCClock) ClockClass() fbprotocol.ClockClass { return c.clockClass }
 func (c *BCClock) GetState() event.PTPState { return c.syncState }
 
 // AddEvent processes an event and updates clock state.
-func (c *BCClock) AddEvent(ev event.Event) SyncState {
+func (c *BCClock) AddEvent(ev event.Event) EventResult {
 	switch ev.Source {
 	case event.PMC:
 		if ds, ok := ev.Data.(*event.ParentDSData); ok {
@@ -90,12 +90,12 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 				c.updateClockClass(fbprotocol.ClockClass(ds.ParentDataSet.GrandmasterClockClass))
 			}
 		}
-		return c.currentSyncState()
+		return EventResult{SyncState: c.currentSyncState()}
 	default:
 		// A holdover timer that has fired posts this back onto the loop.
 		if he, expired := ev.Data.(*event.HoldoverExpired); expired {
 			c.handleHoldoverExpired(he.Generation)
-			return c.currentSyncState()
+			return EventResult{SyncState: c.currentSyncState()}
 		}
 		d := c.GetData(ev.Source)
 		d.AddEvent(ev)
@@ -111,7 +111,7 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 			sourceLost = ev.Data.(*event.DPLLData).SourceLost
 		case *event.SyncEData:
 		default:
-			return c.currentSyncState()
+			return EventResult{SyncState: c.currentSyncState()}
 		}
 
 		// Record the follower interface once known
@@ -135,12 +135,12 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 				c.armHoldoverTimer()
 			}
 			c.onStateChanged(prev, ev.IFace)
-			return c.currentSyncState()
+			return EventResult{SyncState: c.currentSyncState()}
 		}
 
 		offset, hasOffset := ptpOffset(ev)
 		if !hasOffset {
-			return c.currentSyncState()
+			return EventResult{SyncState: c.currentSyncState()}
 		}
 		// We have offset data again, so cancel the timer to enter freerun
 		c.cancelHoldoverTimer()
@@ -151,7 +151,7 @@ func (c *BCClock) AddEvent(ev event.Event) SyncState {
 		}
 
 		c.onStateChanged(prev, ev.IFace)
-		return c.currentSyncState()
+		return EventResult{SyncState: c.currentSyncState()}
 	}
 }
 

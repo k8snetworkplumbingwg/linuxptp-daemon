@@ -479,13 +479,26 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 		return
 	}
 
+	var logData string
 	if ev.WriteToLog {
-		if logData := ev.GetLogData(); logData != "" {
-			fmt.Printf("%s", logData)
-		}
+		logData = ev.GetLogData()
 	}
 	prevState := clk.GetState()
 	clockState := clk.AddEvent(ev)
+	if clockState.SuppressReport {
+		return
+	}
+	reported := ev
+	if clockState.Report != nil {
+		reported = *clockState.Report
+		logData = ""
+		if reported.WriteToLog {
+			logData = reported.GetLogData()
+		}
+	}
+	if logData != "" {
+		fmt.Printf("%s", logData)
+	}
 	if prevState != event.PTP_NOTSET && prevState != clockState.State {
 		m.signalSyncStatus()
 	}
@@ -509,7 +522,7 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 	// same class clk.ClockClass() would, so this is equivalent for them.
 	m.updateClockClassMetrics(lookupName, clockState.ClockClass)
 	m.updateHAProfileMetrics(clockState.HAProfileStatus)
-	m.updateMetrics(ev)
+	m.updateMetrics(reported)
 	// A clock (E1) transition may move the derived E3 os_clock_state.
 	m.emitOSClockState()
 	m.publishStats()

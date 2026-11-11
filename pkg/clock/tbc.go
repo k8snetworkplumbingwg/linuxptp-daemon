@@ -162,11 +162,11 @@ func (c *TBC) SourceQualification(cfg string) (event.SourceQualification, bool) 
 }
 
 // AddEvent processes an event and updates clock state.
-func (c *TBC) AddEvent(ev event.Event) SyncState {
+func (c *TBC) AddEvent(ev event.Event) EventResult {
 	switch ev.Source {
 	case event.SYNCE:
 		c.processSyncE(ev)
-		return c.syncState
+		return EventResult{SyncState: c.syncState}
 	case event.PMC:
 		ds, ok := ev.Data.(*event.ParentDSData)
 		if ok {
@@ -175,14 +175,14 @@ func (c *TBC) AddEvent(ev event.Event) SyncState {
 		} else if currentDS, isCurrentDS := ev.Data.(*event.ParentTimeCurrentDS); isCurrentDS {
 			c.handleDownstreamAnnounceIWF(currentDS)
 		}
-		return c.syncState
+		return EventResult{SyncState: c.syncState}
 	default:
 		d := c.GetData(ev.Source)
 		d.AddEvent(ev)
 		d.UpdateState()
 		c.updateLeadingClockData(ev)
 		c.evaluateState()
-		return c.syncState
+		return EventResult{SyncState: c.syncState}
 	}
 }
 
