@@ -224,18 +224,42 @@ func TestTS2PHCAddEventReportsUnavailableOffset(t *testing.T) {
 	}
 }
 
-func TestTS2PHCLegacyPollTimeoutPolicy(t *testing.T) {
-	for _, clockType := range []event.ClockType{event.GM, event.TBC} {
-		t.Run(string(clockType), func(t *testing.T) {
-			c, tracker := newTS2PHCTestClock(clockType)
+func TestTS2PHCClockSpecificPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		clockType event.ClockType
+		holdover  bool
+	}{
+		{"T-BC normal", event.TBC, false},
+		{"T-BC holdover", event.TBC, true},
+		{"T-GM normal", event.GM, false},
+		{"T-GM holdover", event.GM, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, tracker := newTS2PHCTestClock(tc.clockType)
+			if tc.holdover {
+				if tc.clockType == event.TBC {
+					observeTS2PHCTest(c, "", &event.TS2PHCObservation{PHCDevice: "/dev/ptp0", Role: event.TS2PHCSink})
+				} else {
+					observeTS2PHCTest(c, "ens0", &event.TS2PHCObservation{PollSuccessful: true, Holdover: true})
+				}
+			}
 			for i := range 3 {
 				assert.Empty(t, observeTS2PHCTest(c, "", ts2phcTestStamp(fmt.Sprintf("/dev/ptp%d", i), "2000.100", 10)))
 			}
 			cycle := tracker.currentPollCycle
-			events := observeTS2PHCTest(c, "", &event.TS2PHCObservation{Timestamp: "2000.400", PollTimeout: true})
-			require.Len(t, events, 3, "the refactor preserves the previous all-sink timeout behavior")
-			assert.Same(t, cycle, tracker.currentPollCycle)
-			assert.Equal(t, []string{"ens0", "ens1", "ens2"}, []string{events[0].IFace, events[1].IFace, events[2].IFace})
+			timeout := &event.TS2PHCObservation{Timestamp: "2000.400", PollTimeout: true}
+			events := observeTS2PHCTest(c, "", timeout)
+			if tc.clockType == event.TBC && !tc.holdover {
+				assert.Empty(t, events, "normal T-BC cannot attribute a poll timeout to a particular sink")
+				events = observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp0", "2001.100", 11))
+				require.Len(t, events, 2)
+				assert.Equal(t, []string{"ens1", "ens2"}, []string{events[0].IFace, events[1].IFace})
+			} else {
+				require.Len(t, events, 3, "T-GM and T-BC holdover monitor every selected sink, including the leader")
+				assert.Equal(t, "ens0", events[0].IFace)
+				assert.Empty(t, observeTS2PHCTest(c, "", timeout), "no duplicate failures within a batch")
+			}
 			for _, ev := range events {
 				assert.Equal(t, event.TS2PHC, ev.Source)
 				assert.Equal(t, "ts2phc.1.config", ev.CfgName)
@@ -247,6 +271,75 @@ func TestTS2PHCLegacyPollTimeoutPolicy(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTS2PHCTBCUsesSourceFactsNotAggregateState(t *testing.T) {
+	for _, source := range []event.EventSource{event.DPLL, event.PTP4l} {
+		t.Run(string(source), func(t *testing.T) {
+			c, tracker := newTS2PHCTestClock(event.TBC)
+			tbc := c.(*TBC)
+			tbc.syncState.State = event.PTP_HOLDOVER
+			assert.False(t, tbc.ts2phcPolicy().pollTimeouts, "aggregate HOLDOVER is not itself the monitoring-mode input")
+			tbc.syncState.State = event.PTP_FREERUN
+			c.AddEvent(event.Event{Source: event.PTP4l, IFace: "ens0", Time: time.Now().UnixMilli(), Data: &event.StateData{State: event.PTP_FREERUN}})
+			assert.False(t, tbc.ts2phcPolicy().pollTimeouts, "an offset fault without source loss is not holdover mode")
+			var loss event.EventData = &event.StateData{State: event.PTP_FREERUN, SourceLost: true}
+			var recovery event.EventData = &event.StateData{State: event.PTP_LOCKED}
+			if source == event.DPLL {
+				loss = &event.DPLLData{State: event.PTP_HOLDOVER, SourceLost: true}
+				recovery = &event.DPLLData{State: event.PTP_LOCKED}
+			}
+			c.AddEvent(event.Event{Source: source, IFace: "ens0", Time: time.Now().UnixMilli(), Data: loss})
+			assert.True(t, tbc.ts2phcPolicy().pollTimeouts)
+			for i := range 3 {
+				observeTS2PHCTest(c, "", ts2phcTestStamp(fmt.Sprintf("/dev/ptp%d", i), "2000.100", 10))
+			}
+			events := observeTS2PHCTest(c, "", &event.TS2PHCObservation{Timestamp: "2000.400", PollTimeout: true})
+			require.Len(t, events, 3)
+			assert.Equal(t, event.PTP_FREERUN, c.GetState())
+			assert.True(t, tbc.ts2phcPolicy().pollTimeouts, "synthetic FREERUN must not disable source-loss monitoring")
+			events = observeTS2PHCTest(c, "", &event.TS2PHCObservation{Timestamp: "2001.400", PollTimeout: true})
+			assert.Empty(t, events, "a timeout starts a candidate PPS cycle; it does not prove that cycle was missed")
+			assert.Equal(t, 2001, tracker.currentPollCycle.group)
+			c.AddEvent(event.Event{Source: source, IFace: "ens0", Time: time.Now().UnixMilli(), Data: recovery})
+			assert.False(t, tbc.ts2phcPolicy().pollTimeouts)
+			assert.Empty(t, observeTS2PHCTest(c, "", &event.TS2PHCObservation{Timestamp: "2002.400", PollTimeout: true}))
+			assert.Nil(t, c.GetData(event.TS2PHC).GetDataDetails("ens0"), "recovery removes obsolete leading-sink fault state without faking LOCKED")
+		})
+	}
+}
+
+func TestTS2PHCTBCMissingOffsetDrivesClockState(t *testing.T) {
+	c, _ := newTS2PHCTestClock(event.TBC)
+	tbc := c.(*TBC)
+	tbc.isTTSC = true // No downstream hardware work in this state-machine test.
+	tbc.leadingClockData = tbcLeadingClockParams()
+	tbc.leadingClockData.leadingInterface = "ens0"
+	for _, source := range []event.EventSource{event.PTP4l, event.DPLL} {
+		data := c.GetData(source)
+		data.State = event.PTP_LOCKED
+		data.Details = event.DDetails{{IFace: "ens0", State: event.PTP_LOCKED, HasOffset: true, Time: time.Now().UnixMilli()}}
+	}
+	fillBCDataWindows(tbc, 0)
+	tbc.syncState.State = event.PTP_LOCKED
+	for edge := int64(10); edge < 12; edge++ {
+		for i := range 3 {
+			observeTS2PHCTest(c, "", ts2phcTestStamp(fmt.Sprintf("/dev/ptp%d", i), fmt.Sprintf("%d.100", 1990+edge), edge))
+		}
+		if edge == 10 {
+			observeTS2PHCTest(c, "ens1", ts2phcTestOffset(0))
+		}
+		observeTS2PHCTest(c, "ens2", ts2phcTestOffset(0))
+		observeTS2PHCTest(c, "", &event.TS2PHCObservation{Timestamp: fmt.Sprintf("%d.400", 1990+edge), PollTimeout: true})
+		assert.Equal(t, event.PTP_LOCKED, c.GetState(), "poll timeouts alone must not move a healthy T-BC out of LOCKED")
+	}
+	events := observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp0", "2002.100", 12))
+	require.Len(t, events, 1)
+	assert.Equal(t, "ens1", events[0].IFace)
+	assert.Equal(t, event.PTP_FREERUN, c.GetState(), "the unmatched sink timestamp must drive the actual Clock FSM")
+	observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp1", "2002.100", 12))
+	observeTS2PHCTest(c, "ens1", ts2phcTestOffset(0))
+	assert.Equal(t, event.PTP_LOCKED, c.GetState(), "a genuine offset restores the sink, not a fabricated success")
 }
 
 func TestTS2PHCTBCBatchDoesNotPublishIntermediateState(t *testing.T) {
@@ -339,6 +432,81 @@ func TestTS2PHCRepeatedTimeoutConfirmsMissingPPSBatch(t *testing.T) {
 	}
 }
 
+func TestTS2PHCTBCCleanupAndMeasurementAreAppliedTogether(t *testing.T) {
+	c, tracker := newTS2PHCTestClock(event.TBC)
+	tbc := c.(*TBC)
+	tbc.isTTSC = true
+	tbc.leadingClockData = tbcLeadingClockParams()
+	tbc.leadingClockData.leadingInterface = "ens0"
+	tbc.syncState.State = event.PTP_FREERUN
+	for _, source := range []event.EventSource{event.PTP4l, event.DPLL} {
+		data := c.GetData(source)
+		data.State = event.PTP_LOCKED
+		data.Details = event.DDetails{{IFace: "ens0", State: event.PTP_LOCKED, HasOffset: true, Time: time.Now().UnixMilli()}}
+	}
+	data := c.GetData(event.TS2PHC)
+	data.Details = event.DDetails{
+		{IFace: "ens0", State: event.PTP_FREERUN, Time: time.Now().UnixMilli()},
+		{IFace: "ens1", State: event.PTP_FREERUN, Time: time.Now().UnixMilli()},
+	}
+	data.UpdateState()
+	fillBCDataWindows(tbc, 0)
+	tracker.offsetHoldover = true
+	recorder := &ipcRecorder{}
+	tbc.SetIPC(recorder.send)
+
+	// A successful follower offset ends the holdover indication. The now
+	// unmonitored leader must be removed in the same update as that offset.
+	raw := ts2phcTestOffset(0)
+	update := c.observeTS2PHC(ts2phcTestEvent(c, "ens1", raw), raw)
+	require.Len(t, update.events, 1)
+	assert.Equal(t, []string{"/dev/ptp0"}, update.inactivePHCs)
+	assert.NotNil(t, data.GetDataDetails("ens0"))
+	assert.Equal(t, event.PTP_FREERUN, data.GetDataDetails("ens1").State)
+	assert.Empty(t, recorder.messages)
+
+	state := c.applyTS2PHC(update)
+	assert.Nil(t, data.GetDataDetails("ens0"))
+	follower := data.GetDataDetails("ens1")
+	require.NotNil(t, follower)
+	assert.Equal(t, event.PTP_LOCKED, follower.State)
+	assert.Equal(t, event.PTP_LOCKED, state.State)
+	msg := findMessage(recorder.messages, ipc.TypePTPState)
+	require.NotNil(t, msg)
+	assert.Equal(t, ipc.StateLocked, msg.Values.(ipc.StateValue).State)
+}
+
+func TestTS2PHCTBCHealthySinksAndMissingTimestamps(t *testing.T) {
+	c, tracker := newTS2PHCTestClock(event.TBC)
+	for second := int64(0); second < 3; second++ {
+		observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp1", fmt.Sprintf("%d.100", 2000+second), 10+second))
+		observeTS2PHCTest(c, "ens1", ts2phcTestOffset(0))
+		cycle := tracker.currentPollCycle
+		assert.Empty(t, observeTS2PHCTest(c, "", &event.TS2PHCObservation{Timestamp: fmt.Sprintf("%d.400", 2001+second), PollTimeout: true}))
+		assert.Same(t, cycle, tracker.currentPollCycle)
+	}
+	assert.Empty(t, observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp1", "2003.100", 13)))
+	require.Len(t, c.GetData(event.TS2PHC).Details, 1, "normal T-BC must not invent failures for clocks without timestamps")
+	assert.Equal(t, event.PTP_LOCKED, c.GetData(event.TS2PHC).State)
+}
+
+func TestTS2PHCTBCLeadingAlias(t *testing.T) {
+	c, tracker := newTS2PHCTestClock(event.TBC)
+	tbc := c.(*TBC)
+	tbc.SetConfiguredLeadingInterface("ens1alias")
+	cfg := ts2phcTestConfig()
+	cfg.Interfaces = append(cfg.Interfaces, event.TS2PHCInterface{Name: "ens1alias", PHCDevice: "/dev/ptp1"})
+	c.ConfigureTS2PHC(*cfg)
+	for i := range 3 {
+		observeTS2PHCTest(c, "", ts2phcTestStamp(fmt.Sprintf("/dev/ptp%d", i), "2000.100", 10))
+	}
+	assert.Equal(t, "/dev/ptp1", tbc.ts2phcPolicy().skipPHC)
+	assert.True(t, tracker.currentPollCycle.tstamps[1].handled)
+	events := observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp0", "2001.100", 11))
+	require.Len(t, events, 2)
+	assert.Equal(t, []string{"ens0", "ens2"}, []string{events[0].IFace, events[1].IFace})
+}
+
 func TestTS2PHCSharedPHCOffsetsAndDuplicates(t *testing.T) {
 	c, tracker := newTS2PHCTestClock(event.GM)
 	cfg := ts2phcTestConfig()
@@ -380,9 +548,7 @@ func TestTS2PHCRoleTransitionsAndUnknownDevices(t *testing.T) {
 	observeTS2PHCTest(c, "", &event.TS2PHCObservation{PHCDevice: "/dev/ptp99", Role: event.TS2PHCSink})
 	observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp99", "2000.100", 10))
 	assert.NotContains(t, tracker.roles, "/dev/ptp99")
-	events := observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp99", "2001.100", 11))
-	require.Len(t, events, 3, "the refactor preserves missing-sink reports at a batch boundary")
-	assert.Equal(t, []string{"ens0", "ens1", "ens2"}, []string{events[0].IFace, events[1].IFace, events[2].IFace})
+	assert.Empty(t, observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp99", "2001.100", 11)))
 	assert.True(t, tracker.currentPollCycle.tstamps[0].handled)
 }
 
@@ -415,6 +581,21 @@ func TestTS2PHCBatchBoundariesAndLateOffsets(t *testing.T) {
 	events := observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp0", "901.999", 11))
 	assert.Empty(t, events, "offsets that arrive after their timestamps complete the batch")
 	assert.NotSame(t, cycle, tracker.currentPollCycle, "a repeated PHC with a new hardware timestamp closes the batch")
+}
+
+func TestTS2PHCTBCBatchBoundariesAndLateOffsets(t *testing.T) {
+	c, tracker := newTS2PHCTestClock(event.TBC)
+	observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp0", "900.999", 10))
+	cycle := tracker.currentPollCycle
+	assert.Empty(t, observeTS2PHCTest(c, "", &event.TS2PHCObservation{Timestamp: "901.000", PollTimeout: true}))
+	assert.Empty(t, observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp1", "901.001", 10)))
+	assert.Same(t, cycle, tracker.currentPollCycle, "a log-second boundary does not close a PPS batch")
+	observeTS2PHCTest(c, "ens1", ts2phcTestOffset(0))
+	assert.Empty(t, observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp0", "901.999", 11)))
+	observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp1", "902.001", 11))
+	events := observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp99", "905.100", 14))
+	require.Len(t, events, 1, "a long gap closes the old batch even if the next PHC was absent from it")
+	assert.Equal(t, "ens1", events[0].IFace)
 }
 
 func TestTS2PHCHoldoverPartialBatchAndRepeatedTimeouts(t *testing.T) {
@@ -463,9 +644,6 @@ func TestTS2PHCOffsetsOwnThresholdsAndPreserveRawFacts(t *testing.T) {
 
 func TestTS2PHCNMEAStatusDoesNotConsumeTimestamp(t *testing.T) {
 	c, tracker := newTS2PHCTestClock(event.TBC)
-	cfg := ts2phcTestConfig()
-	cfg.Interfaces = cfg.Interfaces[1:2]
-	c.ConfigureTS2PHC(*cfg)
 	observeTS2PHCTest(c, "", ts2phcTestStamp("/dev/ptp1", "2000.100", 10))
 	nmea := ts2phcTestOffset(0)
 	nmea.PollSuccessful = false

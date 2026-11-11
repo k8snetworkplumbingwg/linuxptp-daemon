@@ -153,7 +153,11 @@ func TestTS2PHCManagerPublishesClockVerdictsOnly(t *testing.T) {
 				}))
 			}
 			assert.Empty(t, c.GetData(event.TS2PHC).Details, "timestamps/configuration must not become state details")
-			assert.Equal(t, 3, testutil.CollectAndCount(offset), "expected series remain present even before measurements arrive")
+			wantMeasurements := 3
+			if clockType == event.TBC {
+				wantMeasurements = 2
+			}
+			assert.Equal(t, wantMeasurements, testutil.CollectAndCount(offset), "expected series remain present even before measurements arrive")
 			unavailable := offset.WithLabelValues("master", "test-node", string(event.TS2PHC), alias.GetAlias("ens1"))
 			assert.True(t, math.IsNaN(testutil.ToFloat64(unavailable)))
 			key := sourceStateKey{clockName: c.ConfigName(), source: event.TS2PHC}
@@ -163,9 +167,14 @@ func TestTS2PHCManagerPublishesClockVerdictsOnly(t *testing.T) {
 			}))
 			assert.Equal(t, event.PTP_LOCKED, c.GetData(event.TS2PHC).State)
 			m.ProcessEvent(ts2phcManagerObservation(clockType, "", &event.TS2PHCObservation{Timestamp: "2000.400", PollTimeout: true}))
-			require.Len(t, c.GetData(event.TS2PHC).Details, 3, "the refactor preserves all-sink timeout monitoring")
-			assert.Equal(t, event.PTP_FREERUN, c.GetData(event.TS2PHC).GetDataDetails("ens0").State)
-			assert.Len(t, m.sourceStateIfaces[key], 3)
+			if clockType == event.TBC {
+				require.Len(t, c.GetData(event.TS2PHC).Details, 1, "normal T-BC ignores an unattributable timeout")
+				assert.Len(t, m.sourceStateIfaces[key], 1)
+			} else {
+				require.Len(t, c.GetData(event.TS2PHC).Details, 3, "GM keeps its all-sink timeout policy")
+				assert.Equal(t, event.PTP_FREERUN, c.GetData(event.TS2PHC).GetDataDetails("ens0").State)
+				assert.Len(t, m.sourceStateIfaces[key], 3)
+			}
 			assert.Equal(t, event.ClockStateLocked, testutil.ToFloat64(state.WithLabelValues(string(event.TS2PHC), "test-node", alias.GetAlias("ens1"))))
 			// Rejected role metadata must not overwrite a real sink's last state.
 			m.ProcessEvent(ts2phcManagerObservation(clockType, "ens1", &event.TS2PHCObservation{PHCDevice: "/dev/ptp99", Role: event.TS2PHCSource}))
@@ -292,7 +301,7 @@ func TestTS2PHCManagerMissingOffsetDoesNotInventMeasurement(t *testing.T) {
 	require.NotNil(t, detail)
 	assert.Equal(t, event.PTP_FREERUN, detail.State)
 	assert.False(t, detail.HasOffset)
-	assert.Equal(t, 3, testutil.CollectAndCount(offset))
+	assert.Equal(t, 2, testutil.CollectAndCount(offset))
 	unavailable := offset.WithLabelValues("master", "test-node", string(event.TS2PHC), alias.GetAlias("ens1"))
 	assert.True(t, math.IsNaN(testutil.ToFloat64(unavailable)), "an unavailable measurement stays NaN, never a fabricated integer offset")
 	assert.Equal(t, event.ClockStateFreerun, testutil.ToFloat64(state.WithLabelValues(string(event.TS2PHC), "test-node", alias.GetAlias("ens1"))))
@@ -321,7 +330,7 @@ func TestTS2PHCManagerResetClearsPartialBatchAndStateMetrics(t *testing.T) {
 	require.Len(t, m.sourceStateIfaces[key], 1)
 	m.ProcessEvent(event.Event{Source: event.TS2PHC, CfgName: "ts2phc.0.config", Reset: true})
 	assert.NotContains(t, m.sourceStateIfaces, key)
-	assert.Equal(t, 3, testutil.CollectAndCount(offset), "process reset must not delete still-configured measurement series")
+	assert.Equal(t, 2, testutil.CollectAndCount(offset), "process reset must not delete still-configured measurement series")
 	assert.Same(t, series, offset.WithLabelValues("master", "test-node", string(event.TS2PHC), alias.GetAlias("ens1")))
 	assert.True(t, math.IsNaN(testutil.ToFloat64(series)), "the previous run's offset is unavailable after reset")
 	m.ProcessEvent(ts2phcManagerObservation(event.TBC, "", &event.TS2PHCObservation{
@@ -334,7 +343,10 @@ func TestTS2PHCExpectedOffsetSeriesStartAsNaN(t *testing.T) {
 	for _, clockType := range []event.ClockType{event.GM, event.TBC} {
 		t.Run(string(clockType), func(t *testing.T) {
 			m, c, offset, state := newTS2PHCManagerTest(t, clockType)
-			expected := []string{"ens0", "ens1", "ens2"}
+			expected := []string{"ens1", "ens2"}
+			if clockType == event.GM {
+				expected = append(expected, "ens0")
+			}
 			require.Equal(t, len(expected), testutil.CollectAndCount(offset))
 			for _, iface := range expected {
 				key := metricKey{cfgName: "ts2phc.0.config", process: string(event.TS2PHC), iface: alias.GetAlias(iface), dataType: event.OFFSET}
@@ -344,6 +356,9 @@ func TestTS2PHCExpectedOffsetSeriesStartAsNaN(t *testing.T) {
 			assert.Equal(t, event.PTP_NOTSET, c.GetState(), "NaN initialization is not a clock-state decision")
 			assert.Empty(t, c.GetData(event.TS2PHC).Details, "unavailable metrics must not create integer offset samples")
 			assert.Zero(t, testutil.CollectAndCount(state))
+			if clockType == event.TBC {
+				assert.NotContains(t, m.metricCache, metricKey{cfgName: "ts2phc.0.config", process: string(event.TS2PHC), iface: alias.GetAlias("ens0"), dataType: event.OFFSET}, "the normal leading PHC is not an expected missing measurement")
+			}
 		})
 	}
 }
@@ -361,7 +376,7 @@ func TestTS2PHCConfigRetainsSeriesAndDeletesRemovedInterfaces(t *testing.T) {
 			{Name: "ens3", PHCDevice: "/dev/ptp3", Source: event.PPS},
 		},
 	}))
-	assert.Equal(t, 3, testutil.CollectAndCount(offset))
+	assert.Equal(t, 2, testutil.CollectAndCount(offset))
 	assert.Same(t, series, offset.WithLabelValues("master", "test-node", string(event.TS2PHC), alias.GetAlias("ens1")), "retained series must not be deleted and recreated")
 	assert.True(t, math.IsNaN(testutil.ToFloat64(series)))
 	assert.NotContains(t, m.metricCache, metricKey{cfgName: "ts2phc.0.config", process: string(event.TS2PHC), iface: alias.GetAlias("ens2"), dataType: event.OFFSET})
@@ -392,13 +407,13 @@ func TestTS2PHCUnavailableMeasurementInvalidatesLastValue(t *testing.T) {
 
 func TestTS2PHCOffsetAvailabilityFollowsClockPolicy(t *testing.T) {
 	m, _, offset, _ := newTS2PHCManagerTest(t, event.TBC)
-	assert.Equal(t, 3, testutil.CollectAndCount(offset), "all configured sinks start monitored")
+	assert.Equal(t, 2, testutil.CollectAndCount(offset))
 	m.ProcessEvent(ts2phcManagerObservation(event.TBC, "", &event.TS2PHCObservation{PHCDevice: "/dev/ptp0", Role: event.TS2PHCSink}))
-	assert.Equal(t, 3, testutil.CollectAndCount(offset), "the leading sink remains monitored")
+	assert.Equal(t, 3, testutil.CollectAndCount(offset), "holdover expects a measurement from the leading sink too")
 	leadingSeries := offset.WithLabelValues("master", "test-node", string(event.TS2PHC), alias.GetAlias("ens0"))
 	assert.True(t, math.IsNaN(testutil.ToFloat64(leadingSeries)))
 	m.ProcessEvent(ts2phcManagerObservation(event.TBC, "", &event.TS2PHCObservation{PHCDevice: "/dev/ptp0", Role: event.TS2PHCUnmanaged}))
-	assert.Equal(t, 2, testutil.CollectAndCount(offset), "an unselected PHC is no longer an expected measurement")
+	assert.Equal(t, 2, testutil.CollectAndCount(offset), "an intentionally unmonitored leading PHC must not look like a missing measurement")
 	m.RemoveAllClocks()
 	assert.Zero(t, testutil.CollectAndCount(offset), "removed profiles delete their measurement series")
 }

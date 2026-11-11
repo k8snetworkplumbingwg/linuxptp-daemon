@@ -295,7 +295,8 @@ func (c *TBC) startTS2PHCRun(ev event.Event) SyncState {
 }
 
 // observeTS2PHC updates tracking and filters facts using T-BC policy without
-// changing stored process data or evaluating the aggregate FSM.
+// changing stored process data or evaluating the aggregate FSM. Monitoring is
+// based on upstream evidence, not the aggregate FSM state.
 func (c *TBC) observeTS2PHC(ev event.Event, observation *event.TS2PHCObservation) ts2phcUpdate {
 	if ev.Source != event.TS2PHC || observation == nil {
 		return ts2phcUpdate{}
@@ -319,15 +320,45 @@ func (c *TBC) applyTS2PHC(update ts2phcUpdate) SyncState {
 	return c.syncState
 }
 
-// TS2PHCOffsetInterfaces returns the selected sinks whose offsets are expected.
+// TS2PHCOffsetInterfaces excludes the leading PHC outside holdover and includes
+// every selected sink during holdover, using the clock's current policy.
 func (c *TBC) TS2PHCOffsetInterfaces() []string {
 	return c.ts2phc.offsetInterfaces(c.ts2phcPolicy())
 }
 
 func (c *TBC) ts2phcPolicy() ts2phcPolicy {
-	// Preserve the daemon's previous all-sink monitoring behavior in the
-	// refactor. T-BC-specific timeout policy is applied separately.
-	return ts2phcPolicy{pollTimeouts: true}
+	leading := c.getLeadingInterfaceBC()
+	device := c.ts2phc.deviceForInterface(leading)
+	// A leading target or explicit holdover marker is process evidence. Do not
+	// mistake the initial default sink role for an observed source loss.
+	holdover := c.ts2phc.offsetHoldover || c.ts2phc.selections[device] == event.TS2PHCSink
+	if q := c.ptpSource; q != nil && q.lastSelectedPort != "" && !q.available {
+		holdover = true
+	}
+	for _, data := range c.data {
+		switch data.ProcessName {
+		case event.DPLL:
+			for _, detail := range data.Details {
+				if (detail.IFace == leading || c.ts2phc.deviceForInterface(detail.IFace) == device) &&
+					(detail.State == event.PTP_HOLDOVER || detail.SourceLost) {
+					holdover = true
+				}
+			}
+		case event.PTP4l:
+			for _, detail := range data.Details {
+				// An out-of-threshold offset can report FREERUN without
+				// losing the upstream. Only source-loss/holdover evidence
+				// changes timestamp-monitoring mode.
+				if detail.SourceLost || detail.State == event.PTP_HOLDOVER {
+					holdover = true
+				}
+			}
+		}
+	}
+	if holdover {
+		return ts2phcPolicy{pollTimeouts: true}
+	}
+	return ts2phcPolicy{skipPHC: device}
 }
 
 // ObserveSource evaluates a raw observation on the serialized clock loop. The

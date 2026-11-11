@@ -7,11 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clockmgr"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -310,5 +313,52 @@ func TestTS2PHCProcessRunBoundaryPrecedesScannedObservations(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("timed out waiting for %s", expected.name)
 		}
+	}
+}
+
+func TestTS2PHCOCPBUGS138633ClockPipeline(t *testing.T) {
+	for _, withLeadingTimestamp := range []bool{false, true} {
+		t.Run(fmt.Sprintf("withLeadingTimestamp=%t", withLeadingTimestamp), func(t *testing.T) {
+			p := newTS2PHCObservationTestProcess()
+			p.ifaces = config.IFaces{
+				{Name: "eno8703np0", PhcId: "/dev/ptp0", Source: event.PPS},
+				{Name: "enp108s0f0np0", PhcId: "/dev/ptp1", Source: event.PPS},
+				{Name: "enp110s0f0np0", PhcId: "/dev/ptp2", Source: event.PPS},
+			}
+			p.nodeProfile.PtpSettings["leadingInterface"] = "eno8703np0"
+			c, err := clock.NewTBC("ptp4l.1.config", func() int { return 37 }, &pmc.MockClient{}, "")
+			require.NoError(t, err)
+			manager := clockmgr.Init("test-node", nil, nil, nil, nil, nil)
+			require.NoError(t, manager.AddClock(c))
+			require.NoError(t, manager.ConfigureClock(p.configName, p.ts2phcConfig()))
+			p.forwardTS2PHCEvent("", &event.TS2PHCRunStarted{})
+			feedTS2PHCPollLine(p, "17619.000", "selecting /dev/ptp0 for synchronization")
+			feedTS2PHCPollLine(p, "17620.900", "unselecting /dev/ptp0 for synchronization")
+			feedTS2PHCPollLine(p, "17620.989", "adding tstamp 1794159611.000000000 to clock /dev/ptp1")
+			feedTS2PHCPollLine(p, "17620.989", "adding tstamp 1794159611.000000000 to clock /dev/ptp2")
+			feedTS2PHCPollLine(p, "17620.989", "enp110s0f0np0 offset 0 s2 freq -0")
+			feedTS2PHCPollLine(p, "17620.989", "enp108s0f0np0 offset 0 s2 freq -0")
+			if withLeadingTimestamp {
+				feedTS2PHCPollLine(p, "17620.989", "adding tstamp 1794159611.000000000 to clock /dev/ptp0")
+			}
+			feedTS2PHCPollLine(p, "17621.322", "poll returns zero, no events")
+			feedTS2PHCPollLine(p, "17621.989", "adding tstamp 1794159612.000000000 to clock /dev/ptp0")
+			feedTS2PHCPollLine(p, "17621.989", "adding tstamp 1794159612.000000000 to clock /dev/ptp1")
+			feedTS2PHCPollLine(p, "17621.989", "adding tstamp 1794159612.000000000 to clock /dev/ptp2")
+			feedTS2PHCPollLine(p, "17621.989", "enp110s0f0np0 offset 0 s2 freq -0")
+			feedTS2PHCPollLine(p, "17621.989", "enp108s0f0np0 offset 0 s2 freq -0")
+			feedTS2PHCPollLine(p, "17622.322", "poll returns zero, no events")
+			feedTS2PHCPollLine(p, "17622.989", "adding tstamp 1794159613.000000000 to clock /dev/ptp0")
+			for _, ev := range drainEvents(p.eventCh) {
+				manager.ProcessEvent(ev)
+				for _, detail := range c.GetData(event.TS2PHC).Details {
+					assert.Equal(t, event.PTP_LOCKED, detail.State, "the bug sequence must never synthesize FREERUN")
+				}
+			}
+			data := c.GetData(event.TS2PHC)
+			require.Len(t, data.Details, 2)
+			assert.Nil(t, data.GetDataDetails("eno8703np0"))
+			assert.Equal(t, event.PTP_LOCKED, data.State)
+		})
 	}
 }
