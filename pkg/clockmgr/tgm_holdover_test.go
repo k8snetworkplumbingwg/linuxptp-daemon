@@ -17,6 +17,47 @@ import (
 
 const holdoverInterfaceLabel = "iface"
 
+func TestClockOwnershipRejectsRetiredDPLLEpisode(t *testing.T) {
+	for _, remove := range []bool{false, true} {
+		for _, newProducer := range []bool{false, true} {
+			manager := Init("test-node", make(chan event.Event, 16), nil, nil, nil, nil)
+			t.Cleanup(manager.RemoveAllClocks)
+			old, err := clock.NewGM("ts2phc.0.config", func() int { return 37 }, &pmc.MockClient{})
+			require.NoError(t, err)
+			require.NoError(t, manager.AddClock(old))
+			observation := &event.HoldoverObservation{ProducerID: 1, Sequence: 1, Episode: 1,
+				HardwareState: event.PTP_LOCKED, Reference: event.GNSS, MaxErrorNS: 100, TimeoutSeconds: 100}
+			ev := event.Event{Source: event.DPLL, CfgName: "ts2phc.0.config", IFace: "ens2f0", Time: 1,
+				Data: &event.DPLLData{State: event.PTP_LOCKED, Holdover: observation}}
+			manager.ProcessEvent(ev)
+			if remove {
+				manager.RemoveAllClocks()
+			}
+			replacement, err := clock.NewGM("ts2phc.0.config", func() int { return 37 }, &pmc.MockClient{})
+			require.NoError(t, err)
+			require.NoError(t, manager.AddClock(replacement))
+			queued := *observation
+			queued.Sequence++
+			ev.Data = &event.DPLLData{State: event.PTP_LOCKED, Holdover: &queued}
+			manager.ProcessEvent(ev)
+			for _, data := range replacement.ProcessData() {
+				if data.ProcessName == event.DPLL {
+					require.Empty(t, data.Details)
+				}
+			}
+			renewed := queued
+			if newProducer {
+				renewed.ProducerID++
+			} else {
+				renewed.Episode++
+			}
+			ev.Data = &event.DPLLData{State: event.PTP_LOCKED, Holdover: &renewed}
+			manager.ProcessEvent(ev)
+			require.Len(t, replacement.GetData(event.DPLL).Details, 1)
+		}
+	}
+}
+
 func TestDPLLObservationReportingAndStaleMetrics(t *testing.T) {
 	for _, mode := range []event.ClockType{event.GM, event.TBC} {
 		offsetGauge := newReportingOffsetGauge("test_boundary_offset")

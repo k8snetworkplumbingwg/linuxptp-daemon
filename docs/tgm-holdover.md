@@ -91,7 +91,10 @@ failure even if the bounded event channel drops an intermediate sample. They
 cannot recover a physical transition never observed by DPLL. Receivers reject
 older producers and duplicate/reordered sequences even if wall time moves
 backward; reset fences the previously accepted episode until recovery or a new
-producer.
+producer. ClockManager retains known retired producer/episode identities per
+config/interface across clock removal and replacement, so queued samples cannot
+restore that retired episode in a new clock. This is an observed-sample fence,
+not a registration protocol for a producer whose samples were never received.
 Producer episode-generation checks reject in-flight results after recovery,
 cancellation or a restarted episode. Clock-owned latches and cumulative facts
 survive lower subsequent estimates within the same episode.
