@@ -101,7 +101,15 @@ func (c *GM) StopManagedWorkers() <-chan struct{} {
 // AddEvent processes an event and updates clock state.
 func (c *GM) AddEvent(ev event.Event) EventResult {
 	if ev.Source == event.PMC {
-		return EventResult{SyncState: c.syncState}
+		result := c.retainedDPLLResult(ev)
+		result.SyncState = c.syncState
+		return result
+	}
+
+	ev, result, accepted := c.prepareDPLL(ev, true)
+	if !accepted {
+		result.SyncState = c.syncState
+		return result
 	}
 
 	d := c.GetData(ev.Source)
@@ -141,7 +149,8 @@ func (c *GM) AddEvent(ev event.Event) EventResult {
 	}
 	debug.UpdateGMState(string(clockState.State))
 
-	return EventResult{SyncState: clockState}
+	result.SyncState = clockState
+	return result
 }
 
 func (c *GM) announceClockClassIfChanged(ev event.Event, clockState SyncState) {

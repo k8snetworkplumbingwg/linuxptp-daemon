@@ -13,8 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const holdoverInterfaceLabel = "iface"
-
 type reportingTestClock struct {
 	*clock.BCClock
 	result clock.EventResult

@@ -58,6 +58,7 @@ type BaseClock struct {
 	overallSyncState event.PTPState
 	osClock          *OsClock
 	threshold        event.PtpClockThreshold
+	holdover         map[string]*holdoverQuality
 }
 
 // ConfigName ..
@@ -77,6 +78,9 @@ func (c *BaseClock) ConfigNames() []string {
 
 // Reset resets the clock state.
 func (c *BaseClock) Reset() {
+	for _, quality := range c.holdover {
+		quality.reset = true
+	}
 	c.osClock.Reset()
 	c.DataHolder.Reset()
 	c.overallSyncState = event.PTP_FREERUN

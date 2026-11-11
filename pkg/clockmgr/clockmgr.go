@@ -479,10 +479,6 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 		return
 	}
 
-	var logData string
-	if ev.WriteToLog {
-		logData = ev.GetLogData()
-	}
 	prevState := clk.GetState()
 	clockState := clk.AddEvent(ev)
 	if clockState.SuppressReport {
@@ -491,13 +487,11 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 	reported := ev
 	if clockState.Report != nil {
 		reported = *clockState.Report
-		logData = ""
-		if reported.WriteToLog {
-			logData = reported.GetLogData()
-		}
 	}
-	if logData != "" {
-		fmt.Printf("%s", logData)
+	if reported.WriteToLog {
+		if logData := reported.GetLogData(); logData != "" {
+			fmt.Printf("%s", logData)
+		}
 	}
 	if prevState != event.PTP_NOTSET && prevState != clockState.State {
 		m.signalSyncStatus()
