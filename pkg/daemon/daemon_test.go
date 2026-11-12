@@ -93,11 +93,11 @@ func (tc *TestCase) init() {
 
 func (tc *TestCase) String() string {
 	b := strings.Builder{}
-	b.WriteString("log: \"" + tc.log + "\"\n")
-	b.WriteString("from: " + tc.from + "\n")
-	b.WriteString("process: " + tc.process + "\n")
-	b.WriteString("node: " + tc.node + "\n")
-	b.WriteString("iface: " + tc.iface + "\n")
+	fmt.Fprintf(&b, "log: \"%s\"\n", tc.log)
+	fmt.Fprintf(&b, "from: %s\n", tc.from)
+	fmt.Fprintf(&b, "process: %s\n", tc.process)
+	fmt.Fprintf(&b, "node: %s\n", tc.node)
+	fmt.Fprintf(&b, "iface: %s\n", tc.iface)
 	return b.String()
 }
 
