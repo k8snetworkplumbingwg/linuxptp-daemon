@@ -10,7 +10,7 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
-// LinuxPTPUpdate controls whether to update linuxPTP conf
+// LinuxPTPConfUpdate controls whether to update linuxPTP conf
 // and contains linuxPTP conf to be updated. It's rendered
 // and passed to linuxptp instance by daemon.
 type LinuxPTPConfUpdate struct {
@@ -125,13 +125,13 @@ func tryToLoadOldConfig(nodeProfilesJSON []byte) ([]ptpv1.PtpProfile, bool) {
 	return []ptpv1.PtpProfile{*ptpConfig}, true
 }
 
+// NewLinuxPTPConfUpdate ...
 func NewLinuxPTPConfUpdate() (*LinuxPTPConfUpdate, error) {
 	if _, err := os.Stat(PTP4L_CONF_FILE_PATH); err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("ptp.conf file doesn't exist")
-		} else {
-			return nil, fmt.Errorf("unknow error searching for the %s file: %v", PTP4L_CONF_FILE_PATH, err)
 		}
+		return nil, fmt.Errorf("unknow error searching for the %s file: %v", PTP4L_CONF_FILE_PATH, err)
 	}
 
 	defaultPTP4lConfig, err := os.ReadFile(PTP4L_CONF_FILE_PATH)
