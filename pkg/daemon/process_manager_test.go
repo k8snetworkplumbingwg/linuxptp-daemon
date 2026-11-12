@@ -375,13 +375,29 @@ func TestApplyNodePtpProfileStartupConditions(t *testing.T) {
 		require.NotNil(t, ts2phc)
 		require.NotNil(t, phc2sys)
 
-		ct.StartProcesses()
-		ct.StartCM()
-		assert.Zero(t, ts2phc.Starts(), "T-GM ts2phc must wait for its constructed process-up condition")
 		gpsd := findStubProcess(processes, GPSD_PROCESSNAME)
 		gpspipe := findStubProcess(processes, GPSPIPE_PROCESSNAME)
 		require.NotNil(t, gpsd)
 		require.NotNil(t, gpspipe)
+		require.Empty(t, gpsd.conds)
+		const releaseGPSD = "release-gpsd-fixture"
+		gpsd.conds = map[process.Action]process.Condition{
+			process.ActionStart: process.OnPluginEvent{EventName: releaseGPSD},
+		}
+
+		ct.StartProcesses()
+		ct.StartCM()
+		require.Zero(t, gpsd.Starts())
+		require.Zero(t, gpspipe.Starts())
+		require.Equal(t, process.Created, gpsd.State())
+		require.Equal(t, process.Created, gpspipe.State())
+		startup, ok := process.GetCondition(ts2phc, process.ActionStart, nil).(process.StateAwareCondition)
+		require.True(t, ok)
+		require.False(t, startup.MetByCurrentState(ts2phc, ct.pm.sourceProcessUp, process.EventStats{}))
+		assert.Zero(t, ts2phc.Starts(), "T-GM ts2phc must wait for its constructed process-up condition")
+
+		ct.pm.eventsIn <- event.PluginEvent("fixture", releaseGPSD)
+		require.Eventually(t, func() bool { return gpsd.State() == process.Running }, 2*time.Second, 10*time.Millisecond)
 		ct.SendProcessStatus(event.GPSD, gpsd.ConfigName(), PtpProcessUp)
 		ct.SendProcessStatus(event.GPSPIPE, gpspipe.ConfigName(), PtpProcessUp)
 		assert.Eventually(t, func() bool { return ts2phc.State() == process.Running }, 2*time.Second, 10*time.Millisecond)
