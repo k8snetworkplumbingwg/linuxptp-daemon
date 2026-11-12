@@ -439,6 +439,7 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 	}
 	prevState := clk.GetState()
 	clockState := clk.AddEvent(ev)
+	m.updateProcessClockStateMetrics(clk, ev)
 	if prevState != event.PTP_NOTSET && prevState != clockState.State {
 		m.signalSyncStatus()
 	}
@@ -500,6 +501,37 @@ func (m *ClockManager) reset(ev event.Event) {
 		m.unregisterMetrics(ev.CfgName, "")
 	} else {
 		m.unregisterMetrics(ev.CfgName, string(ev.Source))
+	}
+}
+
+// updateProcessClockStateMetrics exports per-interface source state separately
+// from the aggregate clock state. Read the accepted state from the clock so a
+// stale event cannot roll a process metric back to an older state.
+func (m *ClockManager) updateProcessClockStateMetrics(clk clock.Clock, ev event.Event) {
+	if m.clockMetric == nil {
+		return
+	}
+	switch ev.Data.(type) {
+	case *event.GNSSData, *event.DPLLData:
+	default:
+		return
+	}
+	for _, data := range clk.ProcessData() {
+		if data.ProcessName != ev.Source {
+			continue
+		}
+		detail := data.GetDataDetails(ev.IFace)
+		if detail == nil || detail.IFace == "" || detail.IFace == event.LEADING_INTERFACE_UNKNOWN {
+			return
+		}
+		iface := alias.GetAlias(detail.IFace)
+		process := string(ev.Source)
+		m.updateClockStateMetrics(detail.State, process, iface)
+		key := metricKey{cfgName: ev.CfgName, process: process, iface: iface, dataType: "clock_state"}
+		m.metricCache[key] = metricEntry{gauge: m.clockMetric, labels: prometheus.Labels{
+			processLabel: process, nodeLabel: m.nodeName, ifaceLabel: iface,
+		}}
+		return
 	}
 }
 
