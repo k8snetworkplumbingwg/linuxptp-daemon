@@ -154,7 +154,7 @@ func TestSourceQualificationHardwareFailure(t *testing.T) {
 
 func TestSourceQualificationRejectsInvalidProfileWithoutPanic(t *testing.T) {
 	t.Parallel()
-	p := &ptpv1.PtpProfile{Name: utils.ToPtr("invalid"), Ptp4lOpts: utils.ToPtr("-2 -m"), PtpSettings: map[string]string{"clockType": TBC},
+	p := &ptpv1.PtpProfile{Name: utils.ToPtr("invalid"), Ptp4lOpts: utils.ToPtr("-2 -m"), PtpSettings: map[string]string{"clockType": string(event.TBC)},
 		PtpClockThreshold: &ptpv1.PtpClockThreshold{PtpSourceQualifiedThreshold: utils.ToPtr(int64(0))}}
 	dn := &Daemon{}
 	var err error
@@ -166,7 +166,7 @@ func TestSourceQualificationRejectsInvalidProfileWithoutPanic(t *testing.T) {
 
 func TestSourceQualificationDoesNotUseUnrelatedHAGroup(t *testing.T) {
 	t.Parallel()
-	p := &ptpv1.PtpProfile{Name: utils.ToPtr("standalone"), Phc2sysOpts: utils.ToPtr("-a -r"), PtpSettings: map[string]string{"clockType": TBC},
+	p := &ptpv1.PtpProfile{Name: utils.ToPtr("standalone"), Phc2sysOpts: utils.ToPtr("-a -r"), PtpSettings: map[string]string{"clockType": string(event.TBC)},
 		PtpClockThreshold: &ptpv1.PtpClockThreshold{PtpSourceQualifiedSamples: utils.ToPtr(int64(1))}}
 	env := ptpProcessEnv{runID: 3, nodeProfile: p, clockType: event.TBC, topology: &ProfileTopology{
 		haProfile: "ha", haMembers: []string{"member0", "member1"}, profileRunID: map[string]int{"member0": 0, "member1": 1},
@@ -183,7 +183,7 @@ func TestSourceQualificationDoesNotUseUnrelatedHAGroup(t *testing.T) {
 
 func TestQualifiedStartupRetainsPhc2sysLock(t *testing.T) {
 	t.Parallel()
-	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("test"), PtpSettings: map[string]string{"clockType": TBC}, Phc2sysOpts: utils.ToPtr("-a -r"),
+	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("test"), PtpSettings: map[string]string{"clockType": string(event.TBC)}, Phc2sysOpts: utils.ToPtr("-a -r"),
 		PtpClockThreshold: &ptpv1.PtpClockThreshold{PtpSourceQualifiedSamples: utils.ToPtr(int64(2))}}
 	env := ptpProcessEnv{nodeProfile: profile, clockType: event.TBC, topology: &ProfileTopology{}}
 	p := &ptpProcess{}
@@ -202,7 +202,7 @@ func TestQualifiedStartupRetainsPhc2sysLock(t *testing.T) {
 
 func TestSourceQualificationCompatibilityConditions(t *testing.T) {
 	t.Parallel()
-	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("test"), PtpSettings: map[string]string{"clockType": TBC}}
+	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("test"), PtpSettings: map[string]string{"clockType": string(event.TBC)}}
 	env := ptpProcessEnv{nodeProfile: profile, clockType: event.TBC, topology: &ProfileTopology{}}
 	require.IsType(t, process.OnStateAndOffsetForCount{}, phc2sysOffsetStartCondition(env), "fully unset profiles keep legacy startup")
 	profile.PtpClockThreshold = &ptpv1.PtpClockThreshold{PtpSourceQualifiedSamples: utils.ToPtr(int64(1))}
@@ -216,7 +216,7 @@ func TestSourceQualificationCompatibilityConditions(t *testing.T) {
 
 func TestSourceQualificationPropagatesPluginFailure(t *testing.T) {
 	t.Parallel()
-	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("plugin-failure"), PtpSettings: map[string]string{"clockType": TBC},
+	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("plugin-failure"), PtpSettings: map[string]string{"clockType": string(event.TBC)},
 		PtpClockThreshold: &ptpv1.PtpClockThreshold{PtpSourceQualifiedSamples: utils.ToPtr(int64(1))}}
 	p := &ptpProcess{nodeProfile: profile, tBCAttributes: tBCProcessAttributes{trIfaceNames: []string{"tr0"}},
 		dn: &Daemon{processManager: &ProcessManager{clockMgr: clockmgr.Init("test", make(chan event.Event), nil, nil, nil, nil)}},
@@ -253,7 +253,7 @@ func TestSourceQualificationParsedPipeline(t *testing.T) {
 	// The real metrics adapter uses shared metric/offset maps; keep this test
 	// sequential like the existing parser-to-daemon integration tests.
 	InitializeOffsetMaps()
-	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("qualified"), PtpSettings: map[string]string{"clockType": TBC},
+	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("qualified"), PtpSettings: map[string]string{"clockType": string(event.TBC)},
 		PtpClockThreshold: &ptpv1.PtpClockThreshold{MaxOffsetThreshold: 100, PtpSourceQualifiedThreshold: utils.ToPtr(int64(20)), PtpSourceDisqualifiedThreshold: utils.ToPtr(int64(40)), PtpSourceQualifiedSamples: utils.ToPtr(int64(2))}}
 	events := make(chan event.Event, 20)
 	cm := clockmgr.Init("node", events, nil, nil, nil, nil)

@@ -31,7 +31,7 @@ type GM struct {
 // NewGM creates a new grandmaster clock
 func NewGM(cfgName string, getUTCOffset func() int, pmcClient pmc.Client) (*GM, error) {
 	if pmcClient == nil {
-		return nil, fmt.Errorf("pmc.Client is required for clock type %s (config %s)", event.GM, cfgName)
+		return nil, fmt.Errorf("pmc.Client is required for clock type %s (config %s)", event.TGM, cfgName)
 	}
 	return &GM{
 		BaseClock: newBaseClock(cfgName, event.PtpClockThreshold{}), // TODO: Populate thresholds.
@@ -59,7 +59,7 @@ func (c *GM) SetEventLoopbackFunc(_ func(event.Event)) {
 }
 
 // ClockType returns the clock type for this GM clock.
-func (c *GM) ClockType() event.ClockType { return event.GM }
+func (c *GM) ClockType() event.ClockType { return event.TGM }
 
 // ClockClass returns the current clock class.
 func (c *GM) ClockClass() fbprotocol.ClockClass { return c.syncState.ClockClass }
@@ -287,7 +287,7 @@ func (c *GM) announceClockClass() (clockClass fbprotocol.ClockClass, clockAccura
 }
 
 func (c *GM) status() string {
-	return fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", event.GM, c.syncState.LastLoggedTime, c.cfgName,
+	return fmt.Sprintf("%s[%d]:[%s] %s T-GM-STATUS %s\n", event.TGM, c.syncState.LastLoggedTime, c.cfgName,
 		c.syncState.LeadingIFace, c.syncState.State)
 }
 

@@ -64,8 +64,6 @@ const (
 	InvalidMasterTimestampIndicator = "ignoring invalid master time stamp"
 	PTP_HA_IDENTIFIER               = "haProfiles"
 	MessageTagSuffixSeperator       = ":"
-	TBC                             = "T-BC"
-	TGM                             = "T-GM"
 	PtpSecretMountDir               = "/etc/ptp-secret-mount/"
 	ChronydSocketPath               = "/tmp/chrony/chronyd.sock"
 	// Offset filter size is hardcoded to 64 for now. It covers 4 seconds with reporting rate 16x/second.
@@ -879,7 +877,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile, 
 	clockCfgName := clockCfgName(runID)
 	var c clock.Clock
 	switch clockType {
-	case event.GM:
+	case event.TGM:
 		if c, err = clock.NewGM(clockCfgName, leap.GetUtcOffset, pmc.ActiveClient()); err != nil {
 			return err
 		}
@@ -971,7 +969,7 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 			if controllingProfile, isControlled := (*nodeProfile).PtpSettings["controllingProfile"]; isControlled && controllingProfile != "" {
 				// See DownstreamIWF
 				glog.Infof("Skipping PMC monitoring for controlled profile %s", *nodeProfile.Name)
-			} else if clockType == event.GM {
+			} else if clockType == event.TGM {
 				glog.Infof("Skipping PMC monitoring for GM")
 			} else {
 				// TODO addScheduling
@@ -992,8 +990,7 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 			}
 			var ts2phcProc *ptpProcess
 			ts2phcProc, err = NewTs2phcProcess(env)
-
-			if clockType == event.GM {
+			if clockType == event.TGM {
 				// If a HardwareConfig defines a GNSS source, locate the serial port and any GNSS initialization commands.
 				if err = dn.setupGPSDAndGPSPipe(nodeProfile, ts2phcProc); err != nil {
 					return err
@@ -1098,9 +1095,9 @@ func (*Daemon) inspectProfile(nodeProfile *ptpv1.PtpProfile) (event.ClockType, s
 
 	if profileClockTypefound {
 		switch profileClockType {
-		case TGM:
-			clockType = event.GM
-		case TBC:
+		case string(event.TGM):
+			clockType = event.TGM
+		case string(event.TBC):
 			clockType = event.TBC
 			leadingNic = nodeProfile.PtpSettings["leadingInterface"]
 			if portsStr, ok := nodeProfile.PtpSettings["upstreamPort"]; ok {
@@ -1277,7 +1274,7 @@ func (dn *Daemon) setupDPLL(nodeProfile *ptpv1.PtpProfile, clockType event.Clock
 	// For T-BC mode with hardwareconfig, derive interfaces from hardwareconfig structure
 	// instead of analyzing ts2phc configuration file
 	var interfacesToUse config.IFaces
-	if profileClockType(nodeProfile) == TBC && dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
+	if profileClockType(nodeProfile) == string(event.TBC) && dn.hardwareConfigManager.ReadyHardwareConfigForProfile(*nodeProfile.Name) {
 		interfacesToUse = dn.getInterfacesFromHardwareConfig(nodeProfile)
 		if len(interfacesToUse) > 0 {
 			glog.Infof("Using interfaces from hardwareconfig for T-BC profile %s: %v", *nodeProfile.Name, interfacesToUse)
@@ -1292,7 +1289,7 @@ func (dn *Daemon) setupDPLL(nodeProfile *ptpv1.PtpProfile, clockType event.Clock
 	for _, iface := range interfacesToUse {
 		var eventSource []event.EventSource
 		if iface.Source == event.GNSS || iface.Source == event.PPS ||
-			(iface.Source == event.PTP4l && profileClockType(nodeProfile) == TBC) {
+			(iface.Source == event.PTP4l && profileClockType(nodeProfile) == string(event.TBC)) {
 			if nodeProfile.PtpSettings[dpll.PtpSettingsDpllIgnoreKey(iface.Name)] == "true" {
 				glog.Infof("Init dpll: Skipping dpll for %s", iface.Name)
 				continue

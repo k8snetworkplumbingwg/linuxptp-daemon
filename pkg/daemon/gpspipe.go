@@ -108,7 +108,7 @@ func (gp *GpsPipe) Profile() *ptpv1.PtpProfile {
 
 // ClockType returns the clock type for GpsPipe (always GM).
 func (gp *GpsPipe) ClockType() event.ClockType {
-	return event.GM
+	return event.TGM
 }
 
 // DependentProcesses returns processes that depend on GpsPipe.

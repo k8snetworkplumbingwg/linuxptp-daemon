@@ -137,7 +137,7 @@ func (g *GPSD) gnssClockType() event.ClockType {
 	if g.processConfig.ClockType != "" {
 		return g.processConfig.ClockType
 	}
-	return event.GM
+	return event.TGM
 }
 
 // sendGNSSEvent forwards a GNSS event without blocking the monitoring loop.
@@ -155,7 +155,7 @@ func (g *GPSD) sendGNSSEvent(ev event.Event) {
 
 // ClockType returns the clock type for GPSD (always GM).
 func (g *GPSD) ClockType() event.ClockType {
-	return event.GM
+	return event.TGM
 }
 
 // DependentProcesses returns processes that depend on GPSD.

@@ -10,6 +10,7 @@ import (
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	dpll_netlink "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
@@ -68,7 +69,7 @@ var getAllDpllPins = func() ([]*dpll_netlink.PinInfo, error) {
 }
 
 func tbcConfigured(nodeProfile *ptpv1.PtpProfile) bool {
-	return nodeProfile.PtpSettings["clockType"] == "T-BC"
+	return nodeProfile.PtpSettings["clockType"] == string(event.TBC)
 }
 
 func leadingInterfaceForPinReset(nodeProfile *ptpv1.PtpProfile, devices []string) string {

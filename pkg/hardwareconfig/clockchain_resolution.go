@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
@@ -327,7 +328,7 @@ func (hcm *HardwareConfigManager) deriveSubsystemStructure(subsystem *ptpv2alpha
 
 	// Extract upstream ports from ptpconfig (PTP time receivers for event detection)
 	upstreamPorts := extractUpstreamPortsFromPtpProfile(ptpProfile)
-	if clockType != ClockTypeTGM {
+	if clockType != string(event.TGM) {
 		if len(upstreamPorts) == 0 {
 			return fmt.Errorf("no upstream ports found in ptpconfig")
 		}
@@ -364,7 +365,7 @@ func (hcm *HardwareConfigManager) deriveSubsystemStructure(subsystem *ptpv2alpha
 		return fmt.Errorf("no behavior profile found for %s/%s", hwDefPath, clockType)
 	}
 
-	if clockType != ClockTypeTGM {
+	if clockType != string(event.TGM) {
 		// Derive PhaseInputs from pinRoles
 		if len(subsystem.DPLL.PhaseInputs) == 0 {
 			ptpInputPin := behaviorTemplate.PinRoles["ptpInputPin"]

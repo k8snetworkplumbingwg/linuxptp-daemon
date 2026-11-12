@@ -215,7 +215,7 @@ func sourceQualifiedStartCondition(env ptpProcessEnv) process.Condition {
 // resolveSourceQualificationPolicy preserves the explicit opt-in boundary. Resolve
 // the migration fallback once, never from the aggregate InSync state at runtime.
 func resolveSourceQualificationPolicy(profile *ptpv1.PtpProfile) (sourceQualificationPolicy, error) {
-	if profileClockType(profile) != TBC || profile.PtpClockThreshold == nil {
+	if profileClockType(profile) != string(event.TBC) || profile.PtpClockThreshold == nil {
 		return sourceQualificationPolicy{}, nil
 	}
 	th := profile.PtpClockThreshold

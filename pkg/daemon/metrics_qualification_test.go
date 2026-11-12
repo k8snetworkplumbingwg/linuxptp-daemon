@@ -68,7 +68,7 @@ func TestTBCAllThresholdReadback(t *testing.T) {
 	t.Parallel()
 	gauge := newThresholdTestGauge()
 	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("t-bc_01-tbc-tr"), Phc2sysOpts: utils.ToPtr("-a -r"),
-		PtpSettings: map[string]string{"clockType": TBC, "inSyncConditionThreshold": "10", "inSyncConditionTimes": "12"},
+		PtpSettings: map[string]string{"clockType": string(event.TBC), "inSyncConditionThreshold": "10", "inSyncConditionTimes": "12"},
 		PtpClockThreshold: &ptpv1.PtpClockThreshold{
 			PtpSourceQualifiedThreshold: utils.ToPtr(int64(20)), PtpSourceDisqualifiedThreshold: utils.ToPtr(int64(30)),
 			PtpSourceQualifiedSamples: utils.ToPtr(int64(5)), PtpSourceDisqualifiedSamples: utils.ToPtr(int64(5)),
@@ -110,7 +110,7 @@ func TestTBCThresholdProfileCleanupAndLegacyCompatibility(t *testing.T) {
 	profile.PtpSettings = map[string]string{"controllingProfile": "upstream"}
 	updateProfileThresholdMetrics(gauge, "node", profile, legacy)
 	require.Empty(t, thresholdSamples(t, gauge, "node", *profile.Name))
-	profile.PtpSettings = map[string]string{"clockType": TBC}
+	profile.PtpSettings = map[string]string{"clockType": string(event.TBC)}
 	profile.PtpClockThreshold = &ptpv1.PtpClockThreshold{MaxOffsetThreshold: 100, PtpSourceUseS3: true}
 	updateProfileThresholdMetrics(gauge, "node", profile, legacy)
 	require.Equal(t, map[string]float64{
@@ -128,7 +128,7 @@ func TestTBCThresholdProfileCleanupAndLegacyCompatibility(t *testing.T) {
 	require.Equal(t, wantLegacy, thresholdSamples(t, gauge, "node", *other.Name))
 	require.Contains(t, thresholdSamples(t, gauge, "other-node", *profile.Name), thresholdSourceUseS3)
 	// Removing phc2sys/source policy on reapply also removes their old series.
-	profile.PtpSettings = map[string]string{"clockType": TBC}
+	profile.PtpSettings = map[string]string{"clockType": string(event.TBC)}
 	updateOSClockThresholdMetrics(gauge, "node", *profile.Name, clock.OSClockFilterConfig{InSyncThreshold: 10, OutOfSyncThreshold: 20, Samples: 5})
 	updateProfileThresholdMetrics(gauge, "node", profile, legacy)
 	require.Empty(t, thresholdSamples(t, gauge, "node", *profile.Name), "unset TBC policy must not advertise unused defaults")
@@ -137,7 +137,7 @@ func TestTBCThresholdProfileCleanupAndLegacyCompatibility(t *testing.T) {
 func TestOSClockThresholdMetricsUseResolvedDefaults(t *testing.T) {
 	t.Parallel()
 	gauge := newThresholdTestGauge()
-	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("tr"), PtpSettings: map[string]string{"clockType": TBC}}
+	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("tr"), PtpSettings: map[string]string{"clockType": string(event.TBC)}}
 	updateOSClockThresholdMetrics(gauge, "node", *profile.Name, osClockFilterConfig(profile))
 	require.Equal(t, map[string]float64{thresholdSysInSync: 100, thresholdSysOutOfSync: 100, thresholdSysSamples: 10}, thresholdSamples(t, gauge, "node", *profile.Name))
 	profile.PtpClockThreshold = &ptpv1.PtpClockThreshold{MaxOffsetThreshold: 75, SysOffsetInSyncThreshold: utils.ToPtr(int64(0)), SysOffsetSamples: utils.ToPtr(int64(0))}
@@ -148,7 +148,7 @@ func TestOSClockThresholdMetricsUseResolvedDefaults(t *testing.T) {
 func TestTBCDPLLThresholdMetricsDefaultsAndDisabledHoldover(t *testing.T) {
 	t.Parallel()
 	gauge := newThresholdTestGauge()
-	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("tr"), PtpSettings: map[string]string{"clockType": TBC}}
+	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("tr"), PtpSettings: map[string]string{"clockType": string(event.TBC)}}
 	limits := tbcDPLLThresholds{
 		inSyncThreshold: dpll.MaxInSpecOffset, inSyncSamples: 1,
 		maxInSpecOffset: dpll.MaxInSpecOffset, localMaxHoldoverOffset: dpll.LocalMaxHoldoverOffSet,
@@ -192,7 +192,7 @@ func TestTBCThresholdMetricsConfigurationWiring(t *testing.T) {
 			t.Cleanup(dn.cancel)
 			profile := &ptpv1.PtpProfile{Name: utils.ToPtr(name), Ptp4lOpts: utils.ToPtr(""), Phc2sysOpts: utils.ToPtr("-a -r"),
 				PtpSettings: map[string]string{
-					"clockType": TBC, "inSyncConditionThreshold": "10", "inSyncConditionTimes": "12",
+					"clockType": string(event.TBC), "inSyncConditionThreshold": "10", "inSyncConditionTimes": "12",
 					dpll.MaxInSpecOffsetStr: "20", dpll.LocalMaxHoldoverOffSetStr: "30", dpll.LocalHoldoverTimeoutStr: "288",
 					"clockId[leader]": "1", "clockId[follower]": "2",
 					dpll.PtpSettingsDpllFlagsKey("follower"): strconv.FormatUint(uint64(dpll.FlagOnlyPhaseStatus), 10),

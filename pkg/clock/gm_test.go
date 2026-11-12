@@ -397,7 +397,7 @@ func TestUpdateGMState(t *testing.T) {
 			Source:     process,
 			IFace:      iface,
 			CfgName:    cfg,
-			ClockType:  event.GM,
+			ClockType:  event.TGM,
 			Time:       time.Now().UnixMilli(),
 			WriteToLog: true,
 		}
