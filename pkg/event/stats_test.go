@@ -13,6 +13,54 @@ const (
 	statsTestEns1f0Iface = "ens1f0"
 )
 
+func TestDPLLQualityChangesWithoutLockChange(t *testing.T) {
+	data := &event.Data{ProcessName: event.DPLL}
+	for _, sample := range []struct {
+		timestamp int64
+		outOfSpec bool
+		expected  bool
+	}{{10, false, false}, {10, true, true}, {9, false, true}, {11, true, true}} {
+		data.AddEvent(event.Event{
+			Source: event.DPLL, IFace: statsTestEns1f0Iface, Time: sample.timestamp,
+			Data: &event.DPLLData{State: event.PTP_HOLDOVER, OutOfSpec: sample.outOfSpec, LeadingSource: true},
+		})
+		data.UpdateState()
+		detail := data.GetDataDetails(statsTestEns1f0Iface)
+		assert.Equal(t, sample.expected, detail.OutOfSpec)
+		assert.Equal(t, event.PTP_HOLDOVER, data.State)
+		assert.False(t, detail.HasOffset)
+	}
+}
+
+func TestDPLLObservationOrderingAndAbsentMeasurement(t *testing.T) {
+	data := &event.Data{ProcessName: event.DPLL, Window: utils.NewWindow(10)}
+	for _, sample := range []struct {
+		producer, sequence                 uint64
+		timestamp                          int64
+		offset                             *int64
+		expectedProducer, expectedSequence uint64
+		hasOffset                          bool
+	}{
+		{1, 1, 100, utils.ToPtr[int64](30), 1, 1, true},
+		{1, 2, 99, nil, 1, 2, false},
+		{1, 1, 101, utils.ToPtr[int64](40), 1, 2, false},
+		{2, 1, 90, nil, 2, 1, false},
+		{1, 100, 110, utils.ToPtr[int64](50), 2, 1, false},
+	} {
+		data.AddEvent(event.Event{Source: event.DPLL, IFace: statsTestEns1f0Iface, Time: sample.timestamp,
+			Data: &event.DPLLData{State: event.PTP_HOLDOVER, Offset: sample.offset,
+				Holdover: &event.HoldoverObservation{ProducerID: sample.producer, Sequence: sample.sequence}}})
+		detail := data.GetDataDetails(statsTestEns1f0Iface)
+		assert.Equal(t, sample.expectedProducer, detail.Holdover.ProducerID)
+		assert.Equal(t, sample.expectedSequence, detail.Holdover.Sequence)
+		assert.Equal(t, sample.hasOffset, detail.HasOffset)
+		assert.Equal(t, float64(30), data.Window.LastInserted())
+		if !sample.hasOffset {
+			assert.Zero(t, detail.Offset)
+		}
+	}
+}
+
 func TestWorstOfState(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -47,6 +47,8 @@ type DataDetails struct {
 	HasProcessStatus   bool
 	OutOfSpec          bool
 	FrequencyTraceable bool
+	ModeledHoldover    bool
+	Holdover           *HoldoverObservation
 }
 
 // UpdateState .. update process state
@@ -124,6 +126,8 @@ func (d *Data) addEvent(event Event) {
 	var offset int64
 	var hasOffset bool
 	var outOfSpec, frequencyTraceable bool
+	var modeledHoldover bool
+	var holdover *HoldoverObservation
 	var leading bool
 
 	switch data := event.Data.(type) {
@@ -142,10 +146,12 @@ func (d *Data) addEvent(event Event) {
 		offset = data.Offset
 		hasOffset = true
 	case *DPLLData:
+		holdover = data.Holdover
 		state = data.State
 		sourceLost = data.SourceLost
 		outOfSpec = data.OutOfSpec
 		frequencyTraceable = data.FrequencyTraceable
+		modeledHoldover = data.ModeledHoldover
 		if data.Offset != nil {
 			offset = *data.Offset
 			hasOffset = true
@@ -162,11 +168,24 @@ func (d *Data) addEvent(event Event) {
 
 	for _, dd := range d.Details {
 		if dd.IFace == event.IFace {
-			if dd.Time <= event.Time {
+			fresh := dd.Time <= event.Time
+			if holdover != nil {
+				fresh = dd.Holdover == nil || holdover.ProducerID > dd.Holdover.ProducerID ||
+					(holdover.ProducerID == dd.Holdover.ProducerID && holdover.Sequence > dd.Holdover.Sequence)
+			}
+			if fresh {
 				dd.State = state
 				dd.SourceLost = sourceLost
 				dd.OutOfSpec = outOfSpec
 				dd.FrequencyTraceable = frequencyTraceable
+				dd.ModeledHoldover = modeledHoldover
+				dd.Holdover = holdover
+				if holdover != nil {
+					dd.HasOffset = hasOffset
+					if !hasOffset {
+						dd.Offset = 0
+					}
+				}
 				dd.ClockType = event.ClockType
 				dd.Time = event.Time
 				dd.LogData = event.GetLogData()
@@ -194,10 +213,15 @@ func (d *Data) addEvent(event Event) {
 		SourceLost:         sourceLost,
 		OutOfSpec:          outOfSpec,
 		FrequencyTraceable: frequencyTraceable,
+		ModeledHoldover:    modeledHoldover,
+		Holdover:           holdover,
 	}
-	if d.Window == nil && hasOffset {
+	if (d.Window == nil || holdover != nil) && hasOffset {
 		details.Offset = offset
 		details.HasOffset = true
+		if holdover != nil && d.Window != nil {
+			d.Window.Insert(float64(offset))
+		}
 	}
 	if leading {
 		glog.Info(details.IFace, " is set as the leading source ")

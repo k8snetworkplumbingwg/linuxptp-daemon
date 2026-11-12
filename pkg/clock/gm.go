@@ -14,24 +14,29 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
+	kclock "k8s.io/utils/clock"
 )
 
 // GM is a Grand Master clock instance.
 type GM struct {
 	BaseClock
-	getUtcOffset           func() int
-	pmcClient              pmc.Client
-	syncState              SyncState
-	gnssState              event.PTPState
-	announcedClockClass    fbprotocol.ClockClass
-	announcedClockAccuracy fbprotocol.ClockAccuracy
-	lastLoggedState        event.PTPState
+	getUtcOffset      func() int
+	pmcClient         pmc.Client
+	syncState         SyncState
+	gnssState         event.PTPState
+	lastLoggedState   event.PTPState
+	reconciler        *pmcReconciler
+	pmcStopped        bool
+	requestedAccuracy fbprotocol.ClockAccuracy
 }
 
 // NewGM creates a new grandmaster clock
 func NewGM(cfgName string, getUTCOffset func() int, pmcClient pmc.Client) (*GM, error) {
 	if pmcClient == nil {
 		return nil, fmt.Errorf("pmc.Client is required for clock type %s (config %s)", event.GM, cfgName)
+	}
+	if _, ok := pmcClient.(pmc.GMSettingsClient); !ok {
+		return nil, fmt.Errorf("GM requires a cancellable PMC settings client")
 	}
 	return &GM{
 		BaseClock: newBaseClock(cfgName, event.PtpClockThreshold{}), // TODO: Populate thresholds.
@@ -41,10 +46,9 @@ func NewGM(cfgName string, getUTCOffset func() int, pmcClient pmc.Client) (*GM, 
 			ClockClass:    protocol.ClockClassUninitialized,
 			ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
 		},
-		getUtcOffset:           getUTCOffset,
-		gnssState:              event.PTP_NOTSET,
-		announcedClockClass:    protocol.ClockClassUninitialized,
-		announcedClockAccuracy: fbprotocol.ClockAccuracyUnknown,
+		getUtcOffset:      getUTCOffset,
+		gnssState:         event.PTP_NOTSET,
+		requestedAccuracy: fbprotocol.ClockAccuracyUnknown,
 	}, nil
 }
 
@@ -69,21 +73,42 @@ func (c *GM) GetState() event.PTPState { return c.syncState.State }
 
 // Reset resets the clock state.
 func (c *GM) Reset() {
+	if c.reconciler != nil {
+		c.reconciler.reset(false)
+	}
 	c.BaseClock.Reset()
 
 	c.syncState = SyncState{}
 	c.overallSyncState = event.PTP_FREERUN
 	c.gnssState = event.PTP_NOTSET
-	c.announcedClockClass = 0
-	c.announcedClockAccuracy = 0
 	c.lastLoggedState = ""
+	c.requestedAccuracy = 0
 	c.data = nil
 }
 
+// StopManagedWorkers terminally cancels the GM's PMC reconciler without joining
+// it. Callers serialize clock operations and join outside the event lock.
+func (c *GM) StopManagedWorkers() <-chan struct{} {
+	c.pmcStopped = true
+	if c.reconciler != nil {
+		return c.reconciler.reset(true)
+	}
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+
 // AddEvent processes an event and updates clock state.
-func (c *GM) AddEvent(ev event.Event) SyncState {
+func (c *GM) AddEvent(ev event.Event) EventResult {
 	if ev.Source == event.PMC {
-		return c.syncState
+		result := c.retainedDPLLResult(ev)
+		result.SyncState = c.syncState
+		return result
+	}
+	ev, result, accepted := c.prepareDPLL(ev, true)
+	if !accepted {
+		result.SyncState = c.syncState
+		return result
 	}
 
 	d := c.GetData(ev.Source)
@@ -92,6 +117,7 @@ func (c *GM) AddEvent(ev event.Event) SyncState {
 	clockState := c.updateState()
 	emitOverallSyncStateIfChanged(c.sendIPC, &c.overallSyncState, c.syncState.State, c.osClock.State, c.cfgName)
 	c.announceClockClassIfChanged(ev, clockState)
+	clockState.ClockAccuracy = c.syncState.ClockAccuracy
 
 	// Zero NMEA status when GM is not locked
 	if clockState.State != event.PTP_LOCKED {
@@ -122,7 +148,8 @@ func (c *GM) AddEvent(ev event.Event) SyncState {
 	}
 	debug.UpdateGMState(string(clockState.State))
 
-	return clockState
+	result.SyncState = clockState
+	return result
 }
 
 func (c *GM) announceClockClassIfChanged(ev event.Event, clockState SyncState) {
@@ -130,7 +157,7 @@ func (c *GM) announceClockClassIfChanged(ev event.Event, clockState SyncState) {
 		return
 	}
 
-	clockAccuracy := c.announcedClockAccuracy
+	clockAccuracy := c.requestedAccuracy
 	if dpll, ok := ev.Data.(*event.DPLLData); ok && ev.Source == event.DPLL {
 		if clockState.ClockClass == fbprotocol.ClockClass7 || clockState.ClockClass == protocol.ClockClassOutOfSpec {
 			if dpll.Offset != nil {
@@ -138,22 +165,31 @@ func (c *GM) announceClockClassIfChanged(ev event.Event, clockState SyncState) {
 			}
 		}
 	}
-
-	if clockState.ClockClass != c.announcedClockClass || clockAccuracy != c.announcedClockAccuracy {
-		glog.Infof("clock class change request from %d to %d with clock accuracy from %d to %d",
-			uint8(c.announcedClockClass), uint8(clockState.ClockClass),
-			uint8(c.announcedClockAccuracy), uint8(clockAccuracy))
-		c.syncState.ClockAccuracy = clockAccuracy
-		clockClass, _, err := c.announceClockClass()
-		debug.UpdateClockClass(uint8(clockState.ClockClass))
-		if err != nil {
-			glog.Errorf("error updating clock class %s", err)
-		} else {
-			glog.Infof("updated clock class to %d", clockClass)
-			clockClassOut := utils.GetClockClassLogMessage(event.PTP4lProcessName, c.cfgName, clockClass)
-			fmt.Printf("%s", clockClassOut)
+	switch clockState.ClockClass {
+	case fbprotocol.ClockClass7, protocol.ClockClassOutOfSpec:
+		for _, data := range c.data {
+			if data.ProcessName == event.DPLL {
+				if detail := data.GetDataDetails(clockState.LeadingIFace); detail != nil && detail.ModeledHoldover {
+					clockAccuracy = fbprotocol.ClockAccuracyUnknown
+				}
+			}
 		}
+	case fbprotocol.ClockClass6:
+		clockAccuracy = fbprotocol.ClockAccuracyNanosecond100
+	default:
+		clockAccuracy = fbprotocol.ClockAccuracyUnknown
 	}
+	c.syncState.ClockAccuracy = clockAccuracy
+	c.requestedAccuracy = clockAccuracy
+	if c.pmcStopped {
+		return
+	}
+	if c.reconciler == nil {
+		c.reconciler = newPMCReconciler(c.pmcClient.(pmc.GMSettingsClient),
+			strings.Replace(c.cfgName, event.TS2PHCProcessName, event.PTP4lProcessName, 1), c.cfgName, kclock.RealClock{}, c.getUtcOffset)
+	}
+	c.reconciler.submit(gmDesired{class: clockState.ClockClass, accuracy: clockAccuracy, utcOffset: int32(c.getUtcOffset())})
+	debug.UpdateClockClass(uint8(clockState.ClockClass))
 
 	if c.lastLoggedState != clockState.State {
 		glog.Infof("PTP State: %v, Clock Class %d Time %s sourceLost %v",
@@ -225,65 +261,6 @@ func (c *GM) updateClockClass(clockClass fbprotocol.ClockClass) {
 		IFace:   c.syncState.LeadingIFace,
 		Values:  ipc.ClockClassValue{ClockClass: uint8(clockClass)},
 	})
-}
-
-func (c *GM) announceClockClass() (clockClass fbprotocol.ClockClass, clockAccuracy fbprotocol.ClockAccuracy, err error) {
-	pmcCfgName := strings.Replace(c.cfgName, event.TS2PHCProcessName, event.PTP4lProcessName, 1)
-	g, err := c.pmcClient.GetGMSettings(pmcCfgName)
-	if err != nil {
-		glog.Errorf("failed to get current GRANDMASTER_SETTINGS_NP: %s", err)
-		return clockClass, clockAccuracy, err
-	}
-	g.TimePropertiesDS.PtpTimescale = true
-	g.TimePropertiesDS.FrequencyTraceable = true
-	g.TimePropertiesDS.CurrentUtcOffsetValid = true
-	g.TimePropertiesDS.CurrentUtcOffset = int32(c.getUtcOffset())
-	switch c.syncState.ClockClass {
-	case fbprotocol.ClockClass6:
-		if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 || !g.TimePropertiesDS.TimeTraceable {
-			g.ClockQuality.ClockClass = fbprotocol.ClockClass6
-			g.TimePropertiesDS.TimeTraceable = true
-			g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
-			g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
-			g.ClockQuality.OffsetScaledLogVariance = 0x4e5d
-			err = c.pmcClient.SetGMSettings(pmcCfgName, g)
-		}
-	case protocol.ClockClassOutOfSpec:
-		if g.ClockQuality.ClockClass != protocol.ClockClassOutOfSpec {
-			g.ClockQuality.ClockClass = protocol.ClockClassOutOfSpec
-			g.TimePropertiesDS.TimeTraceable = false
-			g.ClockQuality.ClockAccuracy = c.syncState.ClockAccuracy
-			g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
-			g.ClockQuality.OffsetScaledLogVariance = 0xffff
-			err = c.pmcClient.SetGMSettings(pmcCfgName, g)
-		}
-	case fbprotocol.ClockClass7:
-		if g.ClockQuality.ClockClass != fbprotocol.ClockClass7 {
-			g.ClockQuality.ClockClass = fbprotocol.ClockClass7
-			g.TimePropertiesDS.TimeTraceable = true
-			g.ClockQuality.ClockAccuracy = c.syncState.ClockAccuracy
-			g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
-			g.ClockQuality.OffsetScaledLogVariance = 0xffff
-			err = c.pmcClient.SetGMSettings(pmcCfgName, g)
-		}
-	case protocol.ClockClassFreerun:
-		if g.ClockQuality.ClockClass != protocol.ClockClassFreerun {
-			g.ClockQuality.ClockClass = protocol.ClockClassFreerun
-			g.TimePropertiesDS.TimeTraceable = false
-			g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
-			g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
-			g.ClockQuality.OffsetScaledLogVariance = 0xffff
-			err = c.pmcClient.SetGMSettings(pmcCfgName, g)
-		}
-	default:
-		glog.Infof("No clock class identified for %d", c.syncState.ClockClass)
-		err = fmt.Errorf("no clock class identified for %d", c.syncState.ClockClass)
-	}
-	if err == nil {
-		c.announcedClockClass = g.ClockQuality.ClockClass
-		c.announcedClockAccuracy = g.ClockQuality.ClockAccuracy
-	}
-	return g.ClockQuality.ClockClass, g.ClockQuality.ClockAccuracy, err
 }
 
 func (c *GM) status() string {
@@ -376,7 +353,7 @@ func (c *GM) updateState() SyncState {
 	c.syncState.SourceLost = syncSrcLost
 	c.syncState.LeadingIFace = leadingInterface
 
-	var outOfSpec, frequencyTraceable bool
+	var outOfSpec bool
 	if c.data != nil {
 		for _, d := range c.data {
 			switch d.ProcessName {
@@ -387,7 +364,6 @@ func (c *GM) updateState() SyncState {
 				}
 				if dd := d.GetDataDetails(leadingInterface); dd != nil {
 					outOfSpec = dd.OutOfSpec
-					frequencyTraceable = dd.FrequencyTraceable
 				}
 			case event.GNSS:
 				gnssState = d.State
@@ -413,15 +389,14 @@ func (c *GM) updateState() SyncState {
 	switch dpllState {
 	case event.PTP_FREERUN:
 		c.syncState.State = dpllState
-		if outOfSpec && frequencyTraceable {
-			c.syncState.ClockClass = protocol.ClockClassOutOfSpec
-		} else {
-			c.syncState.ClockClass = protocol.ClockClassFreerun
-		}
+		c.syncState.ClockClass = protocol.ClockClassFreerun
 		c.syncState.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
 	case event.PTP_HOLDOVER:
 		c.syncState.State = dpllState
 		c.syncState.ClockClass = fbprotocol.ClockClass7
+		if outOfSpec {
+			c.syncState.ClockClass = protocol.ClockClassOutOfSpec
+		}
 	case event.PTP_LOCKED, event.PTP_NOTSET:
 		switch gnssState {
 		case event.PTP_LOCKED:

@@ -176,11 +176,16 @@ func (c *TBC) SourceQualification(cfg string) (event.SourceQualification, bool) 
 }
 
 // AddEvent processes an event and updates clock state.
-func (c *TBC) AddEvent(ev event.Event) SyncState {
+func (c *TBC) AddEvent(ev event.Event) EventResult {
+	var result EventResult
+	if ev.Source != event.DPLL {
+		result = c.retainedDPLLResult(ev)
+	}
 	switch ev.Source {
 	case event.SYNCE:
 		c.processSyncE(ev)
-		return c.syncState
+		result.SyncState = c.syncState
+		return result
 	case event.PMC:
 		ds, ok := ev.Data.(*event.ParentDSData)
 		if ok {
@@ -189,14 +194,25 @@ func (c *TBC) AddEvent(ev event.Event) SyncState {
 		} else if currentDS, isCurrentDS := ev.Data.(*event.ParentTimeCurrentDS); isCurrentDS {
 			c.handleDownstreamAnnounceIWF(currentDS)
 		}
-		return c.syncState
+		result.SyncState = c.syncState
+		return result
 	default:
+		if ev.Source == event.DPLL {
+			var accepted bool
+			// Reject stale or reset-episode observations before they can enter aggregates
+			// or alter state; an older sample must not overwrite accepted clock quality.
+			if ev, result, accepted = c.prepareDPLL(ev, false); !accepted {
+				result.SyncState = c.syncState
+				return result
+			}
+		}
 		d := c.GetData(ev.Source)
 		d.AddEvent(ev)
 		d.UpdateState()
 		c.updateLeadingClockData(ev)
 		c.evaluateState()
-		return c.syncState
+		result.SyncState = c.syncState
+		return result
 	}
 }
 
@@ -756,14 +772,31 @@ func (c *TBC) getCalculatedHoldoverOffset() int64 {
 
 func (c *TBC) freeRunCondition() bool {
 	if c.leadingClockData.toFreeRunThreshold == 0 {
-		glog.Info("Leading clock free-run condition is pending initialization")
-		return true
+		var detail *event.DataDetails
+		for _, data := range c.data {
+			if data.ProcessName == event.DPLL {
+				detail = data.GetDataDetails(c.syncState.LeadingIFace)
+				break
+			}
+		}
+		// An interpreted observation already carries resolved producer limits, so
+		// permit evaluation below even if the legacy threshold cache is still zero.
+		// Without one, retain the fail-closed initialization guard.
+		if detail == nil || detail.Holdover == nil {
+			glog.Info("Leading clock free-run condition is pending initialization")
+			return true
+		}
 	}
 	for _, d := range c.data {
 		switch d.ProcessName {
 		case event.DPLL:
 			for _, dd := range d.Details {
 				if dd.IFace == c.syncState.LeadingIFace {
+					// Timeout or invalid-model termination must propagate even when
+					// the offset is absent/placeholder and cannot prove threshold crossing.
+					if dd.Holdover != nil && dd.State == event.PTP_FREERUN {
+						return true
+					}
 					if math.Abs(float64(dd.Offset)) > float64(c.leadingClockData.toFreeRunThreshold) {
 						glog.Infof("free-run condition on DPLL %s", dd.IFace)
 						return true
@@ -803,6 +836,11 @@ func (c *TBC) inSpecCondition() bool {
 		if d.ProcessName == event.DPLL {
 			for _, dd := range d.Details {
 				if dd.IFace == c.syncState.LeadingIFace {
+					// The interpreted episode latch includes modeled peak/time limits;
+					// a smaller latest offset (or no offset) must not imply recovery.
+					if dd.Holdover != nil {
+						return !dd.OutOfSpec
+					}
 					if math.Abs(float64(dd.Offset)) > float64(c.leadingClockData.MaxInSpecOffset) {
 						glog.Infof("out-of-spec condition on DPLL ", dd.IFace)
 						return false
