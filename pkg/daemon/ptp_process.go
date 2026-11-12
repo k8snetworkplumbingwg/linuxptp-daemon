@@ -28,8 +28,10 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ptpconfig"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
+
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
@@ -1010,11 +1012,11 @@ func newPtpProcess(name, configFile, configPath, socketPath, messageTag string, 
 	}
 }
 
-func (p *ptpProcess) loadProcessConf(env ptpProcessEnv) (*Ptp4lConf, *string, error) {
+func (p *ptpProcess) loadProcessConf(env ptpProcessEnv) (*ptpconfig.Ptp4lConf, *string, error) {
 	confInput := confFor(p.name, env.nodeProfile)
 	opts := optsFor(p.name, env.nodeProfile)
 
-	output := &Ptp4lConf{}
+	output := &ptpconfig.Ptp4lConf{}
 	err := output.PopulatePtp4lConf(confInput, nil)
 	if err != nil {
 		printNodeProfile(env.nodeProfile)
@@ -1036,15 +1038,15 @@ func (p *ptpProcess) loadProcessConf(env ptpProcessEnv) (*Ptp4lConf, *string, er
 	return output, opts, nil
 }
 
-func (p *ptpProcess) addMonitorFlags(output *Ptp4lConf, opts *string) {
+func (p *ptpProcess) addMonitorFlags(output *ptpconfig.Ptp4lConf, opts *string) {
 	addFlagsForMonitor(p.name, opts, output)
 }
 
-func (p *ptpProcess) writeProcessConf(output *Ptp4lConf, configOutput string) error {
+func (p *ptpProcess) writeProcessConf(output *ptpconfig.Ptp4lConf, configOutput string) error {
 	if confInput := confFor(p.name, p.nodeProfile); confInput != nil {
 		*confInput = configOutput
 	}
-	p.gnssSerialPort = output.gnss_serial_port
+	p.gnssSerialPort = output.GnssSerialPort
 	err := os.WriteFile(p.configPath, []byte(configOutput), 0o644)
 	if err != nil {
 		printNodeProfile(p.nodeProfile)
@@ -1053,7 +1055,7 @@ func (p *ptpProcess) writeProcessConf(output *Ptp4lConf, configOutput string) er
 	return nil
 }
 
-func (p *ptpProcess) renderPtp4lConf(env ptpProcessEnv, output *Ptp4lConf, opts *string) error {
+func (p *ptpProcess) renderPtp4lConf(env ptpProcessEnv, output *ptpconfig.Ptp4lConf, opts *string) error {
 	output.ExtendGlobalSection(*env.nodeProfile.Name, p.messageTag, p.socketPath, p.name)
 	p.addMonitorFlags(output, opts)
 	configOutput, ifaces := output.RenderPtp4lConf()

@@ -1,4 +1,4 @@
-package daemon
+package ptpconfig
 
 import (
 	"errors"
@@ -23,6 +23,10 @@ const (
 	GlobalSectionName  = "[global]"
 	NmeaSectionName    = "[nmea]"
 	UnicastSectionName = "[unicast_master_table]"
+
+	//TODO: For now these are duplicated lets fix this later
+	GpsPipeSerialPort = "/gpsd/data"
+	ts2phcProcessName = "ts2phc"
 )
 
 // cliArgsSlaveFlagsRegex matches --slaveOnly or --clientOnly with value 1 in command-line arguments
@@ -42,12 +46,13 @@ type ptp4lConfSection struct {
 // which can then be rendered to a string again.
 type Ptp4lConf struct {
 	sections       []ptp4lConfSection
-	profileName    string
-	clockType      event.ClockType
-	gnssSerialPort string // gnss serial port
+	ProfileName    string
+	ClockType      event.ClockType
+	GnssSerialPort string // gnss serial port
 }
 
-func (conf *Ptp4lConf) getPtp4lConfOptionOrEmptyString(sectionName string, key string) (string, bool) {
+// GetPtp4lConfOptionOrEmptyString ...
+func (conf *Ptp4lConf) GetPtp4lConfOptionOrEmptyString(sectionName string, key string) (string, bool) {
 	for _, section := range conf.sections {
 		if section.sectionName == sectionName {
 			for _, option := range section.options {
@@ -61,7 +66,8 @@ func (conf *Ptp4lConf) getPtp4lConfOptionOrEmptyString(sectionName string, key s
 	return "", false
 }
 
-func (conf *Ptp4lConf) setPtp4lConfOption(sectionName string, key string, value string, overwrite bool) {
+// SetPtp4lConfOption ...
+func (conf *Ptp4lConf) SetPtp4lConfOption(sectionName string, key string, value string, overwrite bool) {
 	var updatedSection ptp4lConfSection
 	index := -1
 	for i, section := range conf.sections {
@@ -135,13 +141,13 @@ func (conf *Ptp4lConf) PopulatePtp4lConf(config *string, cliArgs *string) error 
 				if currentSectionName != GlobalSectionName && currentSectionName != NmeaSectionName && currentSectionName != UnicastSectionName {
 					ifaceCount++
 				}
-				conf.setPtp4lConfOption(currentSectionName, "", "", false)
+				conf.SetPtp4lConfOption(currentSectionName, "", "", false)
 			} else {
 				split := strings.IndexByte(line, ' ')
 				if split > 0 {
 					key := line[:split]
 					value := strings.TrimSpace(line[split:])
-					conf.setPtp4lConfOption(currentSectionName, key, value, false)
+					conf.SetPtp4lConfOption(currentSectionName, key, value, false)
 					if (key == "masterOnly" && value == "0" && currentSectionName != GlobalSectionName) ||
 						(key == "serverOnly" && value == "0") ||
 						(key == "slaveOnly" && value == "1") ||
@@ -155,13 +161,13 @@ func (conf *Ptp4lConf) PopulatePtp4lConf(config *string, cliArgs *string) error 
 
 	if !hasSlaveConfigDefined {
 		// No Slave Interfaces defined
-		conf.clockType = event.TGM
+		conf.ClockType = event.TGM
 	} else if ifaceCount > 1 {
 		// Multiple interfaces with at least one slave Interface defined
-		conf.clockType = event.BC
+		conf.ClockType = event.BC
 	} else {
 		// Single slave Interface defined
-		conf.clockType = event.OC
+		conf.ClockType = event.OC
 	}
 
 	return nil
@@ -169,24 +175,24 @@ func (conf *Ptp4lConf) PopulatePtp4lConf(config *string, cliArgs *string) error 
 
 // ExtendGlobalSection extends Ptp4lConf struct with fields not from ptp4lConf
 func (conf *Ptp4lConf) ExtendGlobalSection(profileName string, messageTag string, socketPath string, pProcess string) {
-	conf.profileName = profileName
-	conf.setPtp4lConfOption(GlobalSectionName, "message_tag", messageTag, true)
+	conf.ProfileName = profileName
+	conf.SetPtp4lConfOption(GlobalSectionName, "message_tag", messageTag, true)
 	if socketPath != "" {
-		conf.setPtp4lConfOption(GlobalSectionName, "uds_address", socketPath, true)
+		conf.SetPtp4lConfOption(GlobalSectionName, "uds_address", socketPath, true)
 	}
-	if gnssSerialPort, ok := conf.getPtp4lConfOptionOrEmptyString(GlobalSectionName, "ts2phc.nmea_serialport"); ok {
-		conf.gnssSerialPort = strings.TrimSpace(gnssSerialPort)
-		conf.setPtp4lConfOption(GlobalSectionName, "ts2phc.nmea_serialport", GpsPipeSerialPort, true)
+	if gnssSerialPort, ok := conf.GetPtp4lConfOptionOrEmptyString(GlobalSectionName, "ts2phc.nmea_serialport"); ok {
+		conf.GnssSerialPort = strings.TrimSpace(gnssSerialPort)
+		conf.SetPtp4lConfOption(GlobalSectionName, "ts2phc.nmea_serialport", GpsPipeSerialPort, true)
 	}
-	if _, ok := conf.getPtp4lConfOptionOrEmptyString(GlobalSectionName, "leapfile"); ok || pProcess == event.Ts2PhcProcessName { // not required to check process if leapfile is always included
-		conf.setPtp4lConfOption(GlobalSectionName, "leapfile", fmt.Sprintf("%s/%s", config.DefaultLeapConfigPath, os.Getenv("NODE_NAME")), true)
+	if _, ok := conf.GetPtp4lConfOptionOrEmptyString(GlobalSectionName, "leapfile"); ok || pProcess == event.Ts2PhcProcessName { // not required to check process if leapfile is always included
+		conf.SetPtp4lConfOption(GlobalSectionName, "leapfile", fmt.Sprintf("%s/%s", config.DefaultLeapConfigPath, os.Getenv("NODE_NAME")), true)
 	}
 }
 
 // AddInterfaceSection adds interface to Ptp4lConf
 func (conf *Ptp4lConf) AddInterfaceSection(iface string) {
 	ifaceSectionName := fmt.Sprintf("[%s]", iface)
-	conf.setPtp4lConfOption(ifaceSectionName, "", "", false)
+	conf.SetPtp4lConfOption(ifaceSectionName, "", "", false)
 }
 
 // ResolveInterfaceNames resolves interface section names using the given
@@ -296,12 +302,12 @@ func (conf *Ptp4lConf) extractSynceRelations() *synce.Relations {
 			networkOption := synce.SYNCE_NETWORK_OPT_1
 
 			synceRelationInfo.Name = re.ReplaceAllString(sectionName, "")
-			if networkOptionStr, ok := conf.getPtp4lConfOptionOrEmptyString(sectionName, "network_option"); ok {
+			if networkOptionStr, ok := conf.GetPtp4lConfOptionOrEmptyString(sectionName, "network_option"); ok {
 				if networkOption, err = strconv.Atoi(strings.TrimSpace(networkOptionStr)); err != nil {
 					glog.Errorf("error parsing `network_option`, setting network_option to default 1 : %s", err)
 				}
 			}
-			if extendedTlvStr, ok := conf.getPtp4lConfOptionOrEmptyString(sectionName, "extended_tlv"); ok {
+			if extendedTlvStr, ok := conf.GetPtp4lConfOptionOrEmptyString(sectionName, "extended_tlv"); ok {
 				if extendedTlv, err = strconv.Atoi(strings.TrimSpace(extendedTlvStr)); err != nil {
 					glog.Errorf("error parsing `extended_tlv`, setting extended_tlv to default 1 : %s", err)
 				}
@@ -326,7 +332,7 @@ func (conf *Ptp4lConf) extractSynceRelations() *synce.Relations {
 
 // RenderSyncE4lConf outputs synce4l config as string
 func (conf *Ptp4lConf) RenderSyncE4lConf(ptpSettings map[string]string) (configOut string, relations *synce.Relations) {
-	configOut = fmt.Sprintf("#profile: %s\n", conf.profileName)
+	configOut = fmt.Sprintf("#profile: %s\n", conf.ProfileName)
 	relations = conf.extractSynceRelations()
 	relations.AddClockIds(ptpSettings)
 	deviceIdx := 0
@@ -334,8 +340,8 @@ func (conf *Ptp4lConf) RenderSyncE4lConf(ptpSettings map[string]string) (configO
 	for i, section := range conf.sections {
 		configOut = fmt.Sprintf("%s\n%s", configOut, section.sectionName)
 		if strings.HasPrefix(section.sectionName, "[<") {
-			if _, found := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "clock_id"); !found {
-				conf.setPtp4lConfOption(section.sectionName, "clock_id", relations.Devices[deviceIdx].ClockId, true)
+			if _, found := conf.GetPtp4lConfOptionOrEmptyString(section.sectionName, "clock_id"); !found {
+				conf.SetPtp4lConfOption(section.sectionName, "clock_id", relations.Devices[deviceIdx].ClockId, true)
 				deviceIdx++
 			}
 		}
@@ -356,14 +362,14 @@ func getSectionName(name string) string {
 
 // RenderPtp4lConf outputs ptp4l config as string
 func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces) {
-	configOut = fmt.Sprintf("#profile: %s\n", conf.profileName)
+	configOut = fmt.Sprintf("#profile: %s\n", conf.ProfileName)
 	var nmeaSource event.EventSource
 
 	for _, section := range conf.sections {
 		configOut = fmt.Sprintf("%s\n%s", configOut, section.sectionName)
 
 		if section.sectionName == NmeaSectionName {
-			if source, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "ts2phc.master"); ok {
+			if source, ok := conf.GetPtp4lConfOptionOrEmptyString(section.sectionName, "ts2phc.master"); ok {
 				nmeaSource = getSource(source)
 			}
 		}
@@ -371,7 +377,7 @@ func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces
 			iface := config.Iface{Name: getSectionName(section.sectionName)}
 			iface.PhcId = network.GetPhcId(iface.Name)
 
-			if source, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "ts2phc.master"); ok {
+			if source, ok := conf.GetPtp4lConfOptionOrEmptyString(section.sectionName, "ts2phc.master"); ok {
 				iface.Source = getSource(source)
 				// when a [nmea] section with `ts2phc.master 1` exists, each interface with `ts2phc.master 0`
 				// marks a time sink whose PHC is disciplined by the [nmea] GNSS master, and should be labeled as GNSS.
@@ -383,7 +389,7 @@ func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces
 				// if not defined here, use source defined at nmea section
 				iface.Source = nmeaSource
 			}
-			if masterOnly, ok := conf.getPtp4lConfOptionOrEmptyString(section.sectionName, "masterOnly"); ok {
+			if masterOnly, ok := conf.GetPtp4lConfOptionOrEmptyString(section.sectionName, "masterOnly"); ok {
 				// TODO add error handling
 				iface.IsMaster, _ = strconv.ParseBool(strings.TrimSpace(masterOnly))
 			}

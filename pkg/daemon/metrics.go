@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ptpconfig"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	"fmt"
@@ -865,7 +866,7 @@ func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
 	return
 }
 
-func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf) {
+func addFlagsForMonitor(process string, configOpts *string, conf *ptpconfig.Ptp4lConf) {
 	switch process {
 	case "ptp4l":
 		if configOpts != nil {
@@ -875,9 +876,9 @@ func addFlagsForMonitor(process string, configOpts *string, conf *Ptp4lConf) {
 			}
 
 			if !strings.Contains(*configOpts, "--summary_interval") {
-				_, exist := conf.getPtp4lConfOptionOrEmptyString(GlobalSectionName, "summary_interval")
+				_, exist := conf.GetPtp4lConfOptionOrEmptyString(ptpconfig.GlobalSectionName, "summary_interval")
 				if !exist {
-					conf.setPtp4lConfOption(GlobalSectionName, "summary_interval", "1", true)
+					conf.SetPtp4lConfOption(ptpconfig.GlobalSectionName, "summary_interval", "1", true)
 				}
 			}
 		}

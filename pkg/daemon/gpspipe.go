@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	// GPSPIPE_SERIALPORT ... gpspipe serial port
-	GPSPIPE_SERIALPORT = "/gpsd/data"
+	// GpsPipeSerialPort ... gpspipe serial port
+	GpsPipeSerialPort = "/gpsd/data"
 	// GPSD_DIR ... gpsd directory
 	GPSD_DIR = "/gpsd"
 )
@@ -48,14 +48,14 @@ type GpsPipe struct {
 
 // NewGpsPipeProcess creates a new GpsPipe process instance.
 func NewGpsPipeProcess(messageTag string, nodeProfile *ptpv1.PtpProfile, eventCh chan event.Event, gpsdConfig string) process.Process {
-	cmdLine := addScheduling(nodeProfile, fmt.Sprintf("/usr/local/bin/gpspipe -v -R -l -o %s", GPSPIPE_SERIALPORT))
+	cmdLine := addScheduling(nodeProfile, fmt.Sprintf("/usr/local/bin/gpspipe -v -R -l -o %s", GpsPipeSerialPort))
 	args := strings.Split(cmdLine, " ")
 
 	gp := &GpsPipe{
 		name:       event.GpsPipeProcessName,
 		cmdLine:    cmdLine,
 		cmd:        NewExecCmd(exec.Command(args[0], args[1:]...)),
-		serialPort: GPSPIPE_SERIALPORT,
+		serialPort: GpsPipeSerialPort,
 		messageTag: messageTag,
 		profile:    nodeProfile,
 		eventCh:    eventCh,
@@ -126,7 +126,7 @@ func (gp *GpsPipe) Stop() error {
 	defer func() {
 		pipePath := gp.serialPort
 		if pipePath == "" {
-			pipePath = GPSPIPE_SERIALPORT
+			pipePath = GpsPipeSerialPort
 		}
 		err := os.Remove(pipePath)
 		if err != nil && !os.IsNotExist(err) {
@@ -155,7 +155,7 @@ func (gp *GpsPipe) Stop() error {
 		glog.Infof("Sending TERM to (%s) PID: %d", gp.name, cmd.Pid())
 		signalErr := cmd.Signal(syscall.SIGTERM)
 		if signalErr != nil {
-			err := fmt.Errorf("failed to send term signal to named pipe: %s", GPSPIPE_SERIALPORT)
+			err := fmt.Errorf("failed to send term signal to named pipe: %s", GpsPipeSerialPort)
 			glog.Error(err)
 			return err
 		}
@@ -218,7 +218,7 @@ func (gp *GpsPipe) run() {
 			return
 		}
 		if pipePath == "" {
-			pipePath = GPSPIPE_SERIALPORT
+			pipePath = GpsPipeSerialPort
 		}
 
 		// Ensure named pipe is created before starting the process

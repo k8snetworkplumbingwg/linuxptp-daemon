@@ -26,8 +26,8 @@ func NewChronydProcess(env ptpProcessEnv) (*chronydProcess, error) {
 	if err != nil {
 		return nil, err
 	}
-	output.setPtp4lConfOption("", "bindcmdaddress", ChronydSocketPath, true)
-	output.profile_name = *env.nodeProfile.Name
+	output.SetPtp4lConfOption("", "bindcmdaddress", ChronydSocketPath, true)
+	output.ProfileName = *env.nodeProfile.Name
 	p.addMonitorFlags(output, opts)
 	var configOutput string
 	configOutput, p.ifaces = output.RenderPtp4lConf()

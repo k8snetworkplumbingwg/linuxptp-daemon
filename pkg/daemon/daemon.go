@@ -24,6 +24,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ptpconfig"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	ptpclient "github.com/k8snetworkplumbingwg/ptp-operator/pkg/client/clientset/versioned"
@@ -1130,7 +1131,7 @@ func (*Daemon) inspectProfile(nodeProfile *ptpv1.PtpProfile) (event.ClockType, s
 	}
 	// If unset default to clock type inferred from ptp4l
 	if clockType == event.ClockUnset {
-		ptp4lOutput := &Ptp4lConf{}
+		ptp4lOutput := &ptpconfig.Ptp4lConf{}
 		// Parsing ptp4l needs to be done here to get the fallback clock type.
 		// Needs to be done outside the loop as we need to guarantee clockType
 		// set before the event.Ts2PhcProcessName case where it is used.
@@ -1138,7 +1139,7 @@ func (*Daemon) inspectProfile(nodeProfile *ptpv1.PtpProfile) (event.ClockType, s
 		if err != nil {
 			return "", "", nil, err
 		}
-		clockType = ptp4lOutput.clock_type
+		clockType = ptp4lOutput.ClockType
 	}
 	return clockType, leadingNic, upstreamPorts, nil
 }

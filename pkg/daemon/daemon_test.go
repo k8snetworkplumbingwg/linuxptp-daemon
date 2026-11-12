@@ -9,6 +9,7 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ptpconfig"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
 	"github.com/sirupsen/logrus"
@@ -853,7 +854,7 @@ func initPopulateAndRenderPtp4lConfTestCase() []populateAndRenderPtp4lConfTestCa
 func TestDaemon_PopulateAndRenderPtp4lConf(t *testing.T) {
 	testCases := initPopulateAndRenderPtp4lConfTestCase()
 	for _, tc := range testCases {
-		conf := &daemon.Ptp4lConf{}
+		conf := &ptpconfig.Ptp4lConf{}
 		conf.PopulatePtp4lConf(&tc.testConf, nil)
 		if tc.iface != "" {
 			conf.AddInterfaceSection(tc.iface)
@@ -906,7 +907,7 @@ func TestRenderPtp4lConf_IfaceSource(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			conf := &daemon.Ptp4lConf{}
+			conf := &ptpconfig.Ptp4lConf{}
 			err := conf.PopulatePtp4lConf(&tt.config, nil)
 			require.NoError(t, err)
 			_, ifaces := conf.RenderPtp4lConf()
