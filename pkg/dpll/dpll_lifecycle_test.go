@@ -59,7 +59,7 @@ func TestDpllStartGates(t *testing.T) {
 func TestDpllStartStopRestart(t *testing.T) {
 	ch := make(chan event.Event, 8)
 	d := NewDpll(1, 10, 2, 5, "ens01", []event.EventSource{event.GNSS}, MOCK, map[string]map[string]string{}, 0, 0, 0, config.ProcessConfig{
-		ClockType:    event.GM,
+		ClockType:    event.TGM,
 		ConfigName:   "test",
 		EventChannel: ch,
 	}, &ptpv1.PtpProfile{})

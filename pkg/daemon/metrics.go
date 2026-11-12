@@ -270,7 +270,7 @@ func updateProfileThresholdMetrics(gauge *prometheus.GaugeVec, node string, node
 		// A controlled TT-only profile has no independent source/clock policy.
 		return
 	}
-	if profileClockType(nodeProfile) == TBC {
+	if profileClockType(nodeProfile) == string(event.TBC) {
 		policy, err := resolveSourceQualificationPolicy(nodeProfile)
 		if err != nil {
 			glog.Errorf("Source qualification threshold read-back profile=%s: %v", profile, err)
@@ -332,7 +332,7 @@ type tbcDPLLThresholds struct {
 }
 
 func updateTBCDPLLThresholdMetrics(gauge *prometheus.GaugeVec, node string, profile *ptpv1.PtpProfile, iface config.Iface, flags dpll.Flag, cfg tbcDPLLThresholds) {
-	if profileClockType(profile) != TBC || profile.PtpSettings["controllingProfile"] != "" ||
+	if profileClockType(profile) != string(event.TBC) || profile.PtpSettings["controllingProfile"] != "" ||
 		flags&dpll.FlagOnlyPhaseStatus == dpll.FlagOnlyPhaseStatus {
 		return
 	}

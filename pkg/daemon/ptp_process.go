@@ -327,7 +327,7 @@ func (p *ptpProcess) processOutput(output string) string {
 	printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
 	p.processPTPMetrics(output)
 	if p.name == ptp4lProcessName {
-		if p.profileClockType() == TBC {
+		if p.profileClockType() == string(event.TBC) {
 			p.tBCTransitionCheck(output, p.pm)
 		}
 	}
@@ -449,7 +449,7 @@ func (p *ptpProcess) run() {
 			glog.Errorf("CmdRun() error waiting for %s: %v", p.name, waitErr)
 		}
 
-		if p.profileClockType() == TBC && p.name == ptp4lProcessName {
+		if p.profileClockType() == string(event.TBC) && p.name == ptp4lProcessName {
 			p.pm.AfterRunPTPCommand(p.nodeProfile, "reset-to-default")
 		}
 	}()
@@ -1172,9 +1172,9 @@ func NewPhc2sysProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	if p.conditions == nil {
 		p.conditions = map[process.Action]process.Condition{}
 	}
-	if env.clockType == event.GM || env.clockType == event.TBC {
+	if env.clockType == event.TGM || env.clockType == event.TBC {
 		startCond := phc2sysOffsetStartCondition(env)
-		if env.clockType == event.GM && env.hasFailover {
+		if env.clockType == event.TGM && env.hasFailover {
 			startCond = process.Any{Conditions: []process.Condition{
 				startCond,
 				process.OnPluginEvent{EventName: generic.GnssRecoveredEventName},
@@ -1212,7 +1212,7 @@ func phc2sysOffsetStartCondition(env ptpProcessEnv) process.Condition {
 		MaxOffset: 1e9,
 		Count:     3,
 	}
-	if env.clockType == event.GM || profileClockType(env.nodeProfile) == TGM {
+	if env.clockType == event.TGM || profileClockType(env.nodeProfile) == string(event.TGM) {
 		base.Source = event.TS2PHC
 		cfgName := fmt.Sprintf("ts2phc.%d.config", env.runID)
 		base.ClockID = cfgName
@@ -1278,7 +1278,7 @@ func NewTs2phcProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	p := newPtpProcess(ts2phcProcessName, configFile, configPath, socketPath, messageTag, env.nodeProfile, env.clockType, env.dn)
 	// DPLL is considered to be running along with ts2phc
 	maxInSpecOffset, maxHoldoverOffSet, maxHoldoverTimeout, inSpecTimer, frequencyTraceable := dpll.CalculateTimer(env.nodeProfile)
-	if env.clockType == event.GM {
+	if env.clockType == event.TGM {
 		// update ts2phcOpts with the new config
 		configOpts := env.nodeProfile.Ts2PhcOpts
 		if configOpts != nil && *configOpts != "" {
@@ -1310,7 +1310,7 @@ func NewTs2phcProcess(env ptpProcessEnv) (*ptpProcess, error) {
 		return nil, err
 	}
 	p.cmd = buildCmd(buildPtpCmdLine(ts2phcProcessName, configPath, opts, env.nodeProfile))
-	if profileClockType(env.nodeProfile) == TBC && env.dn != nil && p.conditions == nil {
+	if profileClockType(env.nodeProfile) == string(event.TBC) && env.dn != nil && p.conditions == nil {
 		p.conditions = ts2phcConditionsForTBC(p, env)
 	}
 	return p, nil

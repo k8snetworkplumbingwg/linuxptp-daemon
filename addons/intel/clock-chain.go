@@ -6,6 +6,7 @@ import (
 
 	"github.com/golang/glog"
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
@@ -57,12 +58,6 @@ const (
 	PriorityEnabled  = 0
 	PriorityDisabled = 255
 )
-
-var ClockTypesMap = map[string]ClockChainType{
-	"":     ClockTypeUnset,
-	"T-GM": ClockTypeTGM,
-	"T-BC": ClockTypeTBC, // Use the same for T-TSC
-}
 
 const (
 	sdp20          = "CVL-SDP20"
@@ -208,7 +203,7 @@ func InitClockChain(opts PhaseInputsProvider, nodeProfile *ptpv1.PtpProfile) (*C
 		return chain, err
 	}
 	if chain.Type == ClockTypeTBC {
-		(*nodeProfile).PtpSettings["clockType"] = "T-BC"
+		(*nodeProfile).PtpSettings["clockType"] = string(event.TBC)
 		glog.Info("about to init TBC pins")
 		err = chain.InitPinsTBC()
 		if err != nil {

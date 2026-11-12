@@ -290,7 +290,7 @@ func (conf *Ptp4lConf) PopulatePtp4lConf(config *string, cliArgs *string) error 
 
 	if !hasSlaveConfigDefined {
 		// No Slave Interfaces defined
-		conf.clock_type = event.GM
+		conf.clock_type = event.TGM
 	} else if ifaceCount > 1 {
 		// Multiple interfaces with at least one slave Interface defined
 		conf.clock_type = event.BC
