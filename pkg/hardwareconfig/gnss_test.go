@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ublox"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
@@ -25,7 +26,7 @@ const (
 	testIfaceEns7f0     = "ens7f0"
 	testSubsystemLeader = "leader"
 	testDevPtp0         = "/dev/ptp0"
-	testClockTypeTGM    = ClockTypeTGM
+	testClockTypeTGM    = string(event.TGM)
 	testSurveyInArgs    = "SURVEYIN,600,50000"
 	testMonHW           = "MON-HW"
 	testCfgMsg          = "CFG-MSG,1,38,248"

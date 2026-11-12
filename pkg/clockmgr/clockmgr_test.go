@@ -64,8 +64,8 @@ func TestClockStateMetricProcess(t *testing.T) {
 		},
 		{
 			name:      "GM fallback for event without clock type",
-			clockType: event.GM,
-			want:      string(event.GM),
+			clockType: event.TGM,
+			want:      "GM",
 		},
 		{
 			name:      "BC uses ptp4l process label",
@@ -105,7 +105,7 @@ func TestClockManager_EmitsClockProvidedOffsetMetric(t *testing.T) {
 	cm := Init(nodeName, make(chan event.Event), offsetMetric, nil, nil, nil)
 	clk := &fixedOffsetMetricClock{
 		cfgName:   cfgName,
-		clockType: event.GM,
+		clockType: event.TGM,
 		syncState: clock.SyncState{
 			State:        event.PTP_LOCKED,
 			ClockOffset:  42,

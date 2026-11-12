@@ -261,7 +261,7 @@ func TestProcessGNSSMessageRejectsClockWithoutMatchingStatus(t *testing.T) {
 func TestNewGpsdProcessStoresProcessConfig(t *testing.T) {
 	eventCh := make(chan event.Event, 1)
 	cfg := config.ProcessConfig{
-		ClockType:    event.GM,
+		ClockType:    event.TGM,
 		ConfigName:   ttestTs2phcConfig,
 		EventChannel: eventCh,
 		GMThreshold:  config.Threshold{Max: 100},
@@ -283,8 +283,8 @@ func TestProcessConfigForCopiesThresholds(t *testing.T) {
 			HoldOverTimeout:    5,
 		},
 	}
-	cfg := processConfigFor(p, event.GM, ch)
-	assert.Equal(t, event.GM, cfg.ClockType)
+	cfg := processConfigFor(p, event.TGM, ch)
+	assert.Equal(t, event.TGM, cfg.ClockType)
 	assert.Equal(t, ttestTs2phcConfig, cfg.ConfigName)
 	assert.Equal(t, int64(100), cfg.GMThreshold.Max)
 	assert.Equal(t, int64(-100), cfg.GMThreshold.Min)

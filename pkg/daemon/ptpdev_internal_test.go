@@ -38,30 +38,30 @@ func Test_reportedClockType(t *testing.T) {
 		{
 			name: "ptpSettings clockType T-GM",
 			proc: &ptpProcess{
-				clockType: event.GM,
+				clockType: event.TGM,
 				nodeProfile: &ptpv1.PtpProfile{
-					PtpSettings: map[string]string{"clockType": TGM},
+					PtpSettings: map[string]string{"clockType": string(event.TGM)},
 				},
 			},
-			want: TGM,
+			want: string(event.TGM),
 		},
 		{
 			name: "ptpSettings clockType T-BC",
 			proc: &ptpProcess{
 				clockType: event.BC,
 				nodeProfile: &ptpv1.PtpProfile{
-					PtpSettings: map[string]string{"clockType": TBC},
+					PtpSettings: map[string]string{"clockType": string(event.TBC)},
 				},
 			},
-			want: TBC,
+			want: string(event.TBC),
 		},
 		{
 			name: "inferred GM is reported as T-GM",
 			proc: &ptpProcess{
-				clockType:   event.GM,
+				clockType:   event.TGM,
 				nodeProfile: &ptpv1.PtpProfile{},
 			},
-			want: TGM,
+			want: string(event.TGM),
 		},
 		{
 			name: "inferred BC",
@@ -193,7 +193,7 @@ func Test_runSyncStatusUpdate_skipsWhileApplying(t *testing.T) {
 		processManager: &ProcessManager{
 			clockMgr: mgr,
 			process: []process.Process{&ptpProcess{
-				clockType:   event.GM,
+				clockType:   event.TGM,
 				nodeProfile: &ptpv1.PtpProfile{Name: &profile},
 			}},
 		},
@@ -245,8 +245,8 @@ func Test_runSyncStatusUpdate(t *testing.T) {
 			processManager: &ProcessManager{
 				process: []process.Process{
 					nil,
-					newProc(&profileA, event.GM, false, "ens1f0", ""),
-					newProc(&profileA, event.GM, false, "ens1f1"),
+					newProc(&profileA, event.TGM, false, "ens1f0", ""),
+					newProc(&profileA, event.TGM, false, "ens1f1"),
 					newProc(nil, event.OC, false),
 				},
 			},
@@ -258,7 +258,7 @@ func Test_runSyncStatusUpdate(t *testing.T) {
 		if !assert.NotNil(t, got) || !assert.NotNil(t, got.Status.Sync) {
 			return
 		}
-		assert.Equal(t, []ptpv1.NodeProfileStatus{{Name: profileA, ClockType: TGM}}, got.Status.Sync.Profiles)
+		assert.Equal(t, []ptpv1.NodeProfileStatus{{Name: profileA, ClockType: string(event.TGM)}}, got.Status.Sync.Profiles)
 		assert.Equal(t, profileA, got.Status.Devices[0].Profile)
 		assert.Equal(t, profileA, got.Status.Devices[1].Profile)
 		assert.Empty(t, got.Status.Devices[2].Profile)
@@ -341,7 +341,7 @@ func Test_runSyncStatusUpdate(t *testing.T) {
 			nodeName:  testNodeName,
 			ptpClient: newTestPTPClient(t, fake),
 			processManager: &ProcessManager{
-				process: []process.Process{newProc(&profileA, event.GM, false, "ens1f0")},
+				process: []process.Process{newProc(&profileA, event.TGM, false, "ens1f0")},
 			},
 		}
 

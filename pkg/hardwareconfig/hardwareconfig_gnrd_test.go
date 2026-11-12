@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -780,7 +781,7 @@ func TestLoadBehaviorProfile_DellXR8720t(t *testing.T) {
 	fakeClient := fake.NewClientset()
 	loader := NewBoardLabelMapLoader(fakeClient, "default")
 
-	template, err := LoadBehaviorProfile("dell/XR8720t", ClockTypeTBC, loader)
+	template, err := LoadBehaviorProfile("dell/XR8720t", string(event.TBC), loader)
 	assert.NoError(t, err, "Should load dell/XR8720t T-BC behavior profile")
 	assert.NotNil(t, template, "Behavior template should not be nil")
 	if template == nil {
@@ -834,13 +835,13 @@ func TestLoadBehaviorProfile_MultiVendor(t *testing.T) {
 	}{
 		{
 			hwDefPath:         HwDefIntelE825,
-			clockType:         ClockTypeTBC,
+			clockType:         string(event.TBC),
 			expectedPtpInput:  "GNR-D_SDP0",
 			expectedGnssInput: "GNSS_1PPS_IN",
 		},
 		{
 			hwDefPath:         "dell/XR8720t",
-			clockType:         ClockTypeTBC,
+			clockType:         string(event.TBC),
 			expectedPtpInput:  testPackageLabelREF0N,
 			expectedGnssInput: testPackageLabelREF4P,
 		},
@@ -1033,7 +1034,7 @@ func TestHPEEL140UsesPackageLabelsInBehaviorProfiles(t *testing.T) {
 	assert.Equal(t, testPackageLabelREF4P, tgm.Conditions[0].DesiredStates[0].DPLL.BoardLabel)
 	assert.Equal(t, "REF2N", tgm.Conditions[0].DesiredStates[1].DPLL.BoardLabel)
 
-	tbc, err := LoadBehaviorProfile(HwDefHPEEL140Gen12, ClockTypeTBC, loader)
+	tbc, err := LoadBehaviorProfile(HwDefHPEEL140Gen12, string(event.TBC), loader)
 	if !assert.NoError(t, err) || !assert.NotNil(t, tbc) {
 		t.FailNow()
 	}

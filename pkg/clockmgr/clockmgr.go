@@ -443,7 +443,7 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 		m.signalSyncStatus()
 	}
 	sample, available := clk.ClockOffsetMetric()
-	m.updateClockOffsetMetric(clk.ConfigName(), string(clk.ClockType()), sample, available)
+	m.updateClockOffsetMetric(clk.ConfigName(), clockMetricProcess(clk.ClockType()), sample, available)
 	if clockState.LeadingIFace != "" && clockState.LeadingIFace != event.LEADING_INTERFACE_UNKNOWN {
 		// BC/OC clock_state is scraped as process="ptp4l" (ptp4l is the
 		// servo), whereas GM/T-BC report under their clock-type label. The
@@ -478,7 +478,14 @@ func clockStateMetricProcess(clockType, eventClockType event.ClockType) string {
 		eventClockType == event.BC || eventClockType == event.OC {
 		return string(event.PTP4l)
 	}
-	return string(eventClockType)
+	return clockMetricProcess(eventClockType)
+}
+
+func clockMetricProcess(clockType event.ClockType) string {
+	if clockType == event.TGM {
+		return "GM"
+	}
+	return string(clockType)
 }
 
 // reset handles a reset event
@@ -493,7 +500,7 @@ func (m *ClockManager) reset(ev event.Event) {
 		} else {
 			clk.Reset()
 		}
-		m.deleteClockOffsetMetrics(clk.ConfigName(), string(clk.ClockType()))
+		m.deleteClockOffsetMetrics(clk.ConfigName(), clockMetricProcess(clk.ClockType()))
 	}
 	m.osClock.E3State = event.PTP_NOTSET
 	if ev.Source == event.TS2PHC {

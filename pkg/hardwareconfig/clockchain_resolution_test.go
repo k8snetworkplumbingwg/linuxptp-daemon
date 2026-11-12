@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -301,7 +302,7 @@ func TestClockChainResolution_TGM(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, hwConfig)
 
-	assert.Equal(t, ClockTypeTGM, *hwConfig.Spec.Profile.ClockType)
+	assert.Equal(t, string(event.TGM), *hwConfig.Spec.Profile.ClockType)
 	subsystem := hwConfig.Spec.Profile.ClockChain.Structure[0]
 	assert.Equal(t, testSubsystemLeader, subsystem.Name)
 	assert.Equal(t, HwDefIntelE825, subsystem.HardwareSpecificDefinitions)
