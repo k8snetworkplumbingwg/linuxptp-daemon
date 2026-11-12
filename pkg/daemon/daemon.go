@@ -568,7 +568,7 @@ func NewProfileTopology(nodeProfiles []ptpv1.PtpProfile) (ProfileTopology, error
 			result.controllingProfiles[controller] = profileName
 		}
 
-		if processShouldRun(&profile, event.Phc2SysProcessName) {
+		if ptpconfig.ProcessShouldRun(&profile, event.Phc2SysProcessName) {
 			result.phc2sysProfiles = append(result.phc2sysProfiles, profileName)
 
 			if referencedProfiles := listHAMemberProfiles(&profile); len(referencedProfiles) > 0 {
@@ -624,24 +624,6 @@ func NewProfileTopology(nodeProfiles []ptpv1.PtpProfile) (ProfileTopology, error
 		glog.Warningf("More than one Profile with phc2sys is active: %s", strings.Join(result.phc2sysProfiles, ", "))
 	}
 	return result, nil
-}
-
-func processShouldRun(profile *ptpv1.PtpProfile, processName string) bool {
-	switch processName {
-	case event.Ptp4lProcessName:
-		// (Ptp4lOpts != nil && Ptp4lOpts != "") && (Ptp4lConf != nil && Ptp4lConf != "")
-		return true
-	case event.Phc2SysProcessName:
-		return (profile.Phc2sysOpts != nil && *profile.Phc2sysOpts != "") || (profile.Phc2sysConf != nil && *profile.Phc2sysConf != "")
-	case event.Ts2PhcProcessName:
-		return (profile.Ts2PhcOpts != nil && *profile.Ts2PhcOpts != "") && (profile.Ts2PhcConf != nil && *profile.Ts2PhcConf != "")
-	case event.Synce4lProcessName:
-		return (profile.Synce4lOpts != nil && *profile.Synce4lOpts != "") && (profile.Synce4lConf != nil && *profile.Synce4lConf != "")
-	case event.ChronydProcessName:
-		return (profile.ChronydOpts != nil && *profile.ChronydOpts != "") && (profile.ChronydConf != nil && *profile.ChronydConf != "")
-	}
-	glog.Warningf("Requesting if unknown process %q should run", processName)
-	return false
 }
 
 func (dn *Daemon) applyNodePTPProfiles() error {
@@ -702,8 +684,8 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 
 	glog.Infof("updating NodePTPProfiles to:")
 	slices.SortFunc(dn.ptpUpdate.NodeProfiles, func(a, b ptpv1.PtpProfile) int {
-		aHasPhc2sys := processShouldRun(&a, event.Phc2SysProcessName)
-		bHasPhc2sys := processShouldRun(&b, event.Phc2SysProcessName)
+		aHasPhc2sys := ptpconfig.ProcessShouldRun(&a, event.Phc2SysProcessName)
+		bHasPhc2sys := ptpconfig.ProcessShouldRun(&b, event.Phc2SysProcessName)
 		// sorted in ascending order
 		// here having phc2sysOptions is considered a high number
 		if !aHasPhc2sys && bHasPhc2sys {

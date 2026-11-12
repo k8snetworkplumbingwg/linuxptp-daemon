@@ -14,6 +14,7 @@ import (
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 
 	"github.com/golang/glog"
 )
@@ -24,9 +25,7 @@ const (
 	NmeaSectionName    = "[nmea]"
 	UnicastSectionName = "[unicast_master_table]"
 
-	//TODO: For now these are duplicated lets fix this later
 	GpsPipeSerialPort = "/gpsd/data"
-	ts2phcProcessName = "ts2phc"
 )
 
 // cliArgsSlaveFlagsRegex matches --slaveOnly or --clientOnly with value 1 in command-line arguments
@@ -404,4 +403,22 @@ func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces
 	}
 	alias.CalculateAliases()
 	return configOut, ifaces
+}
+
+func ProcessShouldRun(profile *ptpv1.PtpProfile, processName string) bool {
+	switch processName {
+	case event.Ptp4lProcessName:
+		// (Ptp4lOpts != nil && Ptp4lOpts != "") && (Ptp4lConf != nil && Ptp4lConf != "")
+		return true
+	case event.Phc2SysProcessName:
+		return (profile.Phc2sysOpts != nil && *profile.Phc2sysOpts != "") || (profile.Phc2sysConf != nil && *profile.Phc2sysConf != "")
+	case event.Ts2PhcProcessName:
+		return (profile.Ts2PhcOpts != nil && *profile.Ts2PhcOpts != "") && (profile.Ts2PhcConf != nil && *profile.Ts2PhcConf != "")
+	case event.Synce4lProcessName:
+		return (profile.Synce4lOpts != nil && *profile.Synce4lOpts != "") && (profile.Synce4lConf != nil && *profile.Synce4lConf != "")
+	case event.ChronydProcessName:
+		return (profile.ChronydOpts != nil && *profile.ChronydOpts != "") && (profile.ChronydConf != nil && *profile.ChronydConf != "")
+	}
+	glog.Warningf("Requesting if unknown process %q should run", processName)
+	return false
 }
