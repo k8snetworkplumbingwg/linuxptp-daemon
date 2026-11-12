@@ -14,6 +14,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	kclock "k8s.io/utils/clock"
 )
 
 const (
@@ -85,35 +86,18 @@ func ensureLeapMocked(t *testing.T) {
 	})
 }
 
-// eventRecorder captures events posted via TBC.sendEvent for assertions.
-type eventRecorder struct {
-	mu     sync.Mutex
-	events []event.Event
-}
-
-func (r *eventRecorder) send(ev event.Event) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.events = append(r.events, ev)
-}
-
-func (r *eventRecorder) snapshot() []event.Event {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]event.Event(nil), r.events...)
-}
-
 func newPMCTestTBCClock(pmcClient pmc.Client) *TBC {
 	rec := &ipcRecorder{}
+	client, _ := pmcClient.(pmc.GMSettingsClient)
 	return &TBC{
+		pmcWorker: newPMCReconciler(client, testCfgName, event.TBC, kclock.RealClock{}),
 		BaseClock: BaseClock{
+			cfgName:          testCfgName,
 			sendIPC:          rec.send,
 			overallSyncState: event.PTP_NOTSET,
 			osClock:          &OsClock{State: event.PTP_NOTSET},
 		},
-		sendEvent:        func(event.Event) {},
 		getUtcOffset:     stubUtcOffset,
-		pmcClient:        pmcClient,
 		leadingClockData: newLeadingClockParams(),
 		syncState: SyncState{
 			State:         event.PTP_FREERUN,
@@ -259,6 +243,7 @@ func TestAnnounceLocalData_Freerun_SetsGMSettingsAndEGP(t *testing.T) {
 	cfgName := testCfgName
 	bc, err := NewTBC(cfgName, stubUtcOffset, mock, testControlledCfg)
 	require.NoError(t, err)
+	harness := installPMCHarness(t, bc.pmcWorker)
 	bc.leadingClockData.clockID = "001122.fffe.334455"
 	bc.syncState = SyncState{
 		State:      event.PTP_FREERUN,
@@ -267,12 +252,7 @@ func TestAnnounceLocalData_Freerun_SetsGMSettingsAndEGP(t *testing.T) {
 
 	bc.announceLocalData(cfgName)
 
-	// 3 async goroutines: 1 EGP + 2 GM settings
-	if !assert.Eventually(t, func() bool {
-		return len(mock.SnapshotSetCalls()) >= 3
-	}, 1*time.Second, 10*time.Millisecond) {
-		return
-	}
+	harness.flush(t, bc.AddEvent)
 
 	egpCalls := filterSetCalls(mock.SnapshotSetCalls(), "SetExternalGMPropertiesNP")
 	if !assert.Len(t, egpCalls, 1) {
@@ -307,6 +287,7 @@ func TestAnnounceLocalData_Freerun_SetsGMSettingsAndEGP(t *testing.T) {
 func TestAnnounceLocalData_Holdover135_SetsTimeProperties(t *testing.T) {
 	mock := &pmc.MockClient{}
 	bc := newPMCTestTBCClock(mock)
+	harness := installPMCHarness(t, bc.pmcWorker)
 	cfgName := testCfgName
 	bc.leadingClockData.clockID = "aabbcc.fffe.ddeeff"
 	bc.controlledPortsConfig = testControlledCfg
@@ -322,11 +303,7 @@ func TestAnnounceLocalData_Holdover135_SetsTimeProperties(t *testing.T) {
 
 	bc.announceLocalData(cfgName)
 
-	if !assert.Eventually(t, func() bool {
-		return len(filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")) >= 2
-	}, 1*time.Second, 10*time.Millisecond) {
-		return
-	}
+	harness.flush(t, bc.AddEvent)
 
 	gmCalls := filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")
 	if !assert.Len(t, gmCalls, 2) {
@@ -350,6 +327,7 @@ func TestAnnounceLocalData_Holdover135_SetsTimeProperties(t *testing.T) {
 func TestAnnounceLocalData_Holdover165_NotTimeTraceable(t *testing.T) {
 	mock := &pmc.MockClient{}
 	bc := newPMCTestTBCClock(mock)
+	harness := installPMCHarness(t, bc.pmcWorker)
 	cfgName := testCfgName
 	bc.leadingClockData.clockID = "aabbcc.fffe.ddeeff"
 	bc.controlledPortsConfig = testControlledCfg
@@ -363,11 +341,7 @@ func TestAnnounceLocalData_Holdover165_NotTimeTraceable(t *testing.T) {
 
 	bc.announceLocalData(cfgName)
 
-	if !assert.Eventually(t, func() bool {
-		return len(filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")) >= 2
-	}, 1*time.Second, 10*time.Millisecond) {
-		return
-	}
+	harness.flush(t, bc.AddEvent)
 
 	gmCalls := filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")
 	if !assert.Len(t, gmCalls, 2) {
@@ -387,6 +361,7 @@ func TestAnnounceLocalData_Holdover165_NotTimeTraceable(t *testing.T) {
 func TestAnnounceLocalData_NilDownstreamTimeProperties_SkipsGMSettings(t *testing.T) {
 	mock := &pmc.MockClient{}
 	bc := newPMCTestTBCClock(mock)
+	harness := installPMCHarness(t, bc.pmcWorker)
 	cfgName := testCfgName
 
 	bc.leadingClockData.clockID = "aabbcc.fffe.ddeeff"
@@ -399,12 +374,7 @@ func TestAnnounceLocalData_NilDownstreamTimeProperties_SkipsGMSettings(t *testin
 
 	bc.announceLocalData(cfgName)
 
-	// EGP runs in a goroutine; GM settings should be skipped
-	if !assert.Eventually(t, func() bool {
-		return len(filterSetCalls(mock.SnapshotSetCalls(), "SetExternalGMPropertiesNP")) >= 1
-	}, 1*time.Second, 10*time.Millisecond) {
-		return
-	}
+	harness.flush(t, bc.AddEvent)
 
 	egpCalls := filterSetCalls(mock.SnapshotSetCalls(), "SetExternalGMPropertiesNP")
 	assert.Len(t, egpCalls, 1)
@@ -435,13 +405,13 @@ func TestDownstreamAnnounceIWF_Fetches_EmitsPMCEvent(t *testing.T) {
 	mock := &pmc.MockClient{ParentTimeCurrentDSResult: want}
 
 	bc := newPMCTestTBCClock(mock)
-	rec := &eventRecorder{}
-	bc.sendEvent = rec.send
+	harness := installPMCHarness(t, bc.pmcWorker)
 	bc.syncState = SyncState{State: event.PTP_LOCKED}
 
 	bc.announceToken = 7
 	// runs on-loop in production (from a goroutine), here called synchronously.
 	bc.downstreamAnnounceIWF(cfgName, bc.announceToken)
+	result := harness.next(t)
 
 	getCalls := mock.SnapshotGetCalls()
 	if !assert.Len(t, getCalls, 1) {
@@ -453,34 +423,38 @@ func TestDownstreamAnnounceIWF_Fetches_EmitsPMCEvent(t *testing.T) {
 	// It must not touch PMC writes or clock state directly.
 	assert.Empty(t, mock.SnapshotSetCalls())
 
-	events := rec.snapshot()
+	events := []event.Event{result}
 	if !assert.Len(t, events, 1) {
 		return
 	}
 	assert.Equal(t, event.PMC, events[0].Source)
 	assert.Equal(t, cfgName, events[0].CfgName)
 	assert.Equal(t, event.TBC, events[0].ClockType)
-	payload, ok := events[0].Data.(*event.ParentTimeCurrentDS)
+	payload, ok := events[0].Data.(*event.PMCResult)
 	if !assert.True(t, ok) {
 		return
 	}
-	assert.Equal(t, want, payload.ParentTimeCurrentDS)
+	assert.Equal(t, want, payload.Datasets)
 	// The captured epoch is stamped on the result so a stale fetch can be dropped.
-	assert.Equal(t, uint64(7), payload.Generation)
+	assert.Equal(t, uint64(7), payload.Token)
 }
 
 func TestDownstreamAnnounceIWF_FetchError_NoEvent(t *testing.T) {
 	mock := &pmc.MockClient{ParentTimeCurrentDSErr: assert.AnError}
 	bc := newPMCTestTBCClock(mock)
-	rec := &eventRecorder{}
-	bc.sendEvent = rec.send
+	harness := installPMCHarness(t, bc.pmcWorker)
 	bc.syncState = SyncState{State: event.PTP_LOCKED}
 
 	bc.downstreamAnnounceIWF(testCfgName, bc.announceToken)
+	select {
+	case <-harness.timer.created:
+	case <-time.After(5 * time.Second):
+		t.Fatal("missing failed fetch backoff")
+	}
 
 	assert.Len(t, mock.SnapshotGetCalls(), 1)
 	assert.Empty(t, mock.SnapshotSetCalls())
-	assert.Empty(t, rec.snapshot(), "no event should be emitted on fetch error")
+	assert.Empty(t, harness.events, "no event should be emitted on fetch error")
 }
 
 // --- handleDownstreamAnnounceIWF (on-loop apply + write) ---
@@ -488,6 +462,7 @@ func TestDownstreamAnnounceIWF_FetchError_NoEvent(t *testing.T) {
 func TestHandleDownstreamAnnounceIWF_Locked_AppliesAndSets(t *testing.T) {
 	mock := &pmc.MockClient{}
 	bc := newPMCTestTBCClock(mock)
+	harness := installPMCHarness(t, bc.pmcWorker)
 	bc.controlledPortsConfig = testControlledCfg
 	bc.syncState = SyncState{State: event.PTP_LOCKED}
 
@@ -505,19 +480,14 @@ func TestHandleDownstreamAnnounceIWF_Locked_AppliesAndSets(t *testing.T) {
 		},
 	}
 
-	bc.handleDownstreamAnnounceIWF(upstream)
+	deliverTBCResult(bc, upstream)
 
 	// State updates happen synchronously on the loop.
 	assert.Equal(t, uint8(6), bc.leadingClockData.upstreamParentDataSet.GrandmasterClockClass)
 	assert.Equal(t, uint8(6), bc.leadingClockData.downstreamParentDataSet.GrandmasterClockClass)
 	assert.Equal(t, uint16(1), bc.leadingClockData.upstreamCurrentDSStepsRemoved)
 
-	// PMC writes are dispatched off-loop.
-	if !assert.Eventually(t, func() bool {
-		return len(filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")) >= 1
-	}, 1*time.Second, 10*time.Millisecond) {
-		return
-	}
+	harness.flush(t, bc.AddEvent)
 	egpCalls := filterSetCalls(mock.SnapshotSetCalls(), "SetExternalGMPropertiesNP")
 	if assert.Len(t, egpCalls, 1) {
 		assert.Equal(t, testControlledCfg, egpCalls[0].CfgName)
@@ -537,7 +507,7 @@ func TestHandleDownstreamAnnounceIWF_NotLocked_Aborts(t *testing.T) {
 	bc := newPMCTestTBCClock(mock)
 	bc.syncState = SyncState{State: event.PTP_FREERUN}
 
-	bc.handleDownstreamAnnounceIWF(&event.ParentTimeCurrentDS{
+	deliverTBCResult(bc, &event.ParentTimeCurrentDS{
 		Generation:          bc.announceToken,
 		ParentTimeCurrentDS: pmc.ParentTimeCurrentDS{ParentDataSet: protocol.ParentDataSet{GrandmasterClockClass: 6}},
 	})
@@ -558,7 +528,7 @@ func TestHandleDownstreamAnnounceIWF_StaleGeneration_Drops(t *testing.T) {
 
 	// A result carrying a previous epoch (e.g. fetched before a Reset/replace)
 	// must be dropped even though the clock is currently LOCKED.
-	bc.handleDownstreamAnnounceIWF(&event.ParentTimeCurrentDS{
+	deliverTBCResult(bc, &event.ParentTimeCurrentDS{
 		Generation:          4,
 		ParentTimeCurrentDS: pmc.ParentTimeCurrentDS{ParentDataSet: protocol.ParentDataSet{GrandmasterClockClass: 6}},
 	})
@@ -583,6 +553,7 @@ func TestReset_AdvancesGeneration(t *testing.T) {
 func TestHandleDownstreamAnnounceIWF_OutOfOrder_LateResultDoesNotClobber(t *testing.T) {
 	mock := &pmc.MockClient{}
 	bc := newPMCTestTBCClock(mock)
+	harness := installPMCHarness(t, bc.pmcWorker)
 	bc.controlledPortsConfig = testControlledCfg
 	bc.syncState = SyncState{State: event.PTP_LOCKED}
 
@@ -599,17 +570,13 @@ func TestHandleDownstreamAnnounceIWF_OutOfOrder_LateResultDoesNotClobber(t *test
 	bc.announceToken = 11
 
 	// Newer result lands first and is applied.
-	bc.handleDownstreamAnnounceIWF(latest)
+	deliverTBCResult(bc, latest)
 	assert.Equal(t, uint8(7), bc.leadingClockData.downstreamParentDataSet.GrandmasterClockClass)
 
-	if !assert.Eventually(t, func() bool {
-		return len(filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")) == 1
-	}, 1*time.Second, 10*time.Millisecond) {
-		return
-	}
+	harness.flush(t, bc.AddEvent)
 
 	// The superseded older result lands late; it must be thrown out.
-	bc.handleDownstreamAnnounceIWF(stale)
+	deliverTBCResult(bc, stale)
 
 	assert.Equal(t, uint8(7), bc.leadingClockData.downstreamParentDataSet.GrandmasterClockClass,
 		"late stale result must not clobber the newer downstream data")
@@ -633,17 +600,13 @@ func TestUpdateDownstreamData_SupersededFetch_Dropped(t *testing.T) {
 		},
 	}
 	bc := newPMCTestTBCClock(mock)
+	harness := installPMCHarness(t, bc.pmcWorker)
 	bc.controlledPortsConfig = testControlledCfg
 	bc.syncState = SyncState{State: event.PTP_LOCKED}
-	rec := &eventRecorder{}
-	bc.sendEvent = rec.send
 
 	// First request: fetch reads class 6 and emits an event carrying token T1.
 	bc.updateDownstreamData(testCfgName)
-	if !assert.Eventually(t, func() bool { return len(rec.snapshot()) >= 1 }, 1*time.Second, 10*time.Millisecond) {
-		return
-	}
-	firstResult := rec.snapshot()[0]
+	firstResult := harness.next(t)
 
 	// Second request supersedes the first; make its fetch return class 7 so the
 	// two results are distinguishable, and it carries a newer token T2.
@@ -651,15 +614,12 @@ func TestUpdateDownstreamData_SupersededFetch_Dropped(t *testing.T) {
 		ParentDataSet: protocol.ParentDataSet{GrandmasterClockClass: 7},
 	}
 	bc.updateDownstreamData(testCfgName)
-	if !assert.Eventually(t, func() bool { return len(rec.snapshot()) >= 2 }, 1*time.Second, 10*time.Millisecond) {
-		return
-	}
-	secondResult := rec.snapshot()[1]
+	secondResult := harness.next(t)
 
-	firstPayload := firstResult.Data.(*event.ParentTimeCurrentDS)
-	secondPayload := secondResult.Data.(*event.ParentTimeCurrentDS)
-	assert.NotEqual(t, firstPayload.Generation, secondPayload.Generation, "each request must carry a distinct token")
-	assert.Equal(t, bc.announceToken, secondPayload.Generation, "the struct tracks the latest request token")
+	firstPayload := firstResult.Data.(*event.PMCResult)
+	secondPayload := secondResult.Data.(*event.PMCResult)
+	assert.NotEqual(t, firstPayload.Token, secondPayload.Token, "each request must carry a distinct token")
+	assert.Equal(t, bc.announceToken, secondPayload.Token, "the struct tracks the latest request token")
 
 	// Deliver out of order: the latest result first (applied)...
 	bc.AddEvent(secondResult)
@@ -681,29 +641,23 @@ func TestUpdateDownstreamData_Locked_FetchesAndEmitsEvent(t *testing.T) {
 		},
 	}
 	bc := newPMCTestTBCClock(mock)
-	rec := &eventRecorder{}
-	bc.sendEvent = rec.send
+	harness := installPMCHarness(t, bc.pmcWorker)
 	bc.controlledPortsConfig = testControlledCfg
 	bc.syncState = SyncState{State: event.PTP_LOCKED}
 
 	bc.updateDownstreamData(testCfgName)
 
-	// The LOCKED branch spawns downstreamAnnounceIWF as a goroutine: it fetches
-	// and emits a PMC event; it does not perform PMC writes itself.
-	if !assert.Eventually(t, func() bool {
-		return len(rec.snapshot()) >= 1
-	}, 1*time.Second, 10*time.Millisecond) {
-		return
-	}
+	result := harness.next(t)
 	assert.Equal(t, "GetParentTimeAndCurrentDS", mock.SnapshotGetCalls()[0].Method)
 	assert.Empty(t, mock.SnapshotSetCalls())
-	assert.IsType(t, &event.ParentTimeCurrentDS{}, rec.snapshot()[0].Data)
+	assert.IsType(t, &event.PMCResult{}, result.Data)
 }
 
 func TestUpdateDownstreamData_Freerun_CallsAnnounceLocalData(t *testing.T) {
 	ensureLeapMocked(t)
 	mock := &pmc.MockClient{}
 	bc := newPMCTestTBCClock(mock)
+	harness := installPMCHarness(t, bc.pmcWorker)
 	cfgName := testCfgName
 	bc.leadingClockData.clockID = "001122.fffe.334455"
 	bc.controlledPortsConfig = testControlledCfg
@@ -714,9 +668,8 @@ func TestUpdateDownstreamData_Freerun_CallsAnnounceLocalData(t *testing.T) {
 
 	bc.updateDownstreamData(cfgName)
 
-	assert.Eventually(t, func() bool {
-		return len(filterSetCalls(mock.SnapshotSetCalls(), "SetExternalGMPropertiesNP")) >= 1
-	}, 1*time.Second, 10*time.Millisecond)
+	harness.flush(t, bc.AddEvent)
+	assert.Len(t, filterSetCalls(mock.SnapshotSetCalls(), "SetExternalGMPropertiesNP"), 1)
 }
 
 // --- TBC State Machine Tests ---
@@ -1458,9 +1411,8 @@ func newLockedTBCClock() (*TBC, *ipcRecorder) {
 			overallSyncState: event.PTP_NOTSET,
 			osClock:          &OsClock{State: event.PTP_NOTSET},
 		},
-		sendEvent:        func(event.Event) {},
 		getUtcOffset:     stubUtcOffset,
-		pmcClient:        &pmc.MockClient{},
+		pmcWorker:        newPMCReconciler(&pmc.MockClient{}, testTS2PHCCfg, event.TBC, kclock.RealClock{}),
 		leadingClockData: tbcLeadingClockParams(),
 		syncState: SyncState{
 			State:         event.PTP_FREERUN,

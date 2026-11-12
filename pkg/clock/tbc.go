@@ -1,6 +1,7 @@
 package clock
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"slices"
@@ -17,6 +18,7 @@ import (
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
+	kclock "k8s.io/utils/clock"
 )
 
 const (
@@ -73,11 +75,14 @@ func nextAnnounceToken() uint64 { return announceSeq.Add(1) }
 // TBC is a Telecom Boundary Clock instance
 type TBC struct {
 	BaseClock
-	sendEvent        func(event.Event)
-	getUtcOffset     func() int
-	pmcClient        pmc.Client
-	syncState        SyncState
-	leadingClockData *LeadingClockParams
+	pmcWorker           *pmcReconciler
+	pmcSourcePort       string
+	pmcSourceGeneration uint64
+	pmcPending          *event.PMCResult
+	pmcApplied          *pmc.ParentTimeCurrentDS
+	getUtcOffset        func() int
+	syncState           SyncState
+	leadingClockData    *LeadingClockParams
 	// configuredLeadingInterface is the profile leadingInterface. It survives
 	// Reset so T-BC clock-state reporting is not blocked waiting for a DPLL
 	// LeadingSource event that may have been skipped during profile apply.
@@ -98,10 +103,14 @@ func NewTBC(cfgName string, getUtcOffset func() int, pmcClient pmc.Client, contr
 	if pmcClient == nil {
 		return nil, fmt.Errorf("pmc.Client is required for clock type %s (config %s)", event.TBC, cfgName)
 	}
+	client, ok := pmcClient.(pmc.DownstreamClient)
+	if !ok {
+		return nil, fmt.Errorf("PMC DownstreamClient context capability is required for %s", cfgName)
+	}
 	return &TBC{
+		pmcWorker:    newPMCReconciler(client, cfgName, event.TBC, kclock.RealClock{}),
 		BaseClock:    newBaseClock(cfgName, event.PtpClockThreshold{}),
 		getUtcOffset: getUtcOffset,
-		pmcClient:    pmcClient,
 		syncState: SyncState{
 			State:         event.PTP_NOTSET,
 			ClockClass:    protocol.ClockClassUninitialized,
@@ -114,9 +123,19 @@ func NewTBC(cfgName string, getUtcOffset func() int, pmcClient pmc.Client, contr
 	}, nil
 }
 
+// SetManagedEventSink installs cancellable completion delivery before work starts.
+func (c *TBC) SetManagedEventSink(sink func(context.Context, event.Event) error) {
+	c.pmcWorker.setSink(sink)
+}
+
+// StopManagedWorkers cancels terminally and returns the stable join channel.
+func (c *TBC) StopManagedWorkers() <-chan struct{} { return c.pmcWorker.stop() }
+
 // ConfigureSourceQualification installs the upstream policy before processes
 // start. Runtime observations are evaluated only on the clock's event loop.
 func (c *TBC) ConfigureSourceQualification(configuredUpstreamPorts []string, policy utils.QualificationConfig) (uint64, error) {
+	c.pmcWorker.reset()
+	c.announceToken = nextAnnounceToken()
 	state, err := utils.NewQualificationState(policy)
 	if err == nil && len(configuredUpstreamPorts) == 0 {
 		err = fmt.Errorf("source qualification requires upstream TR ports")
@@ -136,10 +155,8 @@ func (c *TBC) SetIPC(f func(message ipc.Message)) {
 	c.sendIPC = f
 }
 
-// SetEventLoopbackFunc provides a function for the TBC clock to send its own events into the event pipeline
-func (c *TBC) SetEventLoopbackFunc(f func(event.Event)) {
-	c.sendEvent = f
-}
+// SetEventLoopbackFunc satisfies Clock; owned PMC uses the cancellable sink.
+func (c *TBC) SetEventLoopbackFunc(_ func(event.Event)) {}
 
 // ClockType returns the clock type for this TBC clock.
 func (c *TBC) ClockType() event.ClockType { return event.TBC }
@@ -182,12 +199,14 @@ func (c *TBC) AddEvent(ev event.Event) SyncState {
 		c.processSyncE(ev)
 		return c.syncState
 	case event.PMC:
+		if result, owned := ev.Data.(*event.PMCResult); owned {
+			c.handlePMCResult(result)
+			return c.syncState
+		}
 		ds, ok := ev.Data.(*event.ParentDSData)
 		if ok {
 			c.updateUpstreamParentDataSet(ds.ParentDataSet)
 			c.evaluateState()
-		} else if currentDS, isCurrentDS := ev.Data.(*event.ParentTimeCurrentDS); isCurrentDS {
-			c.handleDownstreamAnnounceIWF(currentDS)
 		}
 		return c.syncState
 	default:
@@ -237,6 +256,11 @@ func (c *TBC) ObserveSource(ev event.Event, observation *event.PTPSourceObservat
 		}
 		result = q.state.Evaluate(utils.QualificationSample{Source: q.source(), Offset: observation.Offset, ServoState: observation.ServoState,
 			SourceAvailable: q.available && (observation.ServoState == "s2" || observation.ServoState == "s3")})
+	}
+	if !result.Qualified {
+		c.pmcWorker.reset()
+		c.pmcPending = nil
+		c.announceToken = nextAnnounceToken()
 	}
 	return event.SourceQualification{SourceType: event.PTP4l, IFace: q.lastSelectedPort, Generation: q.generation, QualificationResult: result}
 }
@@ -438,6 +462,9 @@ func (c *TBC) ResetSource(source event.EventSource) {
 }
 
 func (c *TBC) resetAggregate() {
+	c.pmcWorker.reset()
+	c.pmcPending = nil
+	c.pmcApplied = nil
 	c.BaseClock.Reset()
 	c.leadingClockData = newLeadingClockParams()
 	c.syncState = SyncState{
@@ -466,30 +493,35 @@ func (c *TBC) updateDownstreamData(cfgName string) {
 	// Advance the token so this request supersedes any downstream fetch already
 	// in flight: when an older fetch's result finally lands it will carry a stale
 	// token and be dropped before it touches the controlled ports. The token is
-	// captured on-loop here; the goroutine never reads it.
+	// captured on-loop here; the worker never reads live source state.
 	c.announceToken = nextAnnounceToken()
-	go c.downstreamAnnounceIWF(cfgName, c.announceToken)
+	c.downstreamAnnounceIWF(cfgName, c.announceToken)
 }
 
 // Implements Rec. ITU-T G.8275 (2024) Amd. 1 (08/2024)
 // Table VIII.3 − T-BC-/ T-BC-P/ T-BC-A Announce message contents
 // for free-run (acquiring), holdover within / out of the specification
 func (c *TBC) announceLocalData(cfgName string) {
-	clockID := c.leadingClockData.clockID
-	controlledPortsConfig := c.controlledPortsConfig
-	downstreamTimeProperties := c.leadingClockData.downstreamTimeProperties
-	clockClass := c.syncState.ClockClass
+	c.announceToken = nextAnnounceToken()
+	c.pmcPending = nil
+	operations := tbcLocalPlan(cfgName, c.controlledPortsConfig, c.leadingClockData.clockID, c.syncState.ClockClass, c.leadingClockData.downstreamTimeProperties, int32(c.getUtcOffset()))
+	if err := c.pmcWorker.submit(operations, nil); err != nil {
+		glog.Error(err)
+	}
+}
+
+// tbcLocalPlan captures local announce policy, including external-only
+// publication while holdover time properties are still unavailable.
+func tbcLocalPlan(cfgName, controlledPortsConfig, clockID string, clockClass fbprotocol.ClockClass, downstreamTimeProperties *protocol.TimePropertiesDS, utc int32) []pmcOperation {
+	if controlledPortsConfig == "" {
+		return nil
+	}
 
 	egp := protocol.ExternalGrandmasterProperties{
 		GrandmasterIdentity: clockID,
 		StepsRemoved:        0,
 	}
-	glog.Infof("EGP %++v", egp)
-	go func() {
-		if err := c.pmcClient.SetExternalGMPropertiesNP(controlledPortsConfig, egp); err != nil {
-			glog.Errorf("Failed to set external GM properties: %v", err)
-		}
-	}()
+	operations := []pmcOperation{{config: controlledPortsConfig, external: true, properties: egp}}
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
 			ClockClass:              clockClass,
@@ -508,11 +540,10 @@ func (c *TBC) announceLocalData(cfgName string) {
 		gs.TimePropertiesDS.PtpTimescale = true
 		gs.TimePropertiesDS.TimeTraceable = false
 		gs.TimePropertiesDS.FrequencyTraceable = false
-		gs.TimePropertiesDS.CurrentUtcOffset = int32(c.getUtcOffset())
+		gs.TimePropertiesDS.CurrentUtcOffset = utc
 	case fbprotocol.ClockClass(165), fbprotocol.ClockClass(135):
 		if downstreamTimeProperties == nil {
-			glog.Info("Pending upstream clock data acquisition, skip updates")
-			return
+			return operations
 		}
 		gs.TimePropertiesDS.CurrentUtcOffsetValid = downstreamTimeProperties.CurrentUtcOffsetValid
 		gs.TimePropertiesDS.Leap59 = downstreamTimeProperties.Leap59
@@ -528,41 +559,45 @@ func (c *TBC) announceLocalData(cfgName string) {
 
 	default:
 	}
-	go func() {
-		if err := c.pmcClient.SetGMSettings(controlledPortsConfig, gs); err != nil {
-			glog.Errorf("Failed to set GM settings: %v", err)
-		}
-	}()
-	go func() {
-		if err := c.pmcClient.SetGMSettings(cfgName, gs); err != nil {
-			glog.Errorf("Failed to set GM settings: %v", err)
-		}
-	}()
+	operations = append(operations, pmcOperation{config: controlledPortsConfig, settings: gs}, pmcOperation{config: cfgName, settings: gs})
+	return operations
 }
 
-// downstreamAnnounceIWF fetches the upstream parent/time/current datasets via PMC and posts them back to the
-// state-machine loop as an event.PMC
-func (c *TBC) downstreamAnnounceIWF(cfgName string, generation uint64) {
-	glog.Infof("downstreamAnnounceIWF: %s", strings.Replace(cfgName, "ts2phc", "ptp4l", 1))
+// downstreamAnnounceIWF requests an owned fetch; only the serialized loop can
+// accept the result and construct its dependent ordered publication plan.
+func (c *TBC) downstreamAnnounceIWF(cfgName string, token uint64) {
+	c.pmcSourcePort, c.pmcSourceGeneration = "", 0
+	if c.ptpSource != nil {
+		c.pmcSourcePort, c.pmcSourceGeneration = c.ptpSource.lastSelectedPort, c.ptpSource.generation
+	}
+	c.pmcPending = nil
+	if err := c.pmcWorker.requestFetch("tbc", cfgName, token); err != nil {
+		glog.Error(err)
+	}
+}
 
-	upstreamData, fetchErr := c.pmcClient.GetParentTimeAndCurrentDS(cfgName)
-	if fetchErr != nil {
-		glog.Error("Failed to fetch upstream data, downstream data can not be updated.")
+func (c *TBC) handlePMCResult(result *event.PMCResult) {
+	if !c.pmcWorker.current(*result) {
 		return
 	}
-
-	// when results are eventually received, send an event back to the queue to be handled by the state machine
-	c.sendEvent(event.Event{
-		Source:    event.PMC,
-		CfgName:   cfgName,
-		ClockType: event.TBC,
-		Time:      time.Now().UnixMilli(),
-		Data:      &event.ParentTimeCurrentDS{ParentTimeCurrentDS: upstreamData, Generation: generation},
-	})
+	if result.Kind == "tbc" {
+		if c.ptpSource != nil && (c.ptpSource.lastSelectedPort != c.pmcSourcePort || c.ptpSource.generation != c.pmcSourceGeneration || !c.ptpSource.available || !c.ptpSource.state.Qualified()) {
+			return
+		}
+		if result.Token != c.announceToken || c.syncState.State != event.PTP_LOCKED || result.Config != c.cfgName {
+			return
+		}
+		c.pmcPending = result
+		c.handleDownstreamAnnounceIWF(&event.ParentTimeCurrentDS{ParentTimeCurrentDS: result.Datasets, Generation: result.Token})
+	} else if result.Kind == pmcAppliedResult && c.pmcPending != nil && result.Token == c.announceToken {
+		accepted := result.Datasets
+		c.pmcApplied = &accepted
+		c.pmcPending = nil
+	}
 }
 
-// handleDownstreamAnnounceIWF runs on the state-machine loop (via AddEvent). It applies the freshly fetched upstream
-// datasets and propagates them to the controlled downstream ports via PMC
+// handleDownstreamAnnounceIWF accepts upstream policy data on-loop and submits
+// its dependent ordered plan. Transport acknowledgment is a separate completion.
 func (c *TBC) handleDownstreamAnnounceIWF(msg *event.ParentTimeCurrentDS) {
 	if msg.Generation != c.announceToken {
 		// A newer downstream request was made (or the clock was Reset/replaced)
@@ -581,7 +616,20 @@ func (c *TBC) handleDownstreamAnnounceIWF(msg *event.ParentTimeCurrentDS) {
 	c.leadingClockData.upstreamParentDataSet = &upstreamData.ParentDataSet
 	c.leadingClockData.upstreamTimeProperties = &upstreamData.TimePropertiesDS
 	c.leadingClockData.upstreamCurrentDSStepsRemoved = upstreamData.CurrentDS.StepsRemoved
+	// These caches represent accepted policy data. Only pmcApplied certifies the
+	// full ordered publication, so a partial failure cannot masquerade as success.
+	c.leadingClockData.downstreamParentDataSet = &upstreamData.ParentDataSet
+	c.leadingClockData.downstreamTimeProperties = &upstreamData.TimePropertiesDS
 
+	if c.pmcPending == nil {
+		return
+	}
+	if err := c.pmcWorker.submit(tbcForwardPlan(c.controlledPortsConfig, *upstreamData), c.pmcPending); err != nil {
+		glog.Error(err)
+	}
+}
+
+func tbcForwardPlan(controlledPortsConfig string, upstreamData pmc.ParentTimeCurrentDS) []pmcOperation {
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
 			ClockClass:              fbprotocol.ClockClass(upstreamData.ParentDataSet.GrandmasterClockClass),
@@ -594,21 +642,7 @@ func (c *TBC) handleDownstreamAnnounceIWF(msg *event.ParentTimeCurrentDS) {
 		GrandmasterIdentity: upstreamData.ParentDataSet.GrandmasterIdentity,
 		StepsRemoved:        upstreamData.CurrentDS.StepsRemoved,
 	}
-	controlledPortsConfig := c.controlledPortsConfig
-	glog.Infof("%++v", es)
-
-	// TODO: This is synchronous for now for simplicity, to be handled in a follow-up PR
-	//       Complications here revolve around out-of-order goroutine execution. May be best to use a channel (queue)
-	//       with a synchronous write and a dedicated goroutine to address any potential scheduling issues.
-	if err := c.pmcClient.SetExternalGMPropertiesNP(controlledPortsConfig, es); err != nil {
-		glog.Error(err)
-	}
-	if err := c.pmcClient.SetGMSettings(controlledPortsConfig, gs); err != nil {
-		glog.Error(err)
-	}
-
-	c.leadingClockData.downstreamParentDataSet = &upstreamData.ParentDataSet
-	c.leadingClockData.downstreamTimeProperties = &upstreamData.TimePropertiesDS
+	return []pmcOperation{{config: controlledPortsConfig, external: true, properties: es}, {config: controlledPortsConfig, settings: gs}}
 }
 
 // hasNonLeadingDPLLFault returns true when the leading DPLL is locked but at
