@@ -112,6 +112,39 @@ func TestProcessClockStateMetrics(t *testing.T) {
 	}
 }
 
+func TestSyncEClockStateMetrics(t *testing.T) {
+	cm, gauge := newProcessMetricManager(t, event.TBC)
+	const cfgName = "synce4l.0.config"
+	const iface = "synce-metric-port"
+	alias.SetAlias(iface, "synce-metric-alias")
+	t.Cleanup(alias.ClearAliases)
+	labels := prometheus.Labels{processLabel: string(event.SYNCE), nodeLabel: "testnode", ifaceLabel: "synce-metric-alias"}
+	send := func(data *event.SyncEData) {
+		cm.ProcessEvent(event.Event{Source: event.SYNCE, CfgName: cfgName, IFace: iface, Data: data})
+	}
+	// Quality can be reported before the first EEC state, without implying lock.
+	send(&event.SyncEData{State: event.PTP_UNKNOWN})
+	require.False(t, gauge.Delete(labels))
+	before := cm.GetClock(testClockmgrPtp4lConfig).GetState()
+	for _, tt := range []struct {
+		state event.PTPState
+		want  float64
+	}{
+		{event.PTP_LOCKED, event.ClockStateLocked},
+		{event.PTP_HOLDOVER, event.ClockStateHoldover},
+		{event.PTP_FREERUN, event.ClockStateFreerun},
+		{event.PTP_LOCKED, event.ClockStateLocked},
+	} {
+		send(&event.SyncEData{State: tt.state, EECState: "test EEC state"})
+		requireGaugeValue(t, gauge, labels, tt.want)
+	}
+	send(&event.SyncEData{State: event.PTP_UNKNOWN})
+	requireGaugeValue(t, gauge, labels, event.ClockStateLocked)
+	require.Equal(t, before, cm.GetClock(testClockmgrPtp4lConfig).GetState(), "SyncE must not change aggregate PTP state")
+	cm.ProcessEvent(event.Event{Source: event.SYNCE, CfgName: cfgName, Reset: true})
+	require.False(t, gauge.Delete(labels), "reset must remove SyncE state series")
+}
+
 func TestProcessClockStateMetricsWithoutInterface(t *testing.T) {
 	for _, iface := range []string{"", event.LEADING_INTERFACE_UNKNOWN} {
 		t.Run(iface, func(t *testing.T) {

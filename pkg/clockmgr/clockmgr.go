@@ -505,34 +505,41 @@ func (m *ClockManager) reset(ev event.Event) {
 }
 
 // updateProcessClockStateMetrics exports per-interface source state separately
-// from the aggregate clock state. Read the accepted state from the clock so a
-// stale event cannot roll a process metric back to an older state.
+// from the aggregate clock state. Read accepted GNSS/DPLL state from the clock
+// so a stale event cannot roll a process metric back to an older state. SyncE
+// state is carried in its payload; T-BC forwards it without storing process data.
 func (m *ClockManager) updateProcessClockStateMetrics(clk clock.Clock, ev event.Event) {
-	if m.clockMetric == nil {
+	if m.clockMetric == nil || ev.IFace == "" || ev.IFace == event.LEADING_INTERFACE_UNKNOWN {
 		return
 	}
-	switch ev.Data.(type) {
+	var state event.PTPState
+	switch payload := ev.Data.(type) {
+	case *event.SyncEData:
+		state = payload.State
 	case *event.GNSSData, *event.DPLLData:
+		for _, data := range clk.ProcessData() {
+			if data.ProcessName == ev.Source {
+				if detail := data.GetDataDetails(ev.IFace); detail != nil {
+					state = detail.State
+				}
+				break
+			}
+		}
 	default:
 		return
 	}
-	for _, data := range clk.ProcessData() {
-		if data.ProcessName != ev.Source {
-			continue
-		}
-		detail := data.GetDataDetails(ev.IFace)
-		if detail == nil || detail.IFace == "" || detail.IFace == event.LEADING_INTERFACE_UNKNOWN {
-			return
-		}
-		iface := alias.GetAlias(detail.IFace)
-		process := string(ev.Source)
-		m.updateClockStateMetrics(detail.State, process, iface)
-		key := metricKey{cfgName: ev.CfgName, process: process, iface: iface, dataType: "clock_state"}
-		m.metricCache[key] = metricEntry{gauge: m.clockMetric, labels: prometheus.Labels{
-			processLabel: process, nodeLabel: m.nodeName, ifaceLabel: iface,
-		}}
+	// A quality-only SyncE event may arrive before the first EEC state. It
+	// must not create a spurious FREERUN series or overwrite a known state.
+	if state != event.PTP_LOCKED && state != event.PTP_HOLDOVER && state != event.PTP_FREERUN {
 		return
 	}
+	iface := alias.GetAlias(ev.IFace)
+	process := string(ev.Source)
+	m.updateClockStateMetrics(state, process, iface)
+	key := metricKey{cfgName: ev.CfgName, process: process, iface: iface, dataType: "clock_state"}
+	m.metricCache[key] = metricEntry{gauge: m.clockMetric, labels: prometheus.Labels{
+		processLabel: process, nodeLabel: m.nodeName, ifaceLabel: iface,
+	}}
 }
 
 // updateClockStateMetrics should be used to update metrics when a clock changes state
@@ -675,7 +682,9 @@ func (m *ClockManager) updateMetrics(ev event.Event) {
 			processData[event.NMEA_STATUS] = *data.NMEALocked
 		}
 	case *event.DPLLData:
-		processData = map[event.ValueType]interface{}{}
+		processData = map[event.ValueType]interface{}{
+			event.PPS_STATUS: int64(data.PPSStatus),
+		}
 		if data.Offset != nil {
 			processData[event.OFFSET] = *data.Offset
 		}
