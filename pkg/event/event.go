@@ -62,11 +62,23 @@ var ValueTypeHelpTxt = map[ValueType]string{
 	PROCESS_STATUS:   "0 = DOWN, 1 = UP",
 }
 
-// PTP4lProcessName ...
-const PTP4lProcessName = "ptp4l"
+const Ptp4lProcessName = "ptp4l"
 
-// TS2PHCProcessName ...
-const TS2PHCProcessName = "ts2phc"
+const Phc2SysProcessName = "phc2sys"
+
+const Ts2PhcProcessName = "ts2phc"
+
+const Synce4lProcessName = "synce4l"
+
+const ChronydProcessName = "chronyd"
+
+const DpllProcessName = "dpll"
+
+const GpsdProcessName = "gpsd"
+
+const GpsPipeProcessName = "gpspipe"
+
+const PMCProcessName = "pmc"
 
 // SYNCEProcessName ...
 const SYNCEProcessName = "synce"

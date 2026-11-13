@@ -19,7 +19,7 @@ type ts2phcStaticExtractor struct {
 	ptpEvent *parser.PTPEvent
 }
 
-func (e ts2phcStaticExtractor) ProcessName() string { return ts2phcProcessName }
+func (e ts2phcStaticExtractor) ProcessName() string { return event.Ts2PhcProcessName }
 
 func (e ts2phcStaticExtractor) Extract(string) (*parser.Metrics, *parser.PTPEvent, error) {
 	return e.metric, e.ptpEvent, nil
@@ -51,7 +51,7 @@ func newTS2PHCPollTestProcess() *ptpProcess {
 	InitializeOffsetMaps()
 	p := &ptpProcess{
 		ExecProcess: ExecProcess{
-			name: ts2phcProcessName, configName: "ts2phc.1.config",
+			name: event.Ts2PhcProcessName, configName: "ts2phc.1.config",
 			messageTag: "[ts2phc.1.config]", eventCh: make(chan event.Event, 32),
 		},
 		ifaces: config.IFaces{

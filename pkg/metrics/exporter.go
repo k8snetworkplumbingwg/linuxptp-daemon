@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 
 	"strconv"
@@ -33,7 +34,7 @@ func UpdateInterfaceRoleMetrics(process, iface string, role int) {
 
 // UpdateClockClassMetrics ...
 func UpdateClockClassMetrics(clockClass float64) {
-	ClockClassMetrics.With(prometheus.Labels{"process": "ptp4l", "node": NodeName}).Set(clockClass)
+	ClockClassMetrics.With(prometheus.Labels{"process": event.Ptp4lProcessName, "node": NodeName}).Set(clockClass)
 }
 
 // UpdateProcessStatusMetrics ...
@@ -50,11 +51,11 @@ func UpdateProcessStatusMetrics(process, cfgName string, status int64) {
 // UpdatePTPHAMetrics ...
 func UpdatePTPHAMetrics(profile string, inActiveProfiles []string, state int64) {
 	PTPHAMetrics.With(prometheus.Labels{
-		"process": "phc2sys", "node": NodeName, "profile": profile}).Set(float64(state))
+		"process": event.Phc2SysProcessName, "node": NodeName, "profile": profile}).Set(float64(state))
 
 	for _, inActive := range inActiveProfiles {
 		PTPHAMetrics.With(prometheus.Labels{
-			"process": "phc2sys", "node": NodeName, "profile": inActive}).Set(0)
+			"process": event.Phc2SysProcessName, "node": NodeName, "profile": inActive}).Set(0)
 	}
 }
 

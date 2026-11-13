@@ -223,7 +223,7 @@ func (d *DpllConfig) PhaseStatus() int64 {
 
 // Name ... name of the process
 func (d *DpllConfig) Name() string {
-	return string(event.DPLL)
+	return event.DpllProcessName
 }
 
 // ConfigName ...

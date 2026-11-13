@@ -664,7 +664,7 @@ func (m *ClockManager) updateMetrics(ev event.Event) {
 		}
 
 		pName := string(ev.Source)
-		if dataType == event.OFFSET && ev.Source == event.TS2PHCProcessName {
+		if dataType == event.OFFSET && ev.Source == event.Ts2PhcProcessName {
 			pName = "master"
 		}
 
