@@ -992,6 +992,14 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 			}
 			var ts2phcProc *ptpProcess
 			ts2phcProc, err = NewTs2phcProcess(env)
+			if err != nil {
+				return err
+			}
+			if clockType == event.GM || clockType == event.TBC {
+				if err = dn.processManager.clockMgr.ConfigureClock(ts2phcProc.configName, ts2phcProc.ts2phcConfig()); err != nil {
+					return fmt.Errorf("configure ts2phc clock for %s: %w", getProfileName(nodeProfile), err)
+				}
+			}
 
 			if clockType == event.GM {
 				// If a HardwareConfig defines a GNSS source, locate the serial port and any GNSS initialization commands.

@@ -217,7 +217,7 @@ func TestUpdateTSCState(t *testing.T) {
 		bc.AddEvent(makeTBCEvent(event.PTP4lProcessName, event.PTP_LOCKED, 10, false))
 		fillBCDataWindows(bc, 10)
 		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
-		return bc.AddEvent(event.Event{Source: event.PMC, Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{GrandmasterClockClass: 6}}})
+		return bc.AddEvent(event.Event{Source: event.PMC, Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{GrandmasterClockClass: 6}}}).SyncState
 	}
 
 	t.Run("FREERUN", func(t *testing.T) {

@@ -240,7 +240,7 @@ func TestExtractMetricsSkipsUnresolvedMasterIface(t *testing.T) {
 	assert.False(t, Offset.DeleteLabelValues(labels...), "legacy parser must not export unresolved iface=master")
 }
 
-func TestTS2PHCOffsetEventConversion(t *testing.T) {
+func TestTS2PHCOffsetObservationConversion(t *testing.T) {
 	for _, source := range []event.EventSource{event.GNSS, event.PPS} {
 		t.Run(string(source), func(t *testing.T) {
 			for _, tt := range []struct {
@@ -253,7 +253,7 @@ func TestTS2PHCOffsetEventConversion(t *testing.T) {
 				{name: "negative", offset: -123},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
-					p := newTS2PHCPollTestProcess()
+					p := newTS2PHCObservationTestProcess()
 					p.ifaces[0].Source = source
 					processParsedMetrics(p, &parser.Metrics{
 						From: constants.TS2PHC, Iface: "ens0", Source: constants.Master,
@@ -266,30 +266,22 @@ func TestTS2PHCOffsetEventConversion(t *testing.T) {
 					assert.Equal(t, event.TS2PHC, ev.Source)
 					assert.Equal(t, "ens0", ev.IFace)
 					assert.Equal(t, p.configName, ev.CfgName)
+					require.IsType(t, &event.TS2PHCObservation{}, ev.Data)
+					observation := ev.Data.(*event.TS2PHCObservation)
+					require.NotNil(t, observation.Offset)
+					assert.Equal(t, event.PTP_FREERUN, observation.State)
 					if math.IsNaN(tt.offset) {
-						require.IsType(t, &event.StateData{}, ev.Data)
-						assert.Equal(t, &event.StateData{State: event.PTP_FREERUN}, ev.Data)
-						// The state-only event remains usable by clock aggregation
-						// without inserting a fabricated offset into its window.
-						d := &event.Data{ProcessName: event.TS2PHC}
-						d.AddEvent(ev)
-						d.UpdateState()
-						assert.Equal(t, event.PTP_FREERUN, d.State)
-						require.Len(t, d.Details, 1)
-						assert.False(t, d.Details[0].HasOffset)
+						assert.True(t, math.IsNaN(*observation.Offset), "availability must reach the clock without integer conversion")
 						assert.True(t, math.IsNaN(testutil.ToFloat64(Offset.WithLabelValues(
 							constants.Master, ts2phcProcessName, NodeName, alias.GetAlias("ens0")))))
 					} else {
-						require.IsType(t, &event.OffsetData{}, ev.Data)
-						od := ev.Data.(*event.OffsetData)
-						assert.Equal(t, event.PTP_FREERUN, od.State)
-						assert.Equal(t, int64(tt.offset), od.Offset)
-						if source == event.GNSS {
-							require.NotNil(t, od.NMEALocked)
-							assert.True(t, *od.NMEALocked)
-						} else {
-							assert.Nil(t, od.NMEALocked)
-						}
+						assert.Equal(t, tt.offset, *observation.Offset)
+					}
+					if source == event.GNSS {
+						require.NotNil(t, observation.NMEALocked)
+						assert.True(t, *observation.NMEALocked)
+					} else {
+						assert.Nil(t, observation.NMEALocked)
 					}
 				})
 			}

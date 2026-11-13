@@ -155,7 +155,7 @@ func (c *HAClock) GetState() event.PTPState { return c.syncState }
 // AddEvent routes an event to the member identified by its config name, then
 // recomputes the composite (best-of-members) state and reconciles the overall
 // (with-OS-clock) sync state.
-func (c *HAClock) AddEvent(ev event.Event) SyncState {
+func (c *HAClock) AddEvent(ev event.Event) EventResult {
 	// A phc2sys source selection tells us which member is actively disciplining the
 	// system clock. It carries an interface, not a member config, so it is routed
 	// here by the HA phc2sys config name rather than a member config name. It only
@@ -163,16 +163,22 @@ func (c *HAClock) AddEvent(ev event.Event) SyncState {
 	// so it reports no leading interface and clockmgr emits no clock_state for it.
 	if sel, ok := ev.Data.(*event.SelectedSourceData); ok {
 		c.setActiveByIface(sel.IFace)
-		return SyncState{State: c.syncState, HAProfileStatus: c.haProfileStatus()}
+		return eventResult(SyncState{State: c.syncState, HAProfileStatus: c.haProfileStatus()}, ev)
 	}
 
 	// Forward the event to the member the event is for
 	m, ok := c.members[ev.CfgName]
 	if !ok {
+		if _, clockInput := ev.Data.(event.ClockInput); clockInput {
+			return EventResult{SyncState: SyncState{State: c.syncState, HAProfileStatus: c.haProfileStatus()}, Ignored: true}
+		}
 		glog.Warningf("HAClock[%s]: no member clock for config %s, dropping event", c.cfgName, ev.CfgName)
-		return SyncState{State: c.syncState, HAProfileStatus: c.haProfileStatus()}
+		return eventResult(SyncState{State: c.syncState, HAProfileStatus: c.haProfileStatus()}, ev)
 	}
 	ms := m.AddEvent(ev)
+	if ms.Ignored {
+		return EventResult{SyncState: SyncState{State: c.syncState, HAProfileStatus: c.haProfileStatus()}, Ignored: true}
+	}
 
 	prev := c.syncState
 	c.syncState = c.bestMemberState()

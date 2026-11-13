@@ -93,7 +93,9 @@ func (p *ProcessManager) SetTestData(name, msgTag string, ifaces config.IFaces) 
 		glog.Error("process is not initialized in SetTestData()")
 		return
 	}
-	eventChannel := make(chan event.Event)
+	// Producer-only tests have no clock loop; retain the single observation
+	// instead of relying on the old non-blocking send dropping it.
+	eventChannel := make(chan event.Event, 1)
 	ptpProc := findPtpProc(p)
 	if ptpProc == nil {
 		glog.Error("ptp process found in in SetTestData()")
@@ -101,6 +103,7 @@ func (p *ProcessManager) SetTestData(name, msgTag string, ifaces config.IFaces) 
 	}
 	ptpProc.name = name
 	ptpProc.messageTag = msgTag
+	ptpProc.configName = configNameFromMessageTag(msgTag)
 	ptpProc.ifaces = ifaces
 	ptpProc.logParser = getParser(name)
 	ptpProc.eventCh = eventChannel
@@ -414,6 +417,11 @@ func Test_applyProfile_TBC(t *testing.T) {
 			if p.Name() == ts2phcProcessName {
 				cond := process.GetCondition(p, process.ActionStart, process.Immediate{})
 				assert.NotEqual(t, process.Immediate{}, cond, "Ensure ts2phc is startup-delayed for T-BC")
+				ptpProc := p.(*ptpProcess)
+				configured := dn.processManager.clockMgr.GetClock(ptpProc.configName)
+				require.NotNil(t, configured, "clock is configured before ts2phc starts")
+				_, ok := configured.(interface{ TS2PHCOffsetInterfaces() []string })
+				require.True(t, ok)
 			}
 		}
 		assert.ElementsMatch(t, test.expectedProcesses, actualProcesses, "Ensure T-BC has the required processes prepared (%s)", test.dataFile)
@@ -544,6 +552,19 @@ func Test_applyProfile_TGM(t *testing.T) {
 
 	// 1. ts2phc must have both gpsd and gpspipe as dependent processes.
 	if assert.NotNil(t, ts2phcProc, "ts2phc process should exist for T-GM profile") {
+		configured := dn.processManager.clockMgr.GetClock(ts2phcProc.configName)
+		require.NotNil(t, configured)
+		observer, ok := configured.(interface{ TS2PHCOffsetInterfaces() []string })
+		require.True(t, ok)
+		var want []string
+		seen := make(map[string]bool)
+		for _, iface := range ts2phcProc.ifaces {
+			if iface.PhcId != "" && !seen[iface.PhcId] {
+				want = append(want, iface.Name)
+				seen[iface.PhcId] = true
+			}
+		}
+		assert.Equal(t, want, observer.TS2PHCOffsetInterfaces(), "GM clock is configured before process startup")
 		depNames := make([]string, len(ts2phcProc.depProcess))
 		for i, d := range ts2phcProc.depProcess {
 			depNames[i] = d.Name()
@@ -552,7 +573,7 @@ func Test_applyProfile_TGM(t *testing.T) {
 		assert.Contains(t, depNames, GPSPIPE_PROCESSNAME, "gpspipe must be a dependent process of ts2phc for T-GM")
 
 		for _, d := range ts2phcProc.depProcess {
-			if gpsd, ok := d.(*GPSD); ok {
+			if gpsd, isGPSD := d.(*GPSD); isGPSD {
 				assert.Equal(t, "ens7f0", gpsd.gmInterface,
 					"GPSD gmInterface should match the first interface in ts2phcConf (leading GNSS-sourced interface)")
 			}

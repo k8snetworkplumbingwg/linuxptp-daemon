@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 )
 
@@ -80,6 +81,7 @@ var (
 			`\s+no reference clock, selecting\s+(?P<phc>/dev/ptp\d+)\s+by default$`,
 	)
 
+	// Parsed in all modes; the daemon decides whether a timeout is actionable.
 	// ts2phc[9979.473]: [ts2phc.1.config:7] poll returns zero, no events
 	tstampTimeoutTS2PHCRegex = regexp.MustCompile(
 		`^ts2phc\[(?P<timestamp>\d+\.?\d*)\]:` +
@@ -181,9 +183,9 @@ func (p *ts2phcParsed) Populate(line string, matched, fields []string) error {
 		case "pollTimeout":
 			p.PollTimeout = true
 		case "selection":
-			p.Role = TS2PHCUnmanaged
+			p.Role = event.TS2PHCUnmanaged
 			if matched[i] == "selecting" {
-				p.Role = TS2PHCSink
+				p.Role = event.TS2PHCSink
 			}
 		}
 	}
@@ -272,6 +274,7 @@ func extractTS2PHCOffset(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
 		Ts2Phc: &Ts2PhcEvent{
 			Timestamp:      parsed.Timestamp,
 			PollSuccessful: true,
+			Holdover:       parsed.Holdover != "",
 		},
 	}
 	return metrics, event, nil
@@ -316,7 +319,7 @@ func extractNoSourceTS(*ts2phcParsed) {
 
 // Reference-selection messages identify a source, not just an unmanaged PHC.
 func extractTS2PHCReferenceEvent(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
-	parsed.Role = TS2PHCSource
+	parsed.Role = event.TS2PHCSource
 	return extractTS2PHCPollEvent(parsed)
 }
 

@@ -77,7 +77,14 @@ func (c *BCClock) ClockClass() fbprotocol.ClockClass { return c.clockClass }
 func (c *BCClock) GetState() event.PTPState { return c.syncState }
 
 // AddEvent processes an event and updates clock state.
-func (c *BCClock) AddEvent(ev event.Event) SyncState {
+func (c *BCClock) AddEvent(ev event.Event) EventResult {
+	if _, ok := ev.Data.(event.ClockInput); ok {
+		return EventResult{SyncState: c.currentSyncState(), Ignored: true}
+	}
+	return eventResult(c.addEvent(ev), ev)
+}
+
+func (c *BCClock) addEvent(ev event.Event) SyncState {
 	switch ev.Source {
 	case event.PMC:
 		if ds, ok := ev.Data.(*event.ParentDSData); ok {

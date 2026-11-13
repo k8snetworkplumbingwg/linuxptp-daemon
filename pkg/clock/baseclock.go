@@ -80,6 +80,11 @@ func (c *BaseClock) ConfigNames() []string {
 	return names
 }
 
+// ClockClassMetricConfigName maps process aliases to the profile's ptp4l config.
+func (c *BaseClock) ClockClassMetricConfigName(eventConfigName string) string {
+	return strings.Replace(eventConfigName, event.TS2PHCProcessName, event.PTP4lProcessName, 1)
+}
+
 // Reset resets the clock state.
 func (c *BaseClock) Reset() {
 	c.osClock.Reset()
