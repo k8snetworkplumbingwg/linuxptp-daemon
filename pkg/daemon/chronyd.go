@@ -2,9 +2,9 @@ package daemon
 
 import (
 	"fmt"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/addons/generic"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 )
 

@@ -21,7 +21,7 @@ func UpdateClockStateMetrics(process, iface, state string) {
 	if state == "LOCKED" {
 		val = 1.0
 	}
-	ClockState.With(prometheus.Labels{"process": process, "node": NodeName, "iface": iface}).Set(val)
+	ClockState.With(prometheus.Labels{labelProcess: process, labelNode: NodeName, labelIface: iface}).Set(val)
 }
 
 // UpdateInterfaceRoleMetrics ...
@@ -29,33 +29,33 @@ func UpdateInterfaceRoleMetrics(process, iface string, role int) {
 	if !utils.CheckMetricSanity("InterfaceRole", process, iface) {
 		return
 	}
-	InterfaceRole.With(prometheus.Labels{"process": process, "node": NodeName, "iface": iface}).Set(float64(role))
+	InterfaceRole.With(prometheus.Labels{labelProcess: process, labelNode: NodeName, labelIface: iface}).Set(float64(role))
 }
 
 // UpdateClockClassMetrics ...
 func UpdateClockClassMetrics(clockClass float64) {
-	ClockClassMetrics.With(prometheus.Labels{"process": event.Ptp4lProcessName, "node": NodeName}).Set(clockClass)
+	ClockClassMetrics.With(prometheus.Labels{labelProcess: event.Ptp4lProcessName, labelNode: NodeName}).Set(clockClass)
 }
 
 // UpdateProcessStatusMetrics ...
 func UpdateProcessStatusMetrics(process, cfgName string, status int64) {
 	ProcessStatus.With(prometheus.Labels{
-		"process": process, "node": NodeName, "config": cfgName}).Set(float64(status))
+		labelProcess: process, labelNode: NodeName, labelConfig: cfgName}).Set(float64(status))
 
 	if status == 1 { // Assuming 1 == PtpProcessUp
 		ProcessRestartCount.With(prometheus.Labels{
-			"process": process, "node": NodeName, "config": cfgName}).Inc()
+			labelProcess: process, labelNode: NodeName, labelConfig: cfgName}).Inc()
 	}
 }
 
 // UpdatePTPHAMetrics ...
 func UpdatePTPHAMetrics(profile string, inActiveProfiles []string, state int64) {
 	PTPHAMetrics.With(prometheus.Labels{
-		"process": event.Phc2SysProcessName, "node": NodeName, "profile": profile}).Set(float64(state))
+		labelProcess: event.Phc2SysProcessName, labelNode: NodeName, labelProfile: profile}).Set(float64(state))
 
 	for _, inActive := range inActiveProfiles {
 		PTPHAMetrics.With(prometheus.Labels{
-			"process": event.Phc2SysProcessName, "node": NodeName, "profile": inActive}).Set(0)
+			labelProcess: event.Phc2SysProcessName, labelNode: NodeName, labelProfile: inActive}).Set(0)
 	}
 }
 
@@ -65,8 +65,8 @@ func UpdateSynceClockQlMetrics(process, cfgName, iface string, networkOption int
 		return
 	}
 	SynceClockQL.With(prometheus.Labels{
-		"process": process, "node": NodeName, "profile": cfgName, "network_option": strconv.Itoa(networkOption),
-		"iface": iface, "device": device}).Set(float64(value))
+		labelProcess: process, labelNode: NodeName, labelProfile: cfgName, labelNetworkOption: strconv.Itoa(networkOption),
+		labelIface: iface, labelDevice: device}).Set(float64(value))
 }
 
 // UpdateSynceQLMetrics ...
@@ -75,8 +75,8 @@ func UpdateSynceQLMetrics(process, cfgName, iface string, networkOption int, dev
 		return
 	}
 	SynceQLInfo.With(prometheus.Labels{
-		"process": process, "node": NodeName, "profile": cfgName, "iface": iface,
-		"network_option": strconv.Itoa(networkOption), "device": device, "ql_type": qlType}).Set(float64(value))
+		labelProcess: process, labelNode: NodeName, labelProfile: cfgName, labelIface: iface,
+		labelNetworkOption: strconv.Itoa(networkOption), labelDevice: device, labelQLType: qlType}).Set(float64(value))
 }
 
 // UpdatePTPMetrics updatePTPMetrics ...
@@ -84,15 +84,15 @@ func UpdatePTPMetrics(from, process, iface string, ptpOffset, maxPtpOffset, freq
 	if !utils.CheckMetricSanity("PTPMetrics", process, iface) {
 		return
 	}
-	Offset.With(prometheus.Labels{"from": from,
-		"process": process, "node": NodeName, "iface": iface}).Set(ptpOffset)
+	Offset.With(prometheus.Labels{labelFrom: from,
+		labelProcess: process, labelNode: NodeName, labelIface: iface}).Set(ptpOffset)
 
-	MaxOffset.With(prometheus.Labels{"from": from,
-		"process": process, "node": NodeName, "iface": iface}).Set(maxPtpOffset)
+	MaxOffset.With(prometheus.Labels{labelFrom: from,
+		labelProcess: process, labelNode: NodeName, labelIface: iface}).Set(maxPtpOffset)
 
-	FrequencyAdjustment.With(prometheus.Labels{"from": from,
-		"process": process, "node": NodeName, "iface": iface}).Set(frequencyAdjustment)
+	FrequencyAdjustment.With(prometheus.Labels{labelFrom: from,
+		labelProcess: process, labelNode: NodeName, labelIface: iface}).Set(frequencyAdjustment)
 
-	Delay.With(prometheus.Labels{"from": from,
-		"process": process, "node": NodeName, "iface": iface}).Set(delay)
+	Delay.With(prometheus.Labels{labelFrom: from,
+		labelProcess: process, labelNode: NodeName, labelIface: iface}).Set(delay)
 }

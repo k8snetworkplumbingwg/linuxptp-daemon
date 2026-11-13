@@ -86,9 +86,10 @@ func reprLogFilter(filter *LogFilter) string {
 func getLogFiltersEnhanced(processName string, messageTag string, batchLength string, threshold string) []*LogFilter {
 	var logFilters []*LogFilter
 	offsetString := ""
-	if processName == event.Ptp4lProcessName {
+	switch processName {
+	case event.Ptp4lProcessName:
 		offsetString = "master offset"
-	} else if processName == event.Phc2SysProcessName {
+	case event.Phc2SysProcessName:
 		offsetString = "phc offset"
 	}
 

@@ -62,33 +62,26 @@ var ValueTypeHelpTxt = map[ValueType]string{
 	PROCESS_STATUS:   "0 = DOWN, 1 = UP",
 }
 
-const Ptp4lProcessName = "ptp4l"
-
-const Phc2SysProcessName = "phc2sys"
-
-const Ts2PhcProcessName = "ts2phc"
-
-const Synce4lProcessName = "synce4l"
-
-const ChronydProcessName = "chronyd"
-
-const DpllProcessName = "dpll"
-
-const GmProcessName = "gm"
-
-const GnssProcessName = "gnss"
-
-const GpsdProcessName = "gpsd"
-
-const GpsPipeProcessName = "gpspipe"
-
-const PMCProcessName = "pmc"
-
-const SynceProcessName = "synce"
+// Process names identify the daemon processes and parser sources.
+const (
+	Ptp4lProcessName   = "ptp4l"
+	Phc2SysProcessName = "phc2sys"
+	Ts2PhcProcessName  = "ts2phc"
+	Synce4lProcessName = "synce4l"
+	ChronydProcessName = "chronyd"
+	DpllProcessName    = "dpll"
+	GmProcessName      = "gm"
+	GnssProcessName    = "gnss"
+	GpsdProcessName    = "gpsd"
+	GpsPipeProcessName = "gpspipe"
+	PMCProcessName     = "pmc"
+	SynceProcessName   = "synce"
+)
 
 // EventSource ...
 type EventSource string
 
+// Event sources identify the origin of a clock event.
 const (
 	GNSS       EventSource = EventSource(GnssProcessName)
 	DPLL       EventSource = EventSource(DpllProcessName)

@@ -28,6 +28,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// Metric identifiers and labels used by the daemon.
 const (
 	PTPNamespace    = "openshift"
 	PTPSubsystem    = "ptp"
