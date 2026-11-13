@@ -159,6 +159,13 @@ func (c *GM) announceClockClassIfChanged(ev event.Event, clockState SyncState) {
 	}
 
 	clockAccuracy := c.announcedClockAccuracy
+	// Derived accuracy follows the latest policy, even before its SET is acknowledged.
+	if c.pmcRequested && (clockState.ClockClass == fbprotocol.ClockClass7 || clockState.ClockClass == protocol.ClockClassOutOfSpec) {
+		switch c.pmcDesired.class {
+		case fbprotocol.ClockClass7, protocol.ClockClassOutOfSpec:
+			clockAccuracy = c.pmcDesired.accuracy
+		}
+	}
 	if dpll, ok := ev.Data.(*event.DPLLData); ok && ev.Source == event.DPLL {
 		if clockState.ClockClass == fbprotocol.ClockClass7 || clockState.ClockClass == protocol.ClockClassOutOfSpec {
 			if dpll.Offset != nil {

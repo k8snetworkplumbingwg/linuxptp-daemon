@@ -258,7 +258,7 @@ func (c *TBC) ObserveSource(ev event.Event, observation *event.PTPSourceObservat
 			SourceAvailable: q.available && (observation.ServoState == "s2" || observation.ServoState == "s3")})
 	}
 	if !result.Qualified {
-		c.pmcWorker.reset()
+		c.pmcWorker.resetFetchedWork()
 		c.pmcPending = nil
 		c.announceToken = nextAnnounceToken()
 	}

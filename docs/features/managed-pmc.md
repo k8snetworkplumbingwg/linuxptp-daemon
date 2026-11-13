@@ -13,6 +13,10 @@ leap refreshes. T-BC retains its upstream selection and qualification checks and
 process-unique announce token. Its local policy can intentionally publish only
 external properties while holdover time properties are unavailable.
 
+GM retains the latest requested DPLL-derived accuracy across unrelated observations
+while publication is pending. T-BC qualification loss invalidates upstream fetches
+and forwarded publications while a standalone local downgrade continues to converge.
+
 The shared engine applies controlled external properties, controlled settings,
 then distinct local settings in order. Identical target/operation pairs are
 deduplicated. The worker stops at the first failed operation and retries the

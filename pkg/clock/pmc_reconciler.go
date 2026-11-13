@@ -25,6 +25,7 @@ type pmcOperation struct {
 type pmcWork struct {
 	identity   event.PMCResult
 	operations []pmcOperation
+	fromFetch  bool
 }
 
 // pmcReconciler transports immutable plans; policy and result admission stay on
@@ -79,6 +80,17 @@ func (r *pmcReconciler) reset() {
 	defer r.mu.Unlock()
 	r.invalidate()
 	r.signal()
+}
+
+// resetFetchedWork cancels source-dependent work while preserving an independent
+// local publication that must converge even as source qualification stays lost.
+func (r *pmcReconciler) resetFetchedWork() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fetch != nil || (r.apply != nil && r.apply.fromFetch) {
+		r.invalidate()
+		r.signal()
+	}
 }
 
 func (r *pmcReconciler) stop() <-chan struct{} {
@@ -162,7 +174,7 @@ func (r *pmcReconciler) submit(operations []pmcOperation, identity *event.PMCRes
 		}
 	}
 	r.fetch = nil
-	r.apply = &pmcWork{identity: result, operations: unique}
+	r.apply = &pmcWork{identity: result, operations: unique, fromFetch: identity != nil}
 	r.start()
 	return nil
 }
