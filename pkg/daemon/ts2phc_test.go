@@ -31,7 +31,7 @@ func TestTS2PHCPollSuccessIsDrivenByEvent(t *testing.T) {
 
 	// Even a regular offset metric must not consume poll state on its own.
 	p.logParser = ts2phcStaticExtractor{metric: &parser.Metrics{
-		From: constants.TS2PHC, Iface: "ens0", Source: constants.Master, ClockState: constants.ClockStateLocked,
+		From: event.Ts2PhcProcessName, Iface: "ens0", Source: constants.Master, ClockState: constants.ClockStateLocked,
 	}}
 	processWithParser(p, "metric only")
 	assert.False(t, p.ts2phcPoll.currentPollCycle.tstamps[0].handled)
@@ -952,7 +952,7 @@ func TestTS2PHCPollFailureMetrics(t *testing.T) {
 		got := *metrics[i]
 		got.Offset, got.MaxOffset = 0, 0
 		assert.Equal(t, parser.Metrics{
-			From: constants.TS2PHC, Iface: iface, ClockState: constants.ClockStateFreeRun, Source: constants.Master,
+			From: event.Ts2PhcProcessName, Iface: iface, ClockState: constants.ClockStateFreeRun, Source: constants.Master,
 		}, got)
 	}
 	assert.Empty(t, cycle.unhandledMetrics())

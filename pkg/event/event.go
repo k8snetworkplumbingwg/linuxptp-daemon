@@ -74,31 +74,34 @@ const ChronydProcessName = "chronyd"
 
 const DpllProcessName = "dpll"
 
+const GmProcessName = "gm"
+
+const GnssProcessName = "gnss"
+
 const GpsdProcessName = "gpsd"
 
 const GpsPipeProcessName = "gpspipe"
 
 const PMCProcessName = "pmc"
 
-// SYNCEProcessName ...
-const SYNCEProcessName = "synce"
+const SynceProcessName = "synce"
 
 // EventSource ...
 type EventSource string
 
 const (
-	GNSS       EventSource = "gnss"
-	DPLL       EventSource = "dpll"
-	TS2PHC     EventSource = "ts2phc"
-	PTP4l      EventSource = "ptp4l"
-	PHC2SYS    EventSource = "phc2sys"
+	GNSS       EventSource = EventSource(GnssProcessName)
+	DPLL       EventSource = EventSource(DpllProcessName)
+	TS2PHC     EventSource = EventSource(Ts2PhcProcessName)
+	PTP4l      EventSource = EventSource(Ptp4lProcessName)
+	PHC2SYS    EventSource = EventSource(Phc2SysProcessName)
 	PPS        EventSource = "1pps"
-	SYNCE      EventSource = "synce4l"
-	CHRONYD    EventSource = "chronyd"
+	SYNCE      EventSource = EventSource(Synce4lProcessName)
+	CHRONYD    EventSource = EventSource(ChronydProcessName)
 	MONITORING EventSource = "monitoring"
-	PMC        EventSource = "pmc"
-	GPSD       EventSource = "gpsd"
-	GPSPIPE    EventSource = "gpspipe"
+	PMC        EventSource = EventSource(PMCProcessName)
+	GPSD       EventSource = EventSource(GpsdProcessName)
+	GPSPIPE    EventSource = EventSource(GpsPipeProcessName)
 )
 
 // PTPState ...

@@ -31,7 +31,6 @@ import (
 const (
 	PTPNamespace    = "openshift"
 	PTPSubsystem    = "ptp"
-	GNSS            = "gnss"
 	clockRealTime   = "CLOCK_REALTIME"
 	master          = "master"
 	pmcSocketName   = "pmc"

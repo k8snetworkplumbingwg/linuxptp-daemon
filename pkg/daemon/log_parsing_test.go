@@ -256,7 +256,7 @@ func TestTS2PHCOffsetEventConversion(t *testing.T) {
 					p := newTS2PHCPollTestProcess()
 					p.ifaces[0].Source = source
 					processParsedMetrics(p, &parser.Metrics{
-						From: constants.TS2PHC, Iface: "ens0", Source: constants.Master,
+						From: event.Ts2PhcProcessName, Iface: "ens0", Source: constants.Master,
 						ClockState: constants.ClockStateFreeRun,
 						Offset:     tt.offset, MaxOffset: tt.offset,
 					})
