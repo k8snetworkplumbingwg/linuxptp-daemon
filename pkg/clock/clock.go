@@ -1,10 +1,25 @@
 package clock
 
 import (
+	"context"
+
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 )
+
+// ManagedWorkerOwner terminates explicitly owned background work. Cancellation
+// is nonblocking; the stable completion channel closes after transport is reaped.
+// Reset remains reusable, whereas stopping is terminal, including before start.
+type ManagedWorkerOwner interface {
+	StopManagedWorkers() <-chan struct{}
+}
+
+// ManagedEventSource accepts a sink whose delivery is canceled with its worker.
+// Direct clock users install it before submitting events that request PMC work.
+type ManagedEventSource interface {
+	SetManagedEventSink(func(context.Context, event.Event) error)
+}
 
 // OffsetSample carries an aggregate offset and the interface label identifying
 // its metric series. The label does not imply that the value came only from

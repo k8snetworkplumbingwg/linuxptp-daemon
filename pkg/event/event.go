@@ -374,6 +374,21 @@ type ParentTimeCurrentDS struct {
 	Generation uint64
 }
 
+// PMCResult is an internal, value-copy completion from a clock-owned worker.
+// Its identity binds delivery to the requesting owner and lifecycle revision.
+type PMCResult struct {
+	Owner, Generation, Revision uint64
+	Token                       uint64
+	Config                      string
+	Kind                        string
+	Settings                    protocol.GrandmasterSettings
+	Datasets                    pmc.ParentTimeCurrentDS
+}
+
+func (*PMCResult) eventData() {}
+
+func (d *PMCResult) String() string { return fmt.Sprintf("PMC %s revision %d", d.Kind, d.Revision) }
+
 func (*ParentTimeCurrentDS) eventData() {}
 
 func (d *ParentTimeCurrentDS) String() string { return "" }

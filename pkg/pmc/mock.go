@@ -1,6 +1,7 @@
 package pmc
 
 import (
+	"context"
 	"sync"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
@@ -44,6 +45,38 @@ type MockClient struct {
 }
 
 var _ Client = (*MockClient)(nil)
+
+// GetGMSettingsContext records an already admitted cancellable settings read.
+func (m *MockClient) GetGMSettingsContext(ctx context.Context, cfg string) (protocol.GrandmasterSettings, error) {
+	if err := ctx.Err(); err != nil {
+		return protocol.GrandmasterSettings{}, err
+	}
+	return m.GetGMSettings(cfg)
+}
+
+// SetGMSettingsContext records an already admitted cancellable settings write.
+func (m *MockClient) SetGMSettingsContext(ctx context.Context, cfg string, settings protocol.GrandmasterSettings) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return m.SetGMSettings(cfg, settings)
+}
+
+// GetParentTimeAndCurrentDSContext records a cancellable upstream dataset read.
+func (m *MockClient) GetParentTimeAndCurrentDSContext(ctx context.Context, cfg string) (ParentTimeCurrentDS, error) {
+	if err := ctx.Err(); err != nil {
+		return ParentTimeCurrentDS{}, err
+	}
+	return m.GetParentTimeAndCurrentDS(cfg)
+}
+
+// SetExternalGMPropertiesNPContext records a cancellable external-properties write.
+func (m *MockClient) SetExternalGMPropertiesNPContext(ctx context.Context, cfg string, properties protocol.ExternalGrandmasterProperties) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return m.SetExternalGMPropertiesNP(cfg, properties)
+}
 
 // SnapshotGetCalls returns a copy of the recorded getter calls.
 func (m *MockClient) SnapshotGetCalls() []GetCall {
