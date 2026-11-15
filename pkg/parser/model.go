@@ -18,35 +18,19 @@ type PTPEvent struct {
 	Ts2Phc     *Ts2PhcEvent          `json:"ts2phc,omitempty"`
 }
 
-// TS2PHCRole describes a PHC's role in ts2phc synchronization.
-// The empty value means that an event does not describe a role change.
-type TS2PHCRole string
-
-const (
-	// TS2PHCSink identifies a PHC selected as a synchronization sink.
-	TS2PHCSink TS2PHCRole = "sink"
-	// TS2PHCSource identifies the synchronization source PHC.
-	TS2PHCSource TS2PHCRole = "source"
-	// TS2PHCUnmanaged identifies a PHC with no known synchronization role.
-	TS2PHCUnmanaged TS2PHCRole = "unmanaged"
-)
-
 // PHCTimestamp is a hardware timestamp split into whole seconds and nanoseconds.
 type PHCTimestamp struct {
 	Seconds     int64 `json:"seconds"`
 	Nanoseconds int64 `json:"nanoseconds"`
 }
 
-// Ts2PhcEvent carries a parsed ts2phc timestamp, poll timeout, selection change,
-// or successful offset report. Poll tracking and PHC-to-interface resolution belong to the
-// daemon, not the parser. For PollSuccessful, PTPEvent.Iface identifies the clock.
+// Ts2PhcEvent carries a parsed hardware timestamp or successful offset report.
+// PHC-to-interface resolution and timestamp/offset matching belong to the daemon.
 type Ts2PhcEvent struct {
 	Timestamp      string        `json:"timestamp"`
 	PHCDevice      string        `json:"phcDevice,omitempty"`
 	PHCTstamp      *PHCTimestamp `json:"phcTstamp,omitempty"`
-	PollTimeout    bool          `json:"pollTimeout"`
-	PollSuccessful bool          `json:"pollSuccessful"`
-	Role           TS2PHCRole    `json:"role,omitempty"`
+	OffsetReported bool          `json:"offsetReported"` // offset line matching the current PHC timestamp
 }
 
 // Note: metrics should be float64 values for as thatis the type expected by the prometheus client library.

@@ -101,8 +101,12 @@ func (w *Window) Max() float64 {
 	w.lock.RLock()
 	defer w.lock.RUnlock()
 
-	var m float64
-	for _, f := range w.getData() {
+	data := w.getData()
+	if len(data) == 0 {
+		return 0
+	}
+	m := data[0]
+	for _, f := range data[1:] {
 		m = math.Max(m, f)
 	}
 	return m
@@ -113,8 +117,12 @@ func (w *Window) AbsMin() float64 {
 	w.lock.RLock()
 	defer w.lock.RUnlock()
 
-	var m float64
-	for _, f := range w.getData() {
+	data := w.getData()
+	if len(data) == 0 {
+		return 0
+	}
+	m := math.Abs(data[0])
+	for _, f := range data[1:] {
 		m = math.Min(m, math.Abs(f))
 	}
 	return m
@@ -125,8 +133,12 @@ func (w *Window) Min() float64 {
 	w.lock.RLock()
 	defer w.lock.RUnlock()
 
-	var m float64
-	for _, f := range w.getData() {
+	data := w.getData()
+	if len(data) == 0 {
+		return 0
+	}
+	m := data[0]
+	for _, f := range data[1:] {
 		m = math.Min(m, f)
 	}
 	return m

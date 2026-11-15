@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,6 +110,85 @@ func TestTS2PHCParser(t *testing.T) {
 	}
 }
 
+func TestParsePHCTimestamp(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    PHCTimestamp
+		wantErr bool
+	}{
+		{name: "whole seconds", value: "12", want: PHCTimestamp{Seconds: 12}},
+		{name: "fraction padded to nanoseconds", value: "12.25", want: PHCTimestamp{Seconds: 12, Nanoseconds: 250_000_000}},
+		{name: "one nanosecond", value: "12.000000001", want: PHCTimestamp{Seconds: 12, Nanoseconds: 1}},
+		{name: "invalid seconds", value: "x.1", wantErr: true},
+		{name: "empty fraction", value: "12.", wantErr: true},
+		{name: "fraction too long", value: "12.1234567890", wantErr: true},
+		{name: "invalid fraction", value: "12.x", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parsePHCTimestamp(tt.value)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestTS2PHCPopulateRejectsInvalidNumericFields(t *testing.T) {
+	for _, tt := range []struct {
+		field string
+		value string
+	}{
+		{field: constants.Severity, value: "invalid"},
+		{field: "status", value: "invalid"},
+		{field: constants.Offset, value: "invalid"},
+		{field: "freq", value: "invalid"},
+		{field: "tstamp", value: "12.invalid"},
+	} {
+		t.Run(tt.field, func(t *testing.T) {
+			parsed := &ts2phcParsed{}
+			err := parsed.Populate("raw", []string{tt.value}, []string{tt.field})
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestTS2PHCPopulateSkipsEmptyOptionalNumbers(t *testing.T) {
+	parsed := &ts2phcParsed{}
+	require.NoError(t, parsed.Populate("raw", []string{"", ""}, []string{constants.Severity, "status"}))
+	assert.Nil(t, parsed.SeverityLevel)
+	assert.Nil(t, parsed.Status)
+}
+
+func TestTS2PHCNMEAStatusMissingFields(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		parsed *ts2phcParsed
+	}{
+		{name: "interface", parsed: &ts2phcParsed{Offset: utils.ToPtr(0.0)}},
+		{name: "offset", parsed: &ts2phcParsed{Interface: "ens0"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			metric, event, err := extractTS2PHCnmeaStatus(tt.parsed)
+			require.Error(t, err)
+			assert.Nil(t, metric)
+			assert.Nil(t, event)
+		})
+	}
+
+	metric, event, err := extractTS2PHCnmeaStatus(&ts2phcParsed{
+		Interface: "ens0", Offset: utils.ToPtr(0.0),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, metric)
+	assert.Empty(t, metric.Status)
+	assert.Nil(t, event)
+}
+
 func TestTS2PHCOffsetReturnsMetricAndEvent(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
@@ -138,7 +218,7 @@ func TestTS2PHCOffsetReturnsMetricAndEvent(t *testing.T) {
 			require.NotNil(t, event)
 			assert.Equal(t, tt.iface, event.Iface)
 			assert.Equal(t, tt.line, event.Raw)
-			assert.Equal(t, &Ts2PhcEvent{Timestamp: "82674.465", PollSuccessful: true}, event.Ts2Phc)
+			assert.Equal(t, &Ts2PhcEvent{Timestamp: "82674.465", OffsetReported: true}, event.Ts2Phc)
 		})
 	}
 }
@@ -163,80 +243,24 @@ func TestTS2PHCNMEAStatusDoesNotReturnSuccessEvent(t *testing.T) {
 	assert.Nil(t, event)
 }
 
-func TestTS2PHCReferenceEventExtraction(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		line string
-		want *Ts2PhcEvent
-	}{
-		{
-			name: "explicit reference with severity",
-			line: "ts2phc[9979.140]: [ts2phc.1.config:6] selecting /dev/ptp9 as the reference clock",
-			want: &Ts2PhcEvent{Timestamp: "9979.140", PHCDevice: "/dev/ptp9", Role: TS2PHCSource},
-		},
-		{
-			name: "explicit reference without severity or space after colon",
-			line: "ts2phc[9979]:[ts2phc.1.cfg] selecting /dev/ptp0 as the reference clock",
-			want: &Ts2PhcEvent{Timestamp: "9979", PHCDevice: "/dev/ptp0", Role: TS2PHCSource},
-		},
-		{
-			name: "default reference with severity",
-			line: "ts2phc[9979.140]: [ts2phc.1.config:6] no reference clock, selecting /dev/ptp9 by default",
-			want: &Ts2PhcEvent{Timestamp: "9979.140", PHCDevice: "/dev/ptp9", Role: TS2PHCSource},
-		},
-		{
-			name: "default reference without severity or space after colon",
-			line: "ts2phc[9979]:[ts2phc.1.cfg] no reference clock, selecting /dev/ptp0 by default",
-			want: &Ts2PhcEvent{Timestamp: "9979", PHCDevice: "/dev/ptp0", Role: TS2PHCSource},
-		},
-		{
-			name: "explicit reference missing PHC",
-			line: "ts2phc[9979.140]: [ts2phc.1.config:6] selecting as the reference clock",
-		},
-		{
-			name: "default reference invalid PHC",
-			line: "ts2phc[9979.140]: [ts2phc.1.config:6] no reference clock, selecting /dev/ptpX by default",
-		},
-		{
-			name: "explicit reference trailing text",
-			line: "ts2phc[9979.140]: [ts2phc.1.config:6] selecting /dev/ptp9 as the reference clock failed",
-		},
-		{
-			name: "default reference trailing text",
-			line: "ts2phc[9979.140]: [ts2phc.1.config:6] no reference clock, selecting /dev/ptp9 by default failed",
-		},
-		{
-			name: "other process",
-			line: "phc2sys[9979.140]: [ts2phc.1.config:6] selecting /dev/ptp9 as the reference clock",
-		},
-		{
-			name: "external reference has no PHC target to update",
-			line: "ts2phc[9979.140]: [ts2phc.1.config:6] assuming external reference clock",
-		},
-		{
-			name: "waiting for reference has no PHC target to update",
-			line: "ts2phc[9979.140]: [ts2phc.1.config:6] reference clock not ready, waiting...",
-		},
+func TestTS2PHCIgnoresTimeoutAndSelectionMessages(t *testing.T) {
+	for _, line := range []string{
+		"ts2phc[9979.473]: [ts2phc.1.config:7] poll returns zero, no events",
+		"ts2phc[9979.140]: [ts2phc.1.config:6] selecting /dev/ptp9 for synchronization",
+		"ts2phc[9979]:[ts2phc.1.cfg] unselecting /dev/ptp9 for synchronization",
+		"ts2phc[9979.140]: [ts2phc.1.config:6] selecting /dev/ptp9 as the reference clock",
+		"ts2phc[9979.140]: [ts2phc.1.config:6] no reference clock, selecting /dev/ptp9 by default",
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			extractor := NewTS2PHCExtractor()
-			for range 2 {
-				metric, event, err := extractor.Extract(tt.line)
-				require.NoError(t, err)
-				assert.Nil(t, metric)
-				if tt.want == nil {
-					assert.Nil(t, event)
-					continue
-				}
-				require.NotNil(t, event)
-				assert.Equal(t, tt.line, event.Raw)
-				assert.Equal(t, tt.want, event.Ts2Phc)
-			}
+		t.Run(line, func(t *testing.T) {
+			metric, event, err := NewTS2PHCExtractor().Extract(line)
+			require.NoError(t, err)
+			assert.Nil(t, metric)
+			assert.Nil(t, event)
 		})
 	}
 }
 
-func TestTS2PHCPollEventExtraction(t *testing.T) {
+func TestTS2PHCTimestampEventExtraction(t *testing.T) {
 	tests := []struct {
 		name string
 		line string
@@ -251,42 +275,6 @@ func TestTS2PHCPollEventExtraction(t *testing.T) {
 			name: "timestamp without severity",
 			line: "ts2phc[9979]: [ts2phc.1.cfg] adding tstamp 1791226372.000000000 to clock /dev/ptp99",
 			want: &Ts2PhcEvent{Timestamp: "9979", PHCDevice: "/dev/ptp99", PHCTstamp: &PHCTimestamp{Seconds: 1791226372}},
-		},
-		{
-			name: "poll timeout",
-			line: "ts2phc[9979.473]: [ts2phc.1.config:7] poll returns zero, no events",
-			want: &Ts2PhcEvent{Timestamp: "9979.473", PollTimeout: true},
-		},
-		{
-			name: "poll timeout without severity",
-			line: "ts2phc[9979]: [ts2phc.1.cfg] poll returns zero, no events",
-			want: &Ts2PhcEvent{Timestamp: "9979", PollTimeout: true},
-		},
-		{
-			name: "selecting PHC",
-			line: "ts2phc[9979.140]: [ts2phc.1.config:6] selecting /dev/ptp9 for synchronization",
-			want: &Ts2PhcEvent{Timestamp: "9979.140", PHCDevice: "/dev/ptp9", Role: TS2PHCSink},
-		},
-		{
-			name: "unselecting PHC without severity or spacing after colon",
-			line: "ts2phc[9979]:[ts2phc.1.cfg] unselecting /dev/ptp9 for synchronization",
-			want: &Ts2PhcEvent{Timestamp: "9979", PHCDevice: "/dev/ptp9", Role: TS2PHCUnmanaged},
-		},
-		{
-			name: "selection missing PHC",
-			line: "ts2phc[9979.140]: [ts2phc.1.config:6] selecting for synchronization",
-		},
-		{
-			name: "selection with invalid PHC",
-			line: "ts2phc[9979.140]: [ts2phc.1.config:6] selecting /dev/ptpX for synchronization",
-		},
-		{
-			name: "selection with unrelated suffix",
-			line: "ts2phc[9979.140]: [ts2phc.1.config:6] selecting /dev/ptp9 for synchronization failed",
-		},
-		{
-			name: "selection from another process",
-			line: "phc2sys[9979.140]: [ts2phc.1.config:6] selecting /dev/ptp9 for synchronization",
 		},
 		{
 			name: "malformed hardware timestamp",

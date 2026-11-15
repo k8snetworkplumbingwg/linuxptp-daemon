@@ -58,35 +58,6 @@ var (
 			`\s+adding tstamp\s+(?P<tstamp>\d+\.\d+)` +
 			`\s+to clock\s+(?P<phc>\S+)$`,
 	)
-
-	// ts2phc[1031603.223]: [ts2phc.1.config:6] unselecting /dev/ptp9 for synchronization
-	selectionTS2PHCRegex = regexp.MustCompile(
-		`^ts2phc\[(?P<timestamp>\d+\.?\d*)\]:` +
-			`\s*\[(?P<config_name>.*\.\d+\.c.*g):?(?P<severity>\d*)\]` +
-			`\s+(?P<selection>selecting|unselecting)\s+(?P<phc>/dev/ptp\d+)\s+for synchronization$`,
-	)
-
-	// Without external-PPS mode, choosing a reference also clears is_target.
-	// ts2phc[9979.140]: [ts2phc.1.config:6] selecting /dev/ptp9 as the reference clock
-	referenceTS2PHCRegex = regexp.MustCompile(
-		`^ts2phc\[(?P<timestamp>\d+\.?\d*)\]:` +
-			`\s*\[(?P<config_name>.*\.\d+\.c.*g):?(?P<severity>\d*)\]` +
-			`\s+selecting\s+(?P<phc>/dev/ptp\d+)\s+as the reference clock$`,
-	)
-
-	// ts2phc[9979.140]: [ts2phc.1.config:6] no reference clock, selecting /dev/ptp9 by default
-	defaultReferenceTS2PHCRegex = regexp.MustCompile(
-		`^ts2phc\[(?P<timestamp>\d+\.?\d*)\]:` +
-			`\s*\[(?P<config_name>.*\.\d+\.c.*g):?(?P<severity>\d*)\]` +
-			`\s+no reference clock, selecting\s+(?P<phc>/dev/ptp\d+)\s+by default$`,
-	)
-
-	// ts2phc[9979.473]: [ts2phc.1.config:7] poll returns zero, no events
-	tstampTimeoutTS2PHCRegex = regexp.MustCompile(
-		`^ts2phc\[(?P<timestamp>\d+\.?\d*)\]:` +
-			`\s+\[(?P<config_name>.*\.\d+\.c.*g):?(?P<severity>\d*)\]` +
-			`\s+(?P<pollTimeout>poll returns zero, no events)$`,
-	)
 )
 
 type ts2phcParsed struct {
@@ -103,8 +74,6 @@ type ts2phcParsed struct {
 	Holdover      string
 	PHCTstamp     *PHCTimestamp
 	PHCDevice     string
-	PollTimeout   bool
-	Role          TS2PHCRole
 }
 
 func parsePHCTimestamp(value string) (PHCTimestamp, error) {
@@ -179,13 +148,6 @@ func (p *ts2phcParsed) Populate(line string, matched, fields []string) error {
 			p.PHCTstamp = &tstamp
 		case "phc":
 			p.PHCDevice = matched[i]
-		case "pollTimeout":
-			p.PollTimeout = true
-		case "selection":
-			p.Role = TS2PHCUnmanaged
-			if matched[i] == "selecting" {
-				p.Role = TS2PHCSink
-			}
 		}
 	}
 	return nil
@@ -216,23 +178,7 @@ func NewTS2PHCExtractor() *BaseMetricsExtractor[*ts2phcParsed] {
 			},
 			{
 				Regex:     tstampEventTS2PHCRegex,
-				Extractor: extractTS2PHCPollEvent,
-			},
-			{
-				Regex:     tstampTimeoutTS2PHCRegex,
-				Extractor: extractTS2PHCPollEvent,
-			},
-			{
-				Regex:     selectionTS2PHCRegex,
-				Extractor: extractTS2PHCPollEvent,
-			},
-			{
-				Regex:     referenceTS2PHCRegex,
-				Extractor: extractTS2PHCReferenceEvent,
-			},
-			{
-				Regex:     defaultReferenceTS2PHCRegex,
-				Extractor: extractTS2PHCReferenceEvent,
+				Extractor: extractTS2PHCEvent,
 			},
 		},
 	}
@@ -272,7 +218,7 @@ func extractTS2PHCOffset(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
 		Raw:   parsed.Raw,
 		Ts2Phc: &Ts2PhcEvent{
 			Timestamp:      parsed.Timestamp,
-			PollSuccessful: true,
+			OffsetReported: true,
 		},
 	}
 	return metrics, event, nil
@@ -315,21 +261,13 @@ func extractNoSourceTS(*ts2phcParsed) {
 	}
 }
 
-// Reference-selection messages identify a source, not just an unmanaged PHC.
-func extractTS2PHCReferenceEvent(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
-	parsed.Role = TS2PHCSource
-	return extractTS2PHCPollEvent(parsed)
-}
-
-func extractTS2PHCPollEvent(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
+func extractTS2PHCEvent(parsed *ts2phcParsed) (*Metrics, *PTPEvent, error) {
 	return nil, &PTPEvent{
 		Raw: parsed.Raw,
 		Ts2Phc: &Ts2PhcEvent{
-			Timestamp:   parsed.Timestamp,
-			PHCDevice:   parsed.PHCDevice,
-			PHCTstamp:   parsed.PHCTstamp,
-			PollTimeout: parsed.PollTimeout,
-			Role:        parsed.Role,
+			Timestamp: parsed.Timestamp,
+			PHCDevice: parsed.PHCDevice,
+			PHCTstamp: parsed.PHCTstamp,
 		},
 	}, nil
 }

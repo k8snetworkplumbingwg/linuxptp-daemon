@@ -253,7 +253,7 @@ func TestTS2PHCOffsetEventConversion(t *testing.T) {
 				{name: "negative", offset: -123},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
-					p := newTS2PHCPollTestProcess()
+					p := newTS2PHCTestProcess()
 					p.ifaces[0].Source = source
 					processParsedMetrics(p, &parser.Metrics{
 						From: event.Ts2PhcProcessName, Iface: "ens0", Source: constants.Master,

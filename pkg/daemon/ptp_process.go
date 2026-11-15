@@ -93,9 +93,9 @@ type ptpProcess struct {
 	dn *Daemon
 	pm *plugin.PluginManager
 
-	clockType  event.ClockType
-	logParser  parser.MetricsExtractor
-	ts2phcPoll ts2phcPollState
+	clockType     event.ClockType
+	logParser     parser.MetricsExtractor
+	ts2phcMatches ts2phcMatchState
 
 	ptpClockThreshold     *ptpv1.PtpClockThreshold
 	haProfile             map[string][]string // stores list of interface name for each profile
@@ -441,7 +441,7 @@ func (p *ptpProcess) run() {
 		sendProcessStatusEvent(p.eventCh, event.EventSource(p.name), p.configName, p.clockType, "", PtpProcessUp)
 
 		if p.name == event.Ts2PhcProcessName {
-			p.resetPollCycle()
+			p.resetTS2PHCMatches()
 		}
 		p.runScanner(cmdReader)
 
@@ -1048,7 +1048,7 @@ func (p *ptpProcess) renderPtp4lConf(env ptpProcessEnv, output *Ptp4lConf, opts 
 	configOutput, ifaces := output.RenderPtp4lConf()
 	p.ifaces = ifaces
 	if p.name == event.Ts2PhcProcessName {
-		p.resetPollCycle()
+		p.resetTS2PHCMatches()
 	}
 	return p.writeProcessConf(output, configOutput)
 }

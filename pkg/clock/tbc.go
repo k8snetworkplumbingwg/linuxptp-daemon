@@ -177,6 +177,12 @@ func (c *TBC) SourceQualification(cfg string) (event.SourceQualification, bool) 
 
 // AddEvent processes an event and updates clock state.
 func (c *TBC) AddEvent(ev event.Event) SyncState {
+	if state, ok := ev.Data.(*event.StateData); ok && ev.Source == event.TS2PHC &&
+		ev.IFace == c.getLeadingInterfaceBC() && state.State == event.PTP_FREERUN &&
+		c.syncState.State != event.PTP_HOLDOVER {
+		return c.syncState
+	}
+
 	switch ev.Source {
 	case event.SYNCE:
 		c.processSyncE(ev)
@@ -781,10 +787,8 @@ func (c *TBC) freeRunCondition() bool {
 			}
 		case event.Ts2PhcProcessName:
 			for _, dd := range d.Details {
-				// ts2phc reports `s0` when leading interface enters holdover. This is a
-				// transient condition that should not drop the clock state to freerun.
-				// Exclude leading interface from ts2phc freerun condition
-				if dd.State == event.PTP_FREERUN && dd.IFace != c.syncState.LeadingIFace {
+				if dd.State == event.PTP_FREERUN &&
+					(dd.IFace != c.syncState.LeadingIFace || c.syncState.State == event.PTP_HOLDOVER) {
 					glog.Infof("free-run condition on ts2phc interface %s", dd.IFace)
 					return true
 				}

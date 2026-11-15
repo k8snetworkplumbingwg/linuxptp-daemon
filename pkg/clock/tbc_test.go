@@ -908,6 +908,7 @@ func TestFreeRunCondition(t *testing.T) {
 		name         string
 		data         []*event.Data
 		LeadingIFace string
+		clockState   event.PTPState
 		threshold    int
 		fillWindow   bool
 		expected     bool
@@ -934,7 +935,7 @@ func TestFreeRunCondition(t *testing.T) {
 			expected:     true,
 		},
 		{
-			name: "TS2PHC freerun on leading interface does not trigger free run",
+			name: "TS2PHC freerun on leading interface is ignored outside holdover",
 			data: []*event.Data{
 				{ProcessName: event.DPLL, Details: []*event.DataDetails{{IFace: testIFace1, State: event.PTP_HOLDOVER}}},
 				{ProcessName: event.Ts2PhcProcessName, Details: []*event.DataDetails{{IFace: testIFace1, State: event.PTP_FREERUN}}},
@@ -942,6 +943,14 @@ func TestFreeRunCondition(t *testing.T) {
 			LeadingIFace: testIFace1,
 			threshold:    10,
 			expected:     false,
+		},
+		{
+			name:         "TS2PHC freerun on leading interface is checked in holdover",
+			data:         []*event.Data{{ProcessName: event.Ts2PhcProcessName, Details: []*event.DataDetails{{IFace: testIFace1, State: event.PTP_FREERUN}}}},
+			LeadingIFace: testIFace1,
+			clockState:   event.PTP_HOLDOVER,
+			threshold:    10,
+			expected:     true,
 		},
 		{
 			name: "TS2PHC freerun on non-leading interface triggers free run",
@@ -972,6 +981,7 @@ func TestFreeRunCondition(t *testing.T) {
 			bc.leadingClockData.toFreeRunThreshold = tt.threshold
 			bc.data = tt.data
 			bc.syncState.LeadingIFace = tt.LeadingIFace
+			bc.syncState.State = tt.clockState
 
 			result := bc.freeRunCondition()
 			assert.Equal(t, tt.expected, result)
@@ -1169,6 +1179,29 @@ func TestUpdateBCState(t *testing.T) {
 		})
 		assert.Equal(t, event.PTP_FREERUN, result.State, "one undisciplined PHC makes the T-BC FREERUN")
 		assert.Equal(t, protocol.ClockClassFreerun, result.ClockClass, "downstream class must degrade to 248")
+	})
+
+	t.Run("leading ts2phc failure is ignored outside holdover", func(t *testing.T) {
+		bc, _ := newLockedTBCClock()
+		result := bc.AddEvent(event.Event{
+			Source: event.TS2PHC, IFace: testTBCIface, CfgName: testCfgName,
+			ClockType: event.TBC, Time: time.Now().UnixMilli(),
+			Data: &event.StateData{State: event.PTP_FREERUN},
+		})
+		assert.Equal(t, event.PTP_LOCKED, result.State)
+		assert.Nil(t, bc.GetData(event.TS2PHC).GetDataDetails(testTBCIface), "ignored failure must not linger until holdover")
+	})
+
+	t.Run("leading ts2phc failure is checked in holdover", func(t *testing.T) {
+		bc, _ := newLockedTBCClock()
+		result := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
+		require.Equal(t, event.PTP_HOLDOVER, result.State)
+		result = bc.AddEvent(event.Event{
+			Source: event.TS2PHC, IFace: testTBCIface, CfgName: testCfgName,
+			ClockType: event.TBC, Time: time.Now().UnixMilli(),
+			Data: &event.StateData{State: event.PTP_FREERUN},
+		})
+		assert.Equal(t, event.PTP_FREERUN, result.State)
 	})
 
 	t.Run("LOCKED to HOLDOVER via source lost", func(t *testing.T) {
