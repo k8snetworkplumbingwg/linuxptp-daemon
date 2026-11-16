@@ -173,8 +173,9 @@ func setDataValue(e *event.Event, dv event.DataValue) bool {
 
 // CloudEventProxy connects PubSub, EventCache, and the REST API.
 type CloudEventProxy struct {
-	cache  *EventCache
-	pubSub *PubSub
+	Security *Security
+	cache    *EventCache
+	pubSub   *PubSub
 	// baseURL is the externally reachable root of this API server (scheme://host:port, no path).
 	// It is fixed at startup and used to build the mandatory O-RAN "UriLocation" field, which must
 	// be a stable, server-determined address rather than one derived from a client request.
@@ -240,7 +241,7 @@ func (l *CloudEventProxy) Handler() http.Handler {
 	}
 	mux.HandleFunc(apiBase+publishersPath, l.publishersHandler)
 	mux.HandleFunc(apiBase, l.currentStateHandler)
-	return mux
+	return l.Security.protect(mux)
 }
 
 // AcceptDaemonConnections wait for a new connection on the listener and handles new events
@@ -281,6 +282,11 @@ func (l *CloudEventProxy) ListenAndServe(ctx context.Context, port int, certFile
 		Addr:              fmt.Sprintf(":%d", port),
 		ReadHeaderTimeout: 5 * time.Second,
 		Handler:           l.Handler(),
+	}
+	if l.Security != nil && l.Security.TLS != nil {
+		server.TLSConfig = l.Security.TLS
+		certFile = l.Security.Config.ServerCertPath
+		keyFile = l.Security.Config.ServerKeyPath
 	}
 	go func() {
 		<-ctx.Done()
