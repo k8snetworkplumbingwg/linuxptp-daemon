@@ -83,6 +83,17 @@ func (m *ClockManager) SourceQualification(cfg string) (event.SourceQualificatio
 	return event.SourceQualification{}, false
 }
 
+// IsPTPSourceLost reports whether cfg's T-BC clock has lost its upstream PTP
+// source, based on the parent data set grandmaster identity.
+func (m *ClockManager) IsPTPSourceLost(cfg string) bool {
+	m.clockManagementMu.Lock()
+	defer m.clockManagementMu.Unlock()
+	if clk, ok := m.clocks[cfg].(*clock.TBC); ok {
+		return clk.IsPTPSourceLost()
+	}
+	return true
+}
+
 type metricKey struct {
 	cfgName  string
 	process  string

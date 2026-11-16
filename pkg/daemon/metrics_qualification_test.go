@@ -114,7 +114,7 @@ func TestTBCThresholdProfileCleanupAndLegacyCompatibility(t *testing.T) {
 	profile.PtpClockThreshold = &ptpv1.PtpClockThreshold{MaxOffsetThreshold: 100, PtpSourceUseS3: true}
 	updateProfileThresholdMetrics(gauge, "node", profile, legacy)
 	require.Equal(t, map[string]float64{
-		thresholdSourceQualified: 100, thresholdSourceDisqualified: 100,
+		thresholdSourceQualified: 10, thresholdSourceDisqualified: 1500,
 		thresholdSourceQualifiedSamples: 5, thresholdSourceDisqualifiedSamples: 5, thresholdSourceUseS3: 1,
 	}, thresholdSamples(t, gauge, "node", *profile.Name))
 	// Another profile/node is not deleted when this profile changes policy.
@@ -131,7 +131,10 @@ func TestTBCThresholdProfileCleanupAndLegacyCompatibility(t *testing.T) {
 	profile.PtpSettings = map[string]string{"clockType": TBC}
 	updateOSClockThresholdMetrics(gauge, "node", *profile.Name, clock.OSClockFilterConfig{InSyncThreshold: 10, OutOfSyncThreshold: 20, Samples: 5})
 	updateProfileThresholdMetrics(gauge, "node", profile, legacy)
-	require.Empty(t, thresholdSamples(t, gauge, "node", *profile.Name), "unset TBC policy must not advertise unused defaults")
+	require.Equal(t, map[string]float64{
+		thresholdSourceQualified: 10, thresholdSourceDisqualified: 1500,
+		thresholdSourceQualifiedSamples: 5, thresholdSourceDisqualifiedSamples: 5, thresholdSourceUseS3: 0,
+	}, thresholdSamples(t, gauge, "node", *profile.Name), "TBC without explicit thresholds uses the defaults")
 }
 
 func TestOSClockThresholdMetricsUseResolvedDefaults(t *testing.T) {

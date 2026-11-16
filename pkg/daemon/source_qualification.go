@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
@@ -76,12 +75,13 @@ func (p *ptpProcess) configureSourceQualification(policy sourceQualificationPoli
 			return errors.Join(failures...)
 		},
 	}
+	th := p.nodeProfile.PtpClockThreshold
 	glog.Infof("Source qualification profile=%s config=%s S3=%t thresholds=%d/%d samples=%d/%d thresholdFallbacks=%t/%t",
 		getProfileName(p.nodeProfile), p.configName, policy.config.UseS3,
 		policy.config.QualifiedThreshold, policy.config.DisqualifiedThreshold,
 		policy.config.QualifiedSamples, policy.config.DisqualifiedSamples,
-		p.nodeProfile.PtpClockThreshold.PtpSourceQualifiedThreshold == nil,
-		p.nodeProfile.PtpClockThreshold.PtpSourceDisqualifiedThreshold == nil)
+		th == nil || th.PtpSourceQualifiedThreshold == nil,
+		th == nil || th.PtpSourceDisqualifiedThreshold == nil)
 	return nil
 }
 
@@ -155,35 +155,54 @@ func (p *ptpProcess) applySourceQualification(result event.SourceQualification) 
 	if q.closed || result.Generation != q.generation {
 		return
 	}
+	// Offset-based qualification drives LOCKED. The parent data set independently
+	// drives LOST: a lost upstream grandmaster must reach the hardware pins even
+	// when the servo offset remains in spec (GNSS/ts2phc keeps it near zero).
+	qualified := result.Qualified && !p.ptpSourceLost()
+
 	p.tBCAttributes.activePort = result.IFace // label existing state/averaged-offset events
-	previousState := p.tBCAttributes.lastReportedState
+	previousState := p.tBCAttributes.reportedPtp4lState
 	if result.Changed {
 		glog.Infof("PTPSourceQualified profile=%s config=%s source=%s port=%s qualified=%t reason=%q samples=%d",
-			getProfileName(p.nodeProfile), p.configName, result.SourceType, result.IFace, result.Qualified, result.Reason, result.Samples)
+			getProfileName(p.nodeProfile), p.configName, result.SourceType, result.IFace, qualified, result.Reason, result.Samples)
 	}
-	if result.Qualified {
-		p.tBCAttributes.lastReportedState = event.PTP_LOCKED
+	if qualified {
+		p.tBCAttributes.reportedPtp4lState = event.PTP_LOCKED
 	} else {
-		p.tBCAttributes.lastReportedState = event.PTP_FREERUN
+		p.tBCAttributes.reportedPtp4lState = event.PTP_FREERUN
 	}
 	// Source loss is a fact even if a pin update fails. Report it independently
 	// of successful hardware application, without fabricating aggregate lock.
-	if previousState != p.tBCAttributes.lastReportedState {
+	if previousState != p.tBCAttributes.reportedPtp4lState {
 		p.sendPtp4lStateEvent()
 	}
-	if q.appliedKnown && q.applied == result.Qualified {
+	if q.appliedKnown && q.applied == qualified {
 		return
 	}
-	if err := q.apply(result.Qualified); err != nil {
+	if err := q.apply(qualified); err != nil {
 		q.appliedKnown = false // failed actions may have partially programmed pins
-		glog.Errorf("PTPSourceQualified hardware apply profile=%s qualified=%t: %v", getProfileName(p.nodeProfile), result.Qualified, err)
+		glog.Errorf("PTPSourceQualified hardware apply profile=%s qualified=%t: %v", getProfileName(p.nodeProfile), qualified, err)
 		return
 	}
-	q.applied, q.appliedKnown = result.Qualified, true
-	p.tBCAttributes.lastAppliedState = event.PTP_HOLDOVER
-	if result.Qualified {
-		p.tBCAttributes.lastAppliedState = event.PTP_LOCKED
+	q.applied, q.appliedKnown = qualified, true
+	p.tBCAttributes.appliedCondition = event.PTP_HOLDOVER
+	if qualified {
+		p.tBCAttributes.appliedCondition = event.PTP_LOCKED
 	}
+}
+
+// applySourceLossIfNeeded re-evaluates the hardware condition when the parent
+// data set reports the upstream grandmaster is gone. Offset-based qualification
+// alone cannot observe this loss (GNSS/ts2phc keeps the servo offset near zero),
+// so the lost condition is driven from the parent data set here.
+func (p *ptpProcess) applySourceLossIfNeeded() {
+	if p.sourceQualification == nil || !p.ptpSourceLost() {
+		return
+	}
+	// Revoke the clock-side qualification (and apply the lost condition) via the
+	// same SourceLost observation used on teardown, so TBC.SourceQualification and
+	// snapshotStats report the source as unqualified after a parent-data-set loss.
+	p.invalidateSourceQualification()
 }
 
 func (p *ptpProcess) invalidateSourceQualification() {
@@ -212,55 +231,51 @@ func sourceQualifiedStartCondition(env ptpProcessEnv) process.Condition {
 	return process.Any{Conditions: conditions}
 }
 
-// resolveSourceQualificationPolicy preserves the explicit opt-in boundary. Resolve
-// the migration fallback once, never from the aggregate InSync state at runtime.
+// Default source qualification thresholds and sample counts, applied when the
+// profile does not configure the corresponding ptpSource* setting.
+const (
+	defaultSourceQualifiedThreshold    int64 = 10
+	defaultSourceDisqualifiedThreshold int64 = 1500
+	defaultSourceQualifiedSamples            = 5
+	defaultSourceDisqualifiedSamples         = 5
+)
+
+// resolveSourceQualificationPolicy resolves the source qualification policy for a
+// T-BC profile. Thresholds default to 10ns (qualified) / 1500ns (disqualified) and
+// samples to 5 when not configured, so source qualification is always active for
+// T-BC profiles.
 func resolveSourceQualificationPolicy(profile *ptpv1.PtpProfile) (sourceQualificationPolicy, error) {
-	if profileClockType(profile) != TBC || profile.PtpClockThreshold == nil {
+	if profileClockType(profile) != TBC {
 		return sourceQualificationPolicy{}, nil
-	}
-	th := profile.PtpClockThreshold
-	if th.PtpSourceQualifiedThreshold == nil && th.PtpSourceDisqualifiedThreshold == nil &&
-		th.PtpSourceQualifiedSamples == nil && th.PtpSourceDisqualifiedSamples == nil && !th.PtpSourceUseS3 {
-		return sourceQualificationPolicy{}, nil
-	}
-	fallback := th.MaxOffsetThreshold
-	if th.PtpSourceQualifiedThreshold == nil || th.PtpSourceDisqualifiedThreshold == nil {
-		if fallback <= 0 {
-			fallback = 100
-			if isNtpFailoverEnabled(profile) {
-				fallback = 1000
-			}
-		}
-		if value, ok := profile.PtpSettings["inSyncConditionThreshold"]; ok {
-			var err error
-			fallback, err = strconv.ParseInt(value, 0, 64)
-			if err != nil || fallback <= 0 {
-				return sourceQualificationPolicy{}, fmt.Errorf("invalid source qualification fallback inSyncConditionThreshold %q", value)
-			}
-		}
 	}
 	cfg := utils.QualificationConfig{
-		QualifiedThreshold: fallback, DisqualifiedThreshold: fallback,
-		QualifiedSamples: 5, DisqualifiedSamples: 5, UseS3: th.PtpSourceUseS3,
+		QualifiedThreshold:    defaultSourceQualifiedThreshold,
+		DisqualifiedThreshold: defaultSourceDisqualifiedThreshold,
+		QualifiedSamples:      defaultSourceQualifiedSamples,
+		DisqualifiedSamples:   defaultSourceDisqualifiedSamples,
 	}
-	if th.PtpSourceQualifiedThreshold != nil {
-		cfg.QualifiedThreshold = *th.PtpSourceQualifiedThreshold
-	}
-	if th.PtpSourceDisqualifiedThreshold != nil {
-		cfg.DisqualifiedThreshold = *th.PtpSourceDisqualifiedThreshold
-	}
-	for _, count := range []struct {
-		value *int64
-		dest  *int
-	}{
-		{th.PtpSourceQualifiedSamples, &cfg.QualifiedSamples},
-		{th.PtpSourceDisqualifiedSamples, &cfg.DisqualifiedSamples},
-	} {
-		if count.value != nil {
-			if *count.value < 1 || uint64(*count.value) > uint64(^uint(0)>>1) {
-				return sourceQualificationPolicy{}, fmt.Errorf("invalid source qualification sample count %d", *count.value)
+	th := profile.PtpClockThreshold
+	if th != nil {
+		cfg.UseS3 = th.PtpSourceUseS3
+		if th.PtpSourceQualifiedThreshold != nil {
+			cfg.QualifiedThreshold = *th.PtpSourceQualifiedThreshold
+		}
+		if th.PtpSourceDisqualifiedThreshold != nil {
+			cfg.DisqualifiedThreshold = *th.PtpSourceDisqualifiedThreshold
+		}
+		for _, count := range []struct {
+			value *int64
+			dest  *int
+		}{
+			{th.PtpSourceQualifiedSamples, &cfg.QualifiedSamples},
+			{th.PtpSourceDisqualifiedSamples, &cfg.DisqualifiedSamples},
+		} {
+			if count.value != nil {
+				if *count.value < 1 || uint64(*count.value) > uint64(^uint(0)>>1) {
+					return sourceQualificationPolicy{}, fmt.Errorf("invalid source qualification sample count %d", *count.value)
+				}
+				*count.dest = int(*count.value)
 			}
-			*count.dest = int(*count.value)
 		}
 	}
 	if err := cfg.Validate(); err != nil {

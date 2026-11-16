@@ -352,6 +352,7 @@ func TestTBCClockClassThroughProcessEvents(t *testing.T) {
 	pmcMock := &pmc.MockClient{
 		ParentTimeCurrentDSResult: pmc.ParentTimeCurrentDS{
 			ParentDataSet: protocol.ParentDataSet{
+				GrandmasterIdentity:      "aabbcc.fffe.ddeeff",
 				GrandmasterClockClass:    6,
 				GrandmasterClockAccuracy: 0x21,
 			},
@@ -384,6 +385,7 @@ func TestTBCClockClassThroughProcessEvents(t *testing.T) {
 		ClockType: event.TBC,
 		Time:      time.Now().UnixMilli(),
 		Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{
+			GrandmasterIdentity:      "aabbcc.fffe.ddeeff",
 			GrandmasterClockClass:    6,
 			GrandmasterClockAccuracy: 0x21,
 		}},
@@ -433,8 +435,10 @@ func TestTBCClockClassThroughProcessEvents(t *testing.T) {
 	assert.True(t, waitForMetric(clockClassGauge, 6),
 		"expected clock class 6 after BC reaches LOCKED")
 
-	// Phase 2: PTP4l source lost triggers LOCKED→HOLDOVER (class 135)
-	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_FREERUN, Offset: 10, SourceLost: true})
+	// Phase 2: parent data set names our own clock as grandmaster → LOCKED→HOLDOVER (class 135)
+	eChannel <- bcEvent(bcCfgPTP4l, event.PMC, &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{
+		GrandmasterIdentity: testClockID,
+	}})
 
 	assert.True(t, waitForMetric(clockClassGauge, 135),
 		"expected clock class 135 after BC enters HOLDOVER")
@@ -486,6 +490,7 @@ func TestTBCClockClassMetric(t *testing.T) {
 	pmcMock := &pmc.MockClient{
 		ParentTimeCurrentDSResult: pmc.ParentTimeCurrentDS{
 			ParentDataSet: protocol.ParentDataSet{
+				GrandmasterIdentity:      "aabbcc.fffe.ddeeff",
 				GrandmasterClockClass:    6,
 				GrandmasterClockAccuracy: 0x21,
 			},
@@ -536,6 +541,7 @@ func TestTBCClockClassMetric(t *testing.T) {
 		ClockType: event.TBC,
 		Time:      time.Now().UnixMilli(),
 		Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{
+			GrandmasterIdentity:      "aabbcc.fffe.ddeeff",
 			GrandmasterClockClass:    6,
 			GrandmasterClockAccuracy: 0x21,
 		}},
@@ -578,8 +584,10 @@ func TestTBCClockClassMetric(t *testing.T) {
 	assert.True(t, waitForMetric(clockClassGauge, 6),
 		"expected clock class metric = 6 for %s after LOCKED", bcCfgPTP4l)
 
-	// PTP4l source lost → LOCKED→HOLDOVER (class 135)
-	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_FREERUN, Offset: 10, SourceLost: true})
+	// Parent data set names our own clock as grandmaster → LOCKED→HOLDOVER (class 135)
+	eChannel <- bcEvent(bcCfgPTP4l, event.PMC, &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{
+		GrandmasterIdentity: testClockID,
+	}})
 
 	assert.True(t, waitForMetric(clockClassGauge, 135),
 		"expected clock class metric = 135 for %s after HOLDOVER", bcCfgPTP4l)
@@ -667,6 +675,7 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 	pmcMock := &pmc.MockClient{
 		ParentTimeCurrentDSResult: pmc.ParentTimeCurrentDS{
 			ParentDataSet: protocol.ParentDataSet{
+				GrandmasterIdentity:      "aabbcc.fffe.ddeeff",
 				GrandmasterClockClass:    6,
 				GrandmasterClockAccuracy: 0x21,
 			},
@@ -735,6 +744,7 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 		ClockType: event.TBC,
 		Time:      time.Now().UnixMilli(),
 		Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{
+			GrandmasterIdentity:      "aabbcc.fffe.ddeeff",
 			GrandmasterClockClass:    6,
 			GrandmasterClockAccuracy: 0x21,
 		}},
@@ -930,7 +940,9 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 
 	drainIPCMessages(socketCh, 200*time.Millisecond)
 
-	eChannel <- tbcEvent(tbcPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_FREERUN, Offset: 10, SourceLost: true})
+	eChannel <- tbcEvent(tbcPTP4l, event.PMC, &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{
+		GrandmasterIdentity: testClockID,
+	}})
 
 	msgs = drainIPCMessages(socketCh, 2*time.Second)
 
@@ -1001,6 +1013,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	pmcMock := &pmc.MockClient{
 		ParentTimeCurrentDSResult: pmc.ParentTimeCurrentDS{
 			ParentDataSet: protocol.ParentDataSet{
+				GrandmasterIdentity:      "aabbcc.fffe.ddeeff",
 				GrandmasterClockClass:    6,
 				GrandmasterClockAccuracy: 0x21,
 			},
@@ -1045,6 +1058,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 		Source: event.PMC, CfgName: testBCCfgPTP4l, ClockType: event.TBC,
 		Time: time.Now().UnixMilli(),
 		Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{
+			GrandmasterIdentity:   "aabbcc.fffe.ddeeff",
 			GrandmasterClockClass: 6, GrandmasterClockAccuracy: 0x21,
 		}},
 	}
@@ -1058,6 +1072,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 		Source: event.PMC, CfgName: secondTBCCfgName, ClockType: event.TBC,
 		Time: time.Now().UnixMilli(),
 		Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{
+			GrandmasterIdentity:   "aabbcc.fffe.ddeeff",
 			GrandmasterClockClass: 6, GrandmasterClockAccuracy: 0x21,
 		}},
 	}
@@ -1217,6 +1232,7 @@ func TestSyncEIPCIntegration(t *testing.T) {
 	pmcMock := &pmc.MockClient{
 		ParentTimeCurrentDSResult: pmc.ParentTimeCurrentDS{
 			ParentDataSet: protocol.ParentDataSet{
+				GrandmasterIdentity:      "aabbcc.fffe.ddeeff",
 				GrandmasterClockClass:    6,
 				GrandmasterClockAccuracy: 0x21,
 			},

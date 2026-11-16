@@ -370,6 +370,7 @@ func (dn *Daemon) Run(ctx context.Context) {
 					return
 				}
 				dn.runSyncStatusUpdate()
+				dn.applySourceLossPins()
 			case <-dn.stopCh:
 				return
 			}
@@ -444,6 +445,28 @@ func (dn *Daemon) Run(ctx context.Context) {
 			glog.Infof("linuxPTP stop signal received, existing..")
 			return
 		}
+	}
+}
+
+// applySourceLossPins re-evaluates the source-loss hardware condition for every
+// source-qualification profile. It is driven by sync-status transitions because
+// the parent-data-set loss signal arrives independently of ptp4l log lines, so
+// the log-line scanner cannot be relied on to observe it.
+func (dn *Daemon) applySourceLossPins() {
+	// Serialize with applyNodePTPProfiles, which sets the applying flag under
+	// this lock and then replaces processManager.process; ranging over that
+	// slice concurrently with a profile apply is a data race.
+	dn.syncStatusMu.Lock()
+	defer dn.syncStatusMu.Unlock()
+	if dn.processManager == nil || dn.isApplyingProfiles() {
+		return
+	}
+	for _, proc := range dn.processManager.process {
+		ptpProc, ok := proc.(*ptpProcess)
+		if !ok {
+			continue
+		}
+		ptpProc.applySourceLossIfNeeded()
 	}
 }
 

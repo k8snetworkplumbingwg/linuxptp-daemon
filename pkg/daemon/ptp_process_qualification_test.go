@@ -17,6 +17,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	"github.com/stretchr/testify/require"
@@ -31,25 +32,29 @@ func TestSourceQualificationPolicy(t *testing.T) {
 		want    utils.QualificationConfig
 		wantErr bool
 	}{
-		{name: "legacy", profile: `{"ptpSettings":{"clockType":"T-BC"}}`},
-		{name: "explicit false remains legacy", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceUseS3":false}}`},
+		{name: "minimal TBC uses defaults", profile: `{"ptpSettings":{"clockType":"T-BC"}}`, enabled: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 10, DisqualifiedThreshold: 1500, QualifiedSamples: 5, DisqualifiedSamples: 5}},
+		{name: "explicit false UseS3 uses defaults", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceUseS3":false}}`, enabled: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 10, DisqualifiedThreshold: 1500, QualifiedSamples: 5, DisqualifiedSamples: 5}},
 		{name: "non TBC", profile: `{"ptpClockThreshold":{"ptpSourceQualifiedSamples":1}}`},
-		{name: "defaults", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceQualifiedSamples":2}}`, enabled: true,
-			want: utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 100, QualifiedSamples: 2, DisqualifiedSamples: 5}},
-		{name: "in sync migration fallback", profile: `{"ptpSettings":{"clockType":"T-BC","inSyncConditionThreshold":"500"},"ptpClockThreshold":{"ptpSourceQualifiedSamples":1}}`, enabled: true,
-			want: utils.QualificationConfig{QualifiedThreshold: 500, DisqualifiedThreshold: 500, QualifiedSamples: 1, DisqualifiedSamples: 5}},
+		{name: "samples override only", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceQualifiedSamples":2}}`, enabled: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 10, DisqualifiedThreshold: 1500, QualifiedSamples: 2, DisqualifiedSamples: 5}},
+		{name: "inSyncConditionThreshold is ignored", profile: `{"ptpSettings":{"clockType":"T-BC","inSyncConditionThreshold":"500"},"ptpClockThreshold":{"ptpSourceQualifiedSamples":1}}`, enabled: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 10, DisqualifiedThreshold: 1500, QualifiedSamples: 1, DisqualifiedSamples: 5}},
 		{name: "partial pair", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"maxOffsetThreshold":200,"ptpSourceQualifiedThreshold":50}}`, enabled: true,
-			want: utils.QualificationConfig{QualifiedThreshold: 50, DisqualifiedThreshold: 200, QualifiedSamples: 5, DisqualifiedSamples: 5}},
-		{name: "invalid resolved pair", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceQualifiedThreshold":500}}`, wantErr: true},
-		{name: "explicit source values independent of invalid InSync", profile: `{"ptpSettings":{"clockType":"T-BC","inSyncConditionThreshold":"invalid"},"ptpClockThreshold":{"ptpSourceQualifiedThreshold":20,"ptpSourceDisqualifiedThreshold":40,"ptpSourceQualifiedSamples":2,"ptpSourceDisqualifiedSamples":3}}`, enabled: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 50, DisqualifiedThreshold: 1500, QualifiedSamples: 5, DisqualifiedSamples: 5}},
+		{name: "qualified only", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceQualifiedThreshold":500}}`, enabled: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 500, DisqualifiedThreshold: 1500, QualifiedSamples: 5, DisqualifiedSamples: 5}},
+		{name: "explicit source values", profile: `{"ptpSettings":{"clockType":"T-BC","inSyncConditionThreshold":"invalid"},"ptpClockThreshold":{"ptpSourceQualifiedThreshold":20,"ptpSourceDisqualifiedThreshold":40,"ptpSourceQualifiedSamples":2,"ptpSourceDisqualifiedSamples":3}}`, enabled: true,
 			want: utils.QualificationConfig{QualifiedThreshold: 20, DisqualifiedThreshold: 40, QualifiedSamples: 2, DisqualifiedSamples: 3}},
 		{name: "S3 opt in", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceUseS3":true}}`, enabled: true,
-			want: utils.QualificationConfig{UseS3: true, QualifiedThreshold: 100, DisqualifiedThreshold: 100, QualifiedSamples: 5, DisqualifiedSamples: 5}},
-		{name: "NTP fallback", profile: `{"ptpSettings":{"clockType":"T-BC"},"plugins":{"ntpfailover":{"gnssFailover":true}},"ptpClockThreshold":{"ptpSourceUseS3":true}}`, enabled: true,
-			want: utils.QualificationConfig{UseS3: true, QualifiedThreshold: 1000, DisqualifiedThreshold: 1000, QualifiedSamples: 5, DisqualifiedSamples: 5}},
+			want: utils.QualificationConfig{UseS3: true, QualifiedThreshold: 10, DisqualifiedThreshold: 1500, QualifiedSamples: 5, DisqualifiedSamples: 5}},
+		{name: "S3 with NTP", profile: `{"ptpSettings":{"clockType":"T-BC"},"plugins":{"ntpfailover":{"gnssFailover":true}},"ptpClockThreshold":{"ptpSourceUseS3":true}}`, enabled: true,
+			want: utils.QualificationConfig{UseS3: true, QualifiedThreshold: 10, DisqualifiedThreshold: 1500, QualifiedSamples: 5, DisqualifiedSamples: 5}},
 		{name: "zero threshold", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceQualifiedThreshold":0}}`, wantErr: true},
 		{name: "negative count", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceDisqualifiedSamples":-1}}`, wantErr: true},
-		{name: "invalid fallback", profile: `{"ptpSettings":{"clockType":"T-BC","inSyncConditionThreshold":"NaN"},"ptpClockThreshold":{"ptpSourceQualifiedSamples":1}}`, wantErr: true},
+		{name: "invalid inSyncConditionThreshold is ignored", profile: `{"ptpSettings":{"clockType":"T-BC","inSyncConditionThreshold":"NaN"},"ptpClockThreshold":{"ptpSourceQualifiedSamples":1}}`, enabled: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 10, DisqualifiedThreshold: 1500, QualifiedSamples: 1, DisqualifiedSamples: 5}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -82,7 +87,7 @@ func TestSourceQualificationFreshSamplesAndHardware(t *testing.T) {
 			p := &ptpProcess{
 				ExecProcess:   ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 20)},
 				nodeProfile:   &ptpv1.PtpProfile{},
-				tBCAttributes: tBCProcessAttributes{trIfaceNames: []string{"tr0", "tr1"}, perPortState: map[string]event.PTPState{}},
+				tBCAttributes: tBCProcessAttributes{trIfaceNames: []string{"tr0", "tr1"}},
 				sourceQualification: &sourceQualificationRuntime{
 					apply: func(v bool) error { actions = append(actions, v); return nil },
 				},
@@ -118,13 +123,13 @@ func TestSourceQualificationFreshSamplesAndHardware(t *testing.T) {
 			p.forwardSourceData(metric, nil)
 			require.True(t, qualified(), "servo degradation is not port loss; no extra aggregate InSync prerequisite")
 			p.forwardSourceData(nil, &parser.PTPEvent{Iface: "tr1", Role: parserconstants.PortRoleSlave})
-			require.False(t, qualified(), "new active port must requalify")
+			require.True(t, qualified(), "a BMCA port switchover must not reset readiness")
 			wrongPort := *metric
 			wrongPort.Iface = "tr0"
 			p.forwardSourceData(&wrongPort, nil)
-			require.False(t, qualified())
+			require.True(t, qualified(), "samples from a non-selected port are ignored")
 			p.forwardSourceData(nil, &parser.PTPEvent{Iface: "tr1", Role: parserconstants.PortRoleMaster})
-			require.False(t, qualified())
+			require.True(t, qualified(), "a port leaving SLAVE is not a source-loss signal")
 		})
 	}
 }
@@ -133,7 +138,7 @@ func TestSourceQualificationHardwareFailure(t *testing.T) {
 	t.Parallel()
 	fail := true
 	p := &ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 10)}, nodeProfile: &ptpv1.PtpProfile{},
-		tBCAttributes: tBCProcessAttributes{activePort: "tr0", trIfaceNames: []string{"tr0"}, perPortState: map[string]event.PTPState{"tr0": event.PTP_LOCKED}},
+		tBCAttributes: tBCProcessAttributes{activePort: "tr0", trIfaceNames: []string{"tr0"}},
 		sourceQualification: &sourceQualificationRuntime{apply: func(bool) error {
 			if fail {
 				return errors.New("pin update failed")
@@ -144,12 +149,12 @@ func TestSourceQualificationHardwareFailure(t *testing.T) {
 	cm := attachQualificationClock(t, p, utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 1, DisqualifiedSamples: 1})
 	p.forwardSourceData(nil, &parser.PTPEvent{Iface: "tr0", Role: parserconstants.PortRoleSlave})
 	p.forwardSourceData(&parser.Metrics{Iface: "tr0", Offset: 10, ServoState: "s2"}, nil)
-	require.NotEqual(t, event.PTP_LOCKED, p.tBCAttributes.lastAppliedState)
+	require.NotEqual(t, event.PTP_LOCKED, p.tBCAttributes.appliedCondition)
 	result, exists := cm.SourceQualification(p.configName)
 	require.True(t, exists && result.Qualified, "hardware failure must not hide source facts")
 	fail = false
 	p.forwardSourceData(&parser.Metrics{Iface: "tr0", Offset: 10, ServoState: "s2"}, nil)
-	require.Equal(t, event.PTP_LOCKED, p.tBCAttributes.lastAppliedState, "next fresh sample retries failed hardware action")
+	require.Equal(t, event.PTP_LOCKED, p.tBCAttributes.appliedCondition, "next fresh sample retries failed hardware action")
 }
 
 func TestSourceQualificationRejectsInvalidProfileWithoutPanic(t *testing.T) {
@@ -168,7 +173,7 @@ func TestSourceQualificationDoesNotUseUnrelatedHAGroup(t *testing.T) {
 	t.Parallel()
 	p := &ptpv1.PtpProfile{Name: utils.ToPtr("standalone"), Phc2sysOpts: utils.ToPtr("-a -r"), PtpSettings: map[string]string{"clockType": TBC},
 		PtpClockThreshold: &ptpv1.PtpClockThreshold{PtpSourceQualifiedSamples: utils.ToPtr(int64(1))}}
-	env := ptpProcessEnv{runID: 3, nodeProfile: p, clockType: event.TBC, topology: &ProfileTopology{
+	env := ptpProcessEnv{runID: 3, nodeProfile: p, clockType: event.TBC, upstreamPorts: []string{"eth0"}, topology: &ProfileTopology{
 		haProfile: "ha", haMembers: []string{"member0", "member1"}, profileRunID: map[string]int{"member0": 0, "member1": 1},
 	}}
 	cond := phc2sysOffsetStartCondition(env).(process.StateAwareCondition)
@@ -185,7 +190,7 @@ func TestQualifiedStartupRetainsPhc2sysLock(t *testing.T) {
 	t.Parallel()
 	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("test"), PtpSettings: map[string]string{"clockType": TBC}, Phc2sysOpts: utils.ToPtr("-a -r"),
 		PtpClockThreshold: &ptpv1.PtpClockThreshold{PtpSourceQualifiedSamples: utils.ToPtr(int64(2))}}
-	env := ptpProcessEnv{nodeProfile: profile, clockType: event.TBC, topology: &ProfileTopology{}}
+	env := ptpProcessEnv{nodeProfile: profile, clockType: event.TBC, upstreamPorts: []string{"eth0"}, topology: &ProfileTopology{}}
 	p := &ptpProcess{}
 	cond := ts2phcConditionsForTBC(p, env)[process.ActionStart].(process.StateAwareCondition)
 	stats := process.EventStats{SourceQualified: map[string]bool{"ptp4l.0.config": true}, States: map[string]map[event.EventSource]event.PTPState{}}
@@ -203,8 +208,8 @@ func TestQualifiedStartupRetainsPhc2sysLock(t *testing.T) {
 func TestSourceQualificationCompatibilityConditions(t *testing.T) {
 	t.Parallel()
 	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("test"), PtpSettings: map[string]string{"clockType": TBC}}
-	env := ptpProcessEnv{nodeProfile: profile, clockType: event.TBC, topology: &ProfileTopology{}}
-	require.IsType(t, process.OnStateAndOffsetForCount{}, phc2sysOffsetStartCondition(env), "fully unset profiles keep legacy startup")
+	env := ptpProcessEnv{nodeProfile: profile, clockType: event.TBC, upstreamPorts: []string{"eth0"}, topology: &ProfileTopology{}}
+	require.IsType(t, process.OnSourceQualified{}, phc2sysOffsetStartCondition(env), "TBC uses source qualification startup by default")
 	profile.PtpClockThreshold = &ptpv1.PtpClockThreshold{PtpSourceQualifiedSamples: utils.ToPtr(int64(1))}
 	cond := ts2phcConditionsForTBC(&ptpProcess{}, env)[process.ActionStart].(process.StateAwareCondition)
 	stats := process.EventStats{SourceQualified: map[string]bool{"ptp4l.0.config": true}}
@@ -212,6 +217,23 @@ func TestSourceQualificationCompatibilityConditions(t *testing.T) {
 	profile.PtpClockThreshold.PtpSourceQualifiedSamples = utils.ToPtr(int64(0))
 	require.IsType(t, process.Never{}, phc2sysOffsetStartCondition(env), "invalid policy fails closed")
 	require.IsType(t, process.Never{}, ts2phcConditionsForTBC(&ptpProcess{}, env)[process.ActionStart])
+}
+
+func TestSourceQualificationRequiresUpstreamPort(t *testing.T) {
+	t.Parallel()
+	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("test"), PtpSettings: map[string]string{"clockType": TBC}}
+	env := ptpProcessEnv{nodeProfile: profile, clockType: event.TBC, topology: &ProfileTopology{}}
+
+	// A T-BC without an upstream port never configures source qualification, so
+	// phc2sys and ts2phc must not wait on OnSourceQualified (which would never be
+	// produced). phc2sys falls back to the offset-based startup condition.
+	require.IsType(t, process.OnStateAndOffsetForCount{}, phc2sysOffsetStartCondition(env))
+
+	ts := ts2phcConditionsForTBC(&ptpProcess{}, env)[process.ActionStart].(*process.All)
+	for _, cond := range ts.Conditions {
+		_, isQualified := cond.(process.OnSourceQualified)
+		require.False(t, isQualified, "ts2phc must not wait on OnSourceQualified without an upstream port")
+	}
 }
 
 func TestSourceQualificationPropagatesPluginFailure(t *testing.T) {
@@ -260,6 +282,11 @@ func TestSourceQualificationParsedPipeline(t *testing.T) {
 	clk, err := clock.NewTBC("ptp4l.0.config", cm.GetUtcOffset, &pmc.MockClient{}, "ptp4.1.config")
 	require.NoError(t, err)
 	require.NoError(t, cm.AddClock(clk))
+	// Source loss is now parent-dataset-driven; point the parent data set at a
+	// remote grandmaster so the offset qualification can proceed.
+	clk.AddEvent(event.Event{Source: event.PMC, CfgName: "ptp4l.0.config", Data: &event.ParentDSData{
+		ParentDataSet: protocol.ParentDataSet{GrandmasterIdentity: "aabbcc.fffe.ddeeff", GrandmasterClockClass: 6},
+	}})
 	var hooks []string
 	plugins := &plugin.PluginManager{Plugins: map[string]*plugin.Plugin{
 		"observer": {AfterRunPTPCommand: func(_ *interface{}, _ *ptpv1.PtpProfile, command string) error {
@@ -272,7 +299,7 @@ func TestSourceQualificationParsedPipeline(t *testing.T) {
 		nodeProfile: profile, clockType: event.TBC, logParser: parser.NewPTP4LExtractor(), ptpClockThreshold: getPTPThreshold(profile),
 		ifaces: config.IFaces{{Name: "tr0"}}, pm: plugins,
 		dn:            &Daemon{processManager: &ProcessManager{clockMgr: cm}},
-		tBCAttributes: tBCProcessAttributes{trPortsConfigFile: "ptp4l.0.config", trIfaceNames: []string{"tr0"}, perPortState: map[string]event.PTPState{}, offsetThreshold: 1},
+		tBCAttributes: tBCProcessAttributes{trPortsConfigFile: "ptp4l.0.config", trIfaceNames: []string{"tr0"}, offsetThreshold: 1},
 	}
 	policy, err := resolveSourceQualificationPolicy(profile)
 	require.NoError(t, err)
@@ -303,7 +330,7 @@ func TestSourceQualificationParsedPipeline(t *testing.T) {
 	p.processOutput("another unrelated diagnostic")
 	require.True(t, readiness(), "without a new snapshot, retain the last evaluated readiness")
 	p.processOutput("ptp4l[4268780.809]: [ptp4l.0.config] port 1: SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES")
-	require.False(t, readiness())
+	require.True(t, readiness(), "a port leaving SLAVE is not a source-loss signal")
 	p.invalidateSourceQualification()
 	require.False(t, readiness())
 	require.Equal(t, []string{"tbc-ho-entry", "tbc-ho-exit", "tbc-ho-entry"}, hooks)
@@ -320,6 +347,11 @@ func attachQualificationClock(t *testing.T, p *ptpProcess, policy utils.Qualific
 	generation, err := cm.ConfigureSourceQualification(p.configName, p.tBCAttributes.trIfaceNames, policy)
 	require.NoError(t, err)
 	p.sourceQualification.generation = generation
+	// Source loss is now parent-dataset-driven; point the parent data set at a
+	// remote grandmaster so the offset qualification can proceed.
+	clk.AddEvent(event.Event{Source: event.PMC, CfgName: p.configName, Data: &event.ParentDSData{
+		ParentDataSet: protocol.ParentDataSet{GrandmasterIdentity: "aabbcc.fffe.ddeeff", GrandmasterClockClass: 6},
+	}})
 	p.sourceQualification.ctx = startQualificationClock(t, cm)
 	return cm
 }
@@ -339,6 +371,11 @@ func TestSourceQualificationHardwareDoesNotBlockEventPipeline(t *testing.T) {
 	clk, err := clock.NewTBC("ptp4l.0.config", cm.GetUtcOffset, &pmc.MockClient{}, "ptp4.1.config")
 	require.NoError(t, err)
 	require.NoError(t, cm.AddClock(clk))
+	// Source loss is now parent-dataset-driven; point the parent data set at a
+	// remote grandmaster so the offset qualification can proceed.
+	clk.AddEvent(event.Event{Source: event.PMC, CfgName: "ptp4l.0.config", Data: &event.ParentDSData{
+		ParentDataSet: protocol.ParentDataSet{GrandmasterIdentity: "aabbcc.fffe.ddeeff", GrandmasterClockClass: 6},
+	}})
 	generation, err := cm.ConfigureSourceQualification("ptp4l.0.config", []string{"tr0"}, utils.QualificationConfig{
 		QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 1, DisqualifiedSamples: 1})
 	require.NoError(t, err)
@@ -446,7 +483,7 @@ func TestSourceQualificationTransitionsWaitForDeliveryOrShutdown(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				applied := make(chan bool, 1)
 				p := &ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 1)},
-					tBCAttributes: tBCProcessAttributes{lastReportedState: event.PTP_FREERUN},
+					tBCAttributes: tBCProcessAttributes{reportedPtp4lState: event.PTP_FREERUN},
 					sourceQualification: &sourceQualificationRuntime{ctx: ctx, generation: 7,
 						apply: func(value bool) error { applied <- value; return nil }}}
 				p.eventCh <- event.Event{CfgName: "pending"}

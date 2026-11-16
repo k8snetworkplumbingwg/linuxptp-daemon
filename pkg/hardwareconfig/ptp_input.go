@@ -1,8 +1,6 @@
 package hardwareconfig
 
 import (
-	"strings"
-
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
@@ -36,8 +34,9 @@ func NewPTPStateDetector(hcm *HardwareConfigManager) *PTPStateDetector {
 }
 
 // DetectStateChange processes a PTP4L log line and returns port-aware state change information.
-// Returns the port name and condition type ("locked", "lost") for the port that changed state.
+// Returns the port name and condition type ("locked") for the port that reached SLAVE.
 // Returns ("", "") when the log line contains no relevant state change or the port is not monitored.
+// Source loss is no longer detected here; it is driven by the parent data set.
 // TODO: replace by pmc state monitor
 func (psd *PTPStateDetector) DetectStateChange(logLine string) (portName string, conditionType string) {
 	_, event, err := psd.ptp4lExtractor.Extract(logLine)
@@ -54,15 +53,10 @@ func (psd *PTPStateDetector) DetectStateChange(logLine string) (portName string,
 		return "", ""
 	}
 
-	switch event.Role {
-	case constants.PortRoleSlave:
+	if event.Role == constants.PortRoleSlave {
 		return portName, ConditionTypeLocked
-	default:
-		if strings.Contains(event.Raw, "SLAVE to ") {
-			return portName, ConditionTypeLost
-		}
-		return "", ""
 	}
+	return "", ""
 }
 
 // extractPortName extracts the port name from a PTP4L log line using the parser

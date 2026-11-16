@@ -343,10 +343,10 @@ func TestDetectStateChange(t *testing.T) {
 				expectedCondition: "locked",
 			},
 			{
-				name:              "lost condition",
+				name:              "SLAVE to non-SLAVE role is no longer a lost condition",
 				logLine:           "ptp4l[1031716.424]: [ptp4l.0.config:5] port 1 (ens4f1): SLAVE to FAULT_DETECTED on FAULT_DETECTED",
-				expectedPort:      "ens4f1",
-				expectedCondition: "lost",
+				expectedPort:      "",
+				expectedCondition: "",
 			},
 			{
 				name:              "non-monitored port - should return empty",

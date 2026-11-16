@@ -9,6 +9,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -85,6 +86,11 @@ func TestSourceQualificationStartupAndRestart(t *testing.T) {
 	generation, err := ct.cm.ConfigureSourceQualification(ptp4lConfig, []string{"tr0"}, utils.QualificationConfig{
 		QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 1, DisqualifiedSamples: 1})
 	require.NoError(t, err)
+	// Source loss is now parent-dataset-driven; point the parent data set at a
+	// remote grandmaster so the offset qualification can proceed.
+	ct.cm.ProcessEvent(event.Event{Source: event.PMC, CfgName: ptp4lConfig, Data: &event.ParentDSData{
+		ParentDataSet: protocol.ParentDataSet{GrandmasterIdentity: "aabbcc.fffe.ddeeff", GrandmasterClockClass: 6},
+	}})
 	setQualified := func(qualified bool) {
 		if qualified {
 			ct.cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: ptp4lConfig, IFace: "tr0", Data: &event.PTPSourceObservation{

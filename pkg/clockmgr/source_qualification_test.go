@@ -9,6 +9,7 @@ import (
 	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +25,7 @@ func TestSourceQualificationSnapshots(t *testing.T) {
 	source, ok := m.SourceQualification("ptp4l.0.config")
 	require.True(t, ok)
 	require.Equal(t, event.PTP4l, source.SourceType)
-	require.Equal(t, clock.PTPPortSource{Port: "tr0"}, source.Source)
+	require.Equal(t, clock.PTPInstanceSource{}, source.Source)
 	require.Equal(t, "tr0", source.IFace)
 	require.Empty(t, clockmgr.SnapshotStatsForTest(m, []process.StatsRequest{{ClockID: "ptp4l.0.config", Source: event.TS2PHC}}).SourceQualified)
 	set(false)
@@ -53,6 +54,11 @@ func qualificationPublisher(t *testing.T, m *clockmgr.ClockManager) func(bool) {
 	clk, err := clock.NewTBC("ptp4l.0.config", m.GetUtcOffset, &pmc.MockClient{}, "ptp4.1.config")
 	require.NoError(t, err)
 	require.NoError(t, m.AddClock(clk))
+	// Source loss is now parent-dataset-driven; point the parent data set at a
+	// remote grandmaster so the offset qualification can proceed.
+	clk.AddEvent(event.Event{Source: event.PMC, CfgName: "ptp4l.0.config", Data: &event.ParentDSData{
+		ParentDataSet: protocol.ParentDataSet{GrandmasterIdentity: "aabbcc.fffe.ddeeff", GrandmasterClockClass: 6},
+	}})
 	generation, err := m.ConfigureSourceQualification("ptp4l.0.config", []string{"tr0"}, utils.QualificationConfig{
 		QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 1, DisqualifiedSamples: 1})
 	require.NoError(t, err)
@@ -86,7 +92,7 @@ func TestSourceQualificationEventRoundTrip(t *testing.T) {
 	m.ProcessEvent(<-events)
 	result := <-sample.Reply
 	require.False(t, result.Qualified)
-	require.Equal(t, clock.PTPPortSource{Port: "tr0"}, result.Source)
+	require.Equal(t, clock.PTPInstanceSource{}, result.Source)
 	m.ProcessEvent(wrap(&event.OffsetData{State: event.PTP_LOCKED, Offset: 10}))
 	require.False(t, clockmgr.SnapshotStatsForTest(m, []process.StatsRequest{{ClockID: "ptp4l.0.config"}}).SourceQualified["ptp4l.0.config"], "averaged offsets must not count as fresh qualification samples")
 	m.ProcessEvent(wrap(sample))
@@ -98,4 +104,28 @@ func TestSourceQualificationEventRoundTrip(t *testing.T) {
 	m.RemoveAllClocks()
 	m.ProcessEvent(wrap(sample))
 	require.Empty(t, (<-sample.Reply).SourceType, "removed clocks must not strand their old scanner")
+}
+
+func TestIsPTPSourceLost(t *testing.T) {
+	m := clockmgr.Init("test", make(chan event.Event), nil, nil, nil, nil)
+
+	// A missing or non-T-BC clock reports the upstream source as lost.
+	require.True(t, m.IsPTPSourceLost("ptp4l.0.config"))
+
+	// A T-BC clock delegates to its parent data set.
+	clk, err := clock.NewTBC("ptp4l.0.config", m.GetUtcOffset, &pmc.MockClient{}, "ptp4l.1.config")
+	require.NoError(t, err)
+	require.NoError(t, m.AddClock(clk))
+
+	// A remote grandmaster with a synced class is not lost.
+	clk.AddEvent(event.Event{Source: event.PMC, CfgName: "ptp4l.0.config", Data: &event.ParentDSData{
+		ParentDataSet: protocol.ParentDataSet{GrandmasterIdentity: "aabbcc.fffe.ddeeff", GrandmasterClockClass: 6},
+	}})
+	require.False(t, m.IsPTPSourceLost("ptp4l.0.config"))
+
+	// A remote grandmaster reporting freerun is lost.
+	clk.AddEvent(event.Event{Source: event.PMC, CfgName: "ptp4l.0.config", Data: &event.ParentDSData{
+		ParentDataSet: protocol.ParentDataSet{GrandmasterIdentity: "aabbcc.fffe.ddeeff", GrandmasterClockClass: uint8(protocol.ClockClassFreerun)},
+	}})
+	require.True(t, m.IsPTPSourceLost("ptp4l.0.config"))
 }
