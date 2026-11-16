@@ -27,30 +27,42 @@ import (
 // AuthenticatedClient wraps an HTTP client with authentication capabilities
 type AuthenticatedClient struct {
 	client     *http.Client
-	authConfig *AuthConfig
+	authConfig *Config
 }
 
 // rejectInsecureRedirect refuses to follow a redirect to a non-HTTPS target so
 // that a credential-bearing request cannot be downgraded to cleartext.
 func rejectInsecureRedirect(req *http.Request, _ []*http.Request) error {
-	if req.URL.Scheme != "https" {
+	if req.URL.Scheme != httpsScheme {
 		return fmt.Errorf("refusing to follow redirect to non-HTTPS URL %q", req.URL.Redacted())
 	}
 	return nil
 }
 
+func rejectUnsafeRedirect(config *Config) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if err := rejectInsecureRedirect(req, via); err != nil {
+			return err
+		}
+		if err := config.ValidateCallbackEndpoint(req.URL.String()); err != nil {
+			return fmt.Errorf("refusing callback redirect: %w", err)
+		}
+		return nil
+	}
+}
+
 // NewAuthenticatedClient creates a new authenticated HTTP client
-func NewAuthenticatedClient(authConfig *AuthConfig) (*AuthenticatedClient, error) {
+func NewAuthenticatedClient(authConfig *Config) (*AuthenticatedClient, error) {
 	if authConfig == nil {
 		// Return a basic HTTP client if no auth config is provided
 		return &AuthenticatedClient{
 			client: &http.Client{
 				Timeout: 30 * time.Second,
 			},
-			// Initialize the embedded AuthConfig so the no-auth client is safe
+			// Initialize the embedded Config so the no-auth client is safe
 			// to use: Do/IsAuthenticated read promoted fields (EnableOAuth,
 			// EnableMTLS) that would nil-panic on an uninitialized embed.
-			authConfig: &AuthConfig{ServerConfig: &ServerConfig{}},
+			authConfig: &Config{ServerConfig: &ServerConfig{}},
 		}, nil
 	}
 
@@ -72,8 +84,10 @@ func NewAuthenticatedClient(authConfig *AuthConfig) (*AuthenticatedClient, error
 
 		client.Transport = &http.Transport{
 			TLSClientConfig: tlsConfig,
+			MaxIdleConns:    100,
+			IdleConnTimeout: 90 * time.Second,
 		}
-		client.CheckRedirect = rejectInsecureRedirect
+		client.CheckRedirect = rejectUnsafeRedirect(authConfig)
 		log.Info("Configured HTTPS client")
 	}
 
@@ -82,7 +96,7 @@ func NewAuthenticatedClient(authConfig *AuthConfig) (*AuthenticatedClient, error
 	// front so misconfiguration fails fast; the token itself is (re)read on
 	// every request in Do to tolerate ServiceAccount token rotation.
 	if authConfig.EnableOAuth {
-		client.CheckRedirect = rejectInsecureRedirect
+		client.CheckRedirect = rejectUnsafeRedirect(authConfig)
 		if _, err := authConfig.GetOAuthToken(); err != nil {
 			return nil, fmt.Errorf("failed to get OAuth token: %v", err)
 		}
@@ -100,12 +114,12 @@ func NewAuthenticatedClient(authConfig *AuthConfig) (*AuthenticatedClient, error
 
 // Do performs an HTTP request with authentication
 func (ac *AuthenticatedClient) Do(req *http.Request) (*http.Response, error) {
-	if ac.authConfig.IsAuthenticationEnabled() && req.URL.Scheme != "https" {
+	if ac.authConfig.IsAuthenticationEnabled() && req.URL.Scheme != httpsScheme {
 		return nil, fmt.Errorf("refusing authenticated request to non-HTTPS URL %q", req.URL.Redacted())
 	}
 	if ac.authConfig.EnableOAuth {
 		// Never transmit the bearer token over cleartext.
-		if req.URL.Scheme != "https" {
+		if req.URL.Scheme != httpsScheme {
 			return nil, fmt.Errorf("refusing to send OAuth bearer token over non-HTTPS URL %q", req.URL.Redacted())
 		}
 		// Re-read the token on every request: projected ServiceAccount tokens
@@ -175,7 +189,7 @@ func (ac *AuthenticatedClient) GetClient() *http.Client {
 }
 
 // GetAuthConfig returns the authentication configuration
-func (ac *AuthenticatedClient) GetAuthConfig() *AuthConfig {
+func (ac *AuthenticatedClient) GetAuthConfig() *Config {
 	return ac.authConfig
 }
 

@@ -14,12 +14,13 @@ import (
 // Security holds startup-loaded TLS material and the bearer validator. Configure
 // it before serving requests. Certificate/trust rotation requires a restart.
 type Security struct {
-	Config    *auth.AuthConfig
+	Config    *auth.Config
 	TLS       *tls.Config
 	Validator auth.TokenValidator
 }
 
-func NewSecurity(config *auth.AuthConfig, validator auth.TokenValidator) (*Security, WriterFunc, error) {
+// NewSecurity creates inbound authentication and an outbound callback writer.
+func NewSecurity(config *auth.Config, validator auth.TokenValidator) (*Security, WriterFunc, error) {
 	if config == nil {
 		return nil, nil, fmt.Errorf("authentication configuration is required")
 	}
@@ -29,6 +30,9 @@ func NewSecurity(config *auth.AuthConfig, validator auth.TokenValidator) (*Secur
 	}
 	security := &Security{Config: config, Validator: validator}
 	if config.IsAuthenticationEnabled() {
+		if err = config.ValidateCallbackHosts(); err != nil {
+			return nil, nil, err
+		}
 		security.TLS, err = config.CreateServerTLSConfig()
 		if err != nil {
 			return nil, nil, err
@@ -38,16 +42,20 @@ func NewSecurity(config *auth.AuthConfig, validator auth.TokenValidator) (*Secur
 		return nil, nil, fmt.Errorf("OAuth requires a TokenReview validator")
 	}
 	return security, func(endpoint string) io.Writer {
-		return &authenticatedWriter{endpoint: endpoint, client: client}
+		return &authenticatedWriter{endpoint: endpoint, client: client, config: config}
 	}, nil
 }
 
 type authenticatedWriter struct {
 	endpoint string
 	client   *auth.AuthenticatedClient
+	config   *auth.Config
 }
 
 func (w *authenticatedWriter) Write(data []byte) (int, error) {
+	if err := w.config.ValidateCallbackEndpoint(w.endpoint); err != nil {
+		return 0, err
+	}
 	response, err := w.client.Post(w.endpoint, data)
 	if err != nil {
 		return 0, err

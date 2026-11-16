@@ -1,4 +1,4 @@
-// Derived from redhat-cne/rest-api (Apache-2.0); native CEPv2 security types.
+// Package auth provides native CEPv2 TLS and bearer-token authentication.
 package auth
 
 import (
@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+const httpsScheme = "https"
+
+// ServerConfig contains inbound-server authentication and cluster TLS profile settings.
 type ServerConfig struct {
 	// mTLS configuration - works for both single and multi-node clusters
 	EnableMTLS     bool   `json:"enableMTLS"`
@@ -39,6 +42,7 @@ type ServerConfig struct {
 	TLSCipherSuites []string `json:"tlsCipherSuites"` // IANA cipher suite names
 }
 
+// TokenInfo identifies a bearer token authenticated by the cluster.
 type TokenInfo struct {
 	Username  string
 	UID       string
@@ -98,7 +102,7 @@ func cipherSuitesFromNames(names []string) []uint16 {
 // ApplyTLSProfile applies the centrally-managed TLS profile (min version and
 // cipher suites, sourced from the cluster's TLSSecurityProfile via the
 // operator) onto a tls.Config. Nothing is hardcoded here: values come from the
-// AuthConfig. Only when no min version is supplied at all do we fall back to
+// authentication configuration. Only when no min version is supplied at all do we fall back to
 // TLS 1.2 to avoid negotiating an insecure protocol by default.
 func (c *ServerConfig) ApplyTLSProfile(cfg *tls.Config) {
 	if c == nil {

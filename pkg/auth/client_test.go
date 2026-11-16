@@ -45,14 +45,14 @@ func TestNewAuthenticatedClient_NilConfig(t *testing.T) {
 
 func TestNewAuthenticatedClient_InvalidConfig(t *testing.T) {
 	// mTLS enabled but no cert paths => Validate fails.
-	cfg := &AuthConfig{ServerConfig: &ServerConfig{EnableMTLS: true}}
+	cfg := &Config{ServerConfig: &ServerConfig{EnableMTLS: true}}
 	_, err := NewAuthenticatedClient(cfg)
 	assert.Error(t, err)
 }
 
 func TestNewAuthenticatedClient_MTLS(t *testing.T) {
 	cert, key, ca := writeTestCerts(t)
-	cfg := &AuthConfig{
+	cfg := &Config{
 		ServerConfig:   &ServerConfig{EnableMTLS: true, CACertPath: ca},
 		ClientCertPath: cert,
 		ClientKeyPath:  key,
@@ -67,7 +67,7 @@ func TestNewAuthenticatedClient_MTLS(t *testing.T) {
 
 func TestNewAuthenticatedClient_OAuth(t *testing.T) {
 	tok := writeFile(t, "token", "  the-token\n")
-	cfg := &AuthConfig{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: tok}}
+	cfg := &Config{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: tok}}
 	ac, err := NewAuthenticatedClient(cfg)
 	require.NoError(t, err)
 	assert.True(t, ac.IsAuthenticated())
@@ -75,14 +75,14 @@ func TestNewAuthenticatedClient_OAuth(t *testing.T) {
 }
 
 func TestNewAuthenticatedClient_OAuthMissingToken(t *testing.T) {
-	cfg := &AuthConfig{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: "/nope/token"}}
+	cfg := &Config{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: "/nope/token"}}
 	_, err := NewAuthenticatedClient(cfg)
 	assert.Error(t, err)
 }
 
 func TestDo_OAuthRejectsCleartext(t *testing.T) {
 	tok := writeFile(t, "token", "the-token")
-	cfg := &AuthConfig{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: tok}}
+	cfg := &Config{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: tok}}
 	ac, err := NewAuthenticatedClient(cfg)
 	require.NoError(t, err)
 
@@ -101,7 +101,7 @@ func TestDo_OAuthSetsBearerOverHTTPS(t *testing.T) {
 	defer ts.Close()
 
 	tok := writeFile(t, "token", "  the-token\n")
-	cfg := &AuthConfig{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: tok}}
+	cfg := &Config{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: tok}}
 	ac, err := NewAuthenticatedClient(cfg)
 	require.NoError(t, err)
 	// Trust the test server's TLS cert (same-package access to the unexported client).
@@ -146,7 +146,7 @@ func TestRefreshOAuthToken(t *testing.T) {
 
 	// Enabled with readable token => no error.
 	tok := writeFile(t, "token", "the-token")
-	cfg := &AuthConfig{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: tok}}
+	cfg := &Config{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: tok}}
 	ac, err := NewAuthenticatedClient(cfg)
 	require.NoError(t, err)
 	assert.NoError(t, ac.RefreshOAuthToken())
