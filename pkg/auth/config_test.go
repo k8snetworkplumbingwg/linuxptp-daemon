@@ -117,27 +117,50 @@ func TestLoadAuthConfig_Valid(t *testing.T) {
 }
 
 func TestValidate_NoAuth(t *testing.T) {
-	cfg := &ClientAuthConfig{ServerConfig: &ServerConfig{}}
+	cfg := &Config{ServerConfig: &ServerConfig{}}
 	assert.NoError(t, cfg.Validate())
+}
+
+func TestValidateCallbackEndpoint(t *testing.T) {
+	cfg := &Config{
+		ServerConfig:         &ServerConfig{EnableOAuth: true},
+		AllowedCallbackHosts: []string{"consumer.example", "*.cloud-events.svc.cluster.local"},
+	}
+	for _, endpoint := range []string{
+		"https://consumer.example/events",
+		"https://callback.cloud-events.svc.cluster.local/events",
+	} {
+		assert.NoError(t, cfg.ValidateCallbackEndpoint(endpoint))
+	}
+	for _, endpoint := range []string{
+		"http://consumer.example/events",
+		"https://attacker.example/events",
+		"https://cloud-events.svc.cluster.local/events",
+	} {
+		assert.Error(t, cfg.ValidateCallbackEndpoint(endpoint))
+	}
+
+	cfg.AllowedCallbackHosts = []string{"bad*pattern"}
+	assert.Error(t, cfg.ValidateCallbackHosts())
 }
 
 func TestValidate_MTLSMissingFields(t *testing.T) {
 	// mTLS on but no client cert path.
-	cfg := &ClientAuthConfig{ServerConfig: &ServerConfig{EnableMTLS: true}}
+	cfg := &Config{ServerConfig: &ServerConfig{EnableMTLS: true}}
 	assert.Error(t, cfg.Validate())
 
 	// client cert set, key missing.
-	cfg = &ClientAuthConfig{ServerConfig: &ServerConfig{EnableMTLS: true}, ClientCertPath: "/x"}
+	cfg = &Config{ServerConfig: &ServerConfig{EnableMTLS: true}, ClientCertPath: "/x"}
 	assert.Error(t, cfg.Validate())
 
 	// client cert+key set, CA missing.
-	cfg = &ClientAuthConfig{ServerConfig: &ServerConfig{EnableMTLS: true}, ClientCertPath: "/x", ClientKeyPath: "/y"}
+	cfg = &Config{ServerConfig: &ServerConfig{EnableMTLS: true}, ClientCertPath: "/x", ClientKeyPath: "/y"}
 	assert.Error(t, cfg.Validate())
 }
 
 func TestValidate_MTLSFileMissing(t *testing.T) {
 	// Paths set but files do not exist on disk.
-	cfg := &ClientAuthConfig{
+	cfg := &Config{
 		ServerConfig:   &ServerConfig{EnableMTLS: true, CACertPath: "/nope/ca.crt"},
 		ClientCertPath: "/nope/client.crt",
 		ClientKeyPath:  "/nope/client.key",
@@ -147,7 +170,7 @@ func TestValidate_MTLSFileMissing(t *testing.T) {
 
 func TestValidate_MTLSOK(t *testing.T) {
 	cert, key, ca := writeTestCerts(t)
-	cfg := &ClientAuthConfig{
+	cfg := &Config{
 		ServerConfig:   &ServerConfig{EnableMTLS: true, CACertPath: ca},
 		ClientCertPath: cert,
 		ClientKeyPath:  key,
@@ -157,21 +180,21 @@ func TestValidate_MTLSOK(t *testing.T) {
 
 func TestValidate_OAuth(t *testing.T) {
 	// OAuth on but token path empty.
-	cfg := &ClientAuthConfig{ServerConfig: &ServerConfig{EnableOAuth: true}}
+	cfg := &Config{ServerConfig: &ServerConfig{EnableOAuth: true}}
 	assert.Error(t, cfg.Validate())
 
 	// token path set but file missing.
-	cfg = &ClientAuthConfig{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: "/nope/token"}}
+	cfg = &Config{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: "/nope/token"}}
 	assert.Error(t, cfg.Validate())
 
 	// token file present.
 	tok := writeFile(t, "token", "abc")
-	cfg = &ClientAuthConfig{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: tok}}
+	cfg = &Config{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: tok}}
 	assert.NoError(t, cfg.Validate())
 }
 
 func TestCreateTLSConfig_Disabled(t *testing.T) {
-	cfg := &ClientAuthConfig{ServerConfig: &ServerConfig{}}
+	cfg := &Config{ServerConfig: &ServerConfig{}}
 	tlsCfg, err := cfg.CreateTLSConfig()
 	require.NoError(t, err)
 	assert.Nil(t, tlsCfg)
@@ -179,7 +202,7 @@ func TestCreateTLSConfig_Disabled(t *testing.T) {
 
 func TestCreateTLSConfig_OK(t *testing.T) {
 	cert, key, ca := writeTestCerts(t)
-	cfg := &ClientAuthConfig{
+	cfg := &Config{
 		ServerConfig:   &ServerConfig{EnableMTLS: true, CACertPath: ca},
 		ClientCertPath: cert,
 		ClientKeyPath:  key,
@@ -193,7 +216,7 @@ func TestCreateTLSConfig_OK(t *testing.T) {
 }
 
 func TestCreateTLSConfig_BadCert(t *testing.T) {
-	cfg := &ClientAuthConfig{
+	cfg := &Config{
 		ServerConfig:   &ServerConfig{EnableMTLS: true, CACertPath: "/nope/ca"},
 		ClientCertPath: "/nope/cert",
 		ClientKeyPath:  "/nope/key",
@@ -204,7 +227,7 @@ func TestCreateTLSConfig_BadCert(t *testing.T) {
 
 func TestOAuthOnlyServerTrust(t *testing.T) {
 	_, _, ca := writeTestCerts(t)
-	cfg := &ClientAuthConfig{ServerConfig: &ServerConfig{EnableOAuth: true, CACertPath: ca, TLSMinVersion: "VersionTLS13"}}
+	cfg := &Config{ServerConfig: &ServerConfig{EnableOAuth: true, CACertPath: ca, TLSMinVersion: "VersionTLS13"}}
 	tlsCfg, err := cfg.CreateTLSConfig()
 	require.NoError(t, err)
 	assert.NotNil(t, tlsCfg.RootCAs)
@@ -215,7 +238,7 @@ func TestOAuthOnlyServerTrust(t *testing.T) {
 func TestCreateTLSConfig_BadCA(t *testing.T) {
 	cert, key, _ := writeTestCerts(t)
 	badCA := writeFile(t, "ca.pem", "not a pem")
-	cfg := &ClientAuthConfig{
+	cfg := &Config{
 		ServerConfig:   &ServerConfig{EnableMTLS: true, CACertPath: badCA},
 		ClientCertPath: cert,
 		ClientKeyPath:  key,
@@ -226,32 +249,32 @@ func TestCreateTLSConfig_BadCA(t *testing.T) {
 
 func TestGetOAuthToken(t *testing.T) {
 	// Disabled => empty, no error.
-	cfg := &ClientAuthConfig{ServerConfig: &ServerConfig{}}
+	cfg := &Config{ServerConfig: &ServerConfig{}}
 	tok, err := cfg.GetOAuthToken()
 	require.NoError(t, err)
 	assert.Empty(t, tok)
 
 	// Enabled with token file.
 	p := writeFile(t, "token", "secret-token")
-	cfg = &ClientAuthConfig{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: p}}
+	cfg = &Config{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: p}}
 	tok, err = cfg.GetOAuthToken()
 	require.NoError(t, err)
 	assert.Equal(t, "secret-token", tok)
 
 	// Enabled but file missing => error.
-	cfg = &ClientAuthConfig{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: "/nope/token"}}
+	cfg = &Config{ServerConfig: &ServerConfig{EnableOAuth: true, ServiceAccountToken: "/nope/token"}}
 	_, err = cfg.GetOAuthToken()
 	assert.Error(t, err)
 }
 
 func TestIsAuthenticationEnabled(t *testing.T) {
-	assert.False(t, (&ClientAuthConfig{ServerConfig: &ServerConfig{}}).IsAuthenticationEnabled())
-	assert.True(t, (&ClientAuthConfig{ServerConfig: &ServerConfig{EnableMTLS: true}}).IsAuthenticationEnabled())
-	assert.True(t, (&ClientAuthConfig{ServerConfig: &ServerConfig{EnableOAuth: true}}).IsAuthenticationEnabled())
+	assert.False(t, (&Config{ServerConfig: &ServerConfig{}}).IsAuthenticationEnabled())
+	assert.True(t, (&Config{ServerConfig: &ServerConfig{EnableMTLS: true}}).IsAuthenticationEnabled())
+	assert.True(t, (&Config{ServerConfig: &ServerConfig{EnableOAuth: true}}).IsAuthenticationEnabled())
 }
 
 func TestGetConfigSummary(t *testing.T) {
-	cfg := &ClientAuthConfig{
+	cfg := &Config{
 		ServerConfig: &ServerConfig{
 			EnableMTLS:          true,
 			EnableOAuth:         true,
@@ -269,7 +292,7 @@ func TestGetConfigSummary(t *testing.T) {
 	assert.True(t, strings.Contains(s, "consumer-sa"))
 
 	// Both disabled: no detail lines.
-	off := (&ClientAuthConfig{ServerConfig: &ServerConfig{}}).GetConfigSummary()
+	off := (&Config{ServerConfig: &ServerConfig{}}).GetConfigSummary()
 	assert.True(t, strings.Contains(off, "mTLS: false"))
 	assert.True(t, strings.Contains(off, "OAuth: false"))
 }

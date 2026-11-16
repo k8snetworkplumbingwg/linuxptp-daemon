@@ -23,6 +23,8 @@ import (
 
 var GitCommit = "Undefined"
 
+const httpsScheme = "https"
+
 var (
 	socket         string
 	port           int
@@ -84,10 +86,10 @@ func main() {
 	}
 	scheme := "http"
 	if tlsCert != "" {
-		scheme = "https"
+		scheme = httpsScheme
 	}
 	if security != nil && security.TLS != nil {
-		scheme = "https"
+		scheme = httpsScheme
 	}
 	// baseURL is the stable, server-determined root used to build subscription UriLocation values.
 	baseURL, err := makeBaseURL(apiHost, nodeName, port, scheme)

@@ -24,7 +24,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 )
 
-func securityTestConfig(t *testing.T) *auth.AuthConfig {
+func securityTestConfig(t *testing.T) *auth.Config {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -41,11 +41,11 @@ func securityTestConfig(t *testing.T) *auth.AuthConfig {
 	keyPath := filepath.Join(dir, "key.pem")
 	tokenPath := filepath.Join(dir, "token")
 	for path, data := range map[string][]byte{certPath: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), keyPath: pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), tokenPath: []byte("first")} {
-		if err := os.WriteFile(path, data, 0600); err != nil {
-			t.Fatal(err)
+		if writeErr := os.WriteFile(path, data, 0600); writeErr != nil {
+			t.Fatal(writeErr)
 		}
 	}
-	cfg := &auth.AuthConfig{ServerConfig: &auth.ServerConfig{EnableMTLS: true, EnableOAuth: true, CACertPath: certPath, ServerCertPath: certPath, ServerKeyPath: keyPath, ServiceAccountToken: tokenPath}, ClientCertPath: certPath, ClientKeyPath: keyPath}
+	cfg := &auth.Config{ServerConfig: &auth.ServerConfig{EnableMTLS: true, EnableOAuth: true, CACertPath: certPath, ServerCertPath: certPath, ServerKeyPath: keyPath, ServiceAccountToken: tokenPath}, ClientCertPath: certPath, ClientKeyPath: keyPath, AllowedCallbackHosts: []string{"127.0.0.1"}}
 	return cfg
 }
 
@@ -68,18 +68,21 @@ func TestSecuredCallbackTLSAndTokenRotation(t *testing.T) {
 	callback.StartTLS()
 	defer callback.Close()
 	for _, token := range []string{"first", "rotated"} {
-		if err := os.WriteFile(cfg.ServiceAccountToken, []byte(token), 0600); err != nil {
-			t.Fatal(err)
+		if writeErr := os.WriteFile(cfg.ServiceAccountToken, []byte(token), 0600); writeErr != nil {
+			t.Fatal(writeErr)
 		}
-		if _, err := writer(callback.URL).Write([]byte(`{}`)); err != nil {
-			t.Fatal(err)
+		if _, writeErr := writer(callback.URL).Write([]byte(`{}`)); writeErr != nil {
+			t.Fatal(writeErr)
 		}
 		if got := <-received; got != "Bearer "+token {
 			t.Fatalf("token header %q", got)
 		}
 	}
-	if _, err := writer("http://example.invalid/callback").Write([]byte(`{}`)); err == nil {
+	if _, writeErr := writer("http://example.invalid/callback").Write([]byte(`{}`)); writeErr == nil {
 		t.Fatal("allowed plaintext credentials")
+	}
+	if _, writeErr := writer("https://attacker.example/callback").Write([]byte(`{}`)); writeErr == nil {
+		t.Fatal("allowed credentials to an untrusted callback host")
 	}
 }
 
@@ -96,21 +99,21 @@ func TestNodeServingHostnameVerification(t *testing.T) {
 	server.StartTLS()
 	defer server.Close()
 	for _, node := range []string{"worker-a", "worker-b"} {
-		clientTLS, err := cfg.CreateTLSConfig()
-		if err != nil {
-			t.Fatal(err)
+		clientTLS, tlsErr := cfg.CreateTLSConfig()
+		if tlsErr != nil {
+			t.Fatal(tlsErr)
 		}
 		clientTLS.ServerName = "ptp-event-publisher-service-" + node + ".openshift-ptp.svc.cluster.local"
 		client := &http.Client{Transport: &http.Transport{TLSClientConfig: clientTLS}}
-		resp, err := client.Get(server.URL)
+		resp, requestErr := client.Get(server.URL)
 		if resp != nil {
 			resp.Body.Close()
 		}
 		client.CloseIdleConnections()
-		if node == "worker-a" && err != nil {
-			t.Fatalf("matching node: %v", err)
+		if node == "worker-a" && requestErr != nil {
+			t.Fatalf("matching node: %v", requestErr)
 		}
-		if node == "worker-b" && err == nil {
+		if node == "worker-b" && requestErr == nil {
 			t.Fatal("accepted another node's serving certificate")
 		}
 	}
@@ -121,8 +124,8 @@ func TestNodeServingHostnameVerification(t *testing.T) {
 func TestSecureSubscribePullPush(t *testing.T) {
 	cfg := securityTestConfig(t)
 	cfg.RequiredAudiences = []string{"event-api"}
-	if err := os.WriteFile(cfg.ServiceAccountToken, []byte("test-token"), 0600); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(cfg.ServiceAccountToken, []byte("test-token"), 0600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	security, writer, err := NewSecurity(cfg, testValidator{true})
 	if err != nil {
@@ -136,9 +139,9 @@ func TestSecureSubscribePullPush(t *testing.T) {
 	}
 	pushes := make(chan []byte, 2)
 	callback := httptest.NewUnstartedServer(remote(security.protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Error(err)
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			t.Error(readErr)
 		}
 		pushes <- body
 		w.WriteHeader(http.StatusNoContent)
@@ -241,7 +244,7 @@ func TestProtectedRouteAuthentication(t *testing.T) {
 			{"both", true, true, true, 204},
 		} {
 			t.Run(route+"/"+tc.name, func(t *testing.T) {
-				s := &Security{Config: &auth.AuthConfig{ServerConfig: &auth.ServerConfig{EnableMTLS: true, EnableOAuth: true, RequiredAudiences: []string{"event-api"}}}, Validator: testValidator{tc.accepted}}
+				s := &Security{Config: &auth.Config{ServerConfig: &auth.ServerConfig{EnableMTLS: true, EnableOAuth: true, RequiredAudiences: []string{"event-api"}}}, Validator: testValidator{tc.accepted}}
 				request := httptest.NewRequest(http.MethodGet, apiBase+route, nil)
 				request.RemoteAddr = "192.0.2.1:1234"
 				if tc.cert {
@@ -261,7 +264,7 @@ func TestProtectedRouteAuthentication(t *testing.T) {
 }
 
 func TestAuthenticationExceptions(t *testing.T) {
-	s := &Security{Config: &auth.AuthConfig{ServerConfig: &auth.ServerConfig{EnableMTLS: true, EnableOAuth: true}}}
+	s := &Security{Config: &auth.Config{ServerConfig: &auth.ServerConfig{EnableMTLS: true, EnableOAuth: true}}}
 	for _, tc := range []struct {
 		path, remote string
 		want         int
@@ -283,7 +286,7 @@ func TestAuthenticationExceptions(t *testing.T) {
 }
 
 func TestSecurityFailsClosedOnIncompleteConfiguration(t *testing.T) {
-	for _, cfg := range []*auth.AuthConfig{nil, {ServerConfig: &auth.ServerConfig{EnableMTLS: true}}, {ServerConfig: &auth.ServerConfig{EnableOAuth: true}}} {
+	for _, cfg := range []*auth.Config{nil, {ServerConfig: &auth.ServerConfig{EnableMTLS: true}}, {ServerConfig: &auth.ServerConfig{EnableOAuth: true}}} {
 		if _, _, err := NewSecurity(cfg, nil); err == nil {
 			t.Fatal("accepted incomplete security configuration")
 		}

@@ -19,28 +19,26 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
 )
 
-// ClientAuthConfig extends the base AuthConfig with client-specific certificate paths
-type ClientAuthConfig struct {
+// Config contains the server and outbound-client authentication settings.
+type Config struct {
 	*ServerConfig
-	// Client-specific certificate paths (different from server paths in base AuthConfig)
-	ClientCertPath string `json:"clientCertPath"`
-	ClientKeyPath  string `json:"clientKeyPath"`
+	ClientCertPath       string   `json:"clientCertPath"`
+	ClientKeyPath        string   `json:"clientKeyPath"`
+	AllowedCallbackHosts []string `json:"allowedCallbackHosts"`
 }
 
-// AuthConfig is an alias for ClientAuthConfig for backward compatibility
-type AuthConfig = ClientAuthConfig
-
 // LoadAuthConfig loads authentication configuration from a JSON file
-func LoadAuthConfig(configPath string) (*ClientAuthConfig, error) {
+func LoadAuthConfig(configPath string) (*Config, error) {
 	if configPath == "" {
 		log.Info("No authentication config path provided, using default (no auth)")
-		return &ClientAuthConfig{
+		return &Config{
 			ServerConfig: &ServerConfig{},
 		}, nil
 	}
@@ -55,12 +53,12 @@ func LoadAuthConfig(configPath string) (*ClientAuthConfig, error) {
 		return nil, fmt.Errorf("failed to read authentication config file %s: %v", configPath, err)
 	}
 
-	var config ClientAuthConfig
+	var config Config
 	if err = json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal authentication config: %v", err)
 	}
 
-	// Initialize embedded AuthConfig if it's nil
+	// Initialize the embedded server configuration if it is nil.
 	if config.ServerConfig == nil {
 		config.ServerConfig = &ServerConfig{}
 	}
@@ -69,8 +67,59 @@ func LoadAuthConfig(configPath string) (*ClientAuthConfig, error) {
 	return &config, nil
 }
 
+func (c *Config) validateCallbackHosts() error {
+	if !c.IsAuthenticationEnabled() {
+		return nil
+	}
+	if len(c.AllowedCallbackHosts) == 0 {
+		return fmt.Errorf("at least one allowed callback host is required when authentication is enabled")
+	}
+	for _, pattern := range c.AllowedCallbackHosts {
+		pattern = strings.ToLower(strings.TrimSpace(pattern))
+		host := pattern
+		if strings.HasPrefix(pattern, "*.") {
+			host = strings.TrimPrefix(pattern, "*.")
+		}
+		if host == "" || strings.ContainsAny(host, "*/: ") || (strings.Contains(pattern, "*") && !strings.HasPrefix(pattern, "*.")) {
+			return fmt.Errorf("invalid allowed callback host %q", pattern)
+		}
+	}
+	return nil
+}
+
+// ValidateCallbackHosts validates the configured outbound callback allowlist.
+func (c *Config) ValidateCallbackHosts() error {
+	return c.validateCallbackHosts()
+}
+
+// ValidateCallbackEndpoint ensures credentials are sent only to an explicitly
+// allowed HTTPS callback host. Wildcards match subdomains only (for example,
+// *.svc.cluster.local does not match svc.cluster.local itself).
+func (c *Config) ValidateCallbackEndpoint(endpoint string) error {
+	if !c.IsAuthenticationEnabled() {
+		return nil
+	}
+	parsed, err := url.ParseRequestURI(endpoint)
+	if err != nil || parsed.Scheme != httpsScheme || parsed.Hostname() == "" {
+		return fmt.Errorf("authenticated callback must use an absolute HTTPS URL")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	for _, pattern := range c.AllowedCallbackHosts {
+		pattern = strings.ToLower(strings.TrimSpace(pattern))
+		if strings.HasPrefix(pattern, "*.") {
+			suffix := strings.TrimPrefix(pattern, "*.")
+			if host != suffix && strings.HasSuffix(host, "."+suffix) {
+				return nil
+			}
+		} else if host == pattern {
+			return nil
+		}
+	}
+	return fmt.Errorf("callback host %q is not allowed", host)
+}
+
 // Validate validates the authentication configuration
-func (c *ClientAuthConfig) Validate() error {
+func (c *Config) Validate() error {
 	if c == nil || c.ServerConfig == nil {
 		return fmt.Errorf("authentication configuration is required")
 	}
@@ -112,7 +161,7 @@ func (c *ClientAuthConfig) Validate() error {
 }
 
 // CreateTLSConfig configures server trust for HTTPS and an optional mTLS identity.
-func (c *ClientAuthConfig) CreateTLSConfig() (*tls.Config, error) {
+func (c *Config) CreateTLSConfig() (*tls.Config, error) {
 	if !c.IsAuthenticationEnabled() {
 		return nil, nil
 	}
@@ -160,7 +209,7 @@ func (c *ClientAuthConfig) CreateTLSConfig() (*tls.Config, error) {
 // clause 4.1.1 a callback reachable from a separate POD/VM must be protected by
 // an authorization mechanism (clause 3.2 — mTLS and/or OAuth), so the consumer
 // callback cannot serve plaintext once authentication is enabled.
-func (c *ClientAuthConfig) CreateServerTLSConfig() (*tls.Config, error) {
+func (c *Config) CreateServerTLSConfig() (*tls.Config, error) {
 	if c.ServerCertPath == "" || c.ServerKeyPath == "" {
 		return nil, fmt.Errorf("server certificate and key paths are required for a TLS callback server")
 	}
@@ -205,7 +254,7 @@ func (c *ClientAuthConfig) CreateServerTLSConfig() (*tls.Config, error) {
 }
 
 // GetOAuthToken reads the OAuth token from the service account token file
-func (c *ClientAuthConfig) GetOAuthToken() (string, error) {
+func (c *Config) GetOAuthToken() (string, error) {
 	if !c.EnableOAuth {
 		return "", nil
 	}
@@ -223,12 +272,12 @@ func (c *ClientAuthConfig) GetOAuthToken() (string, error) {
 }
 
 // IsAuthenticationEnabled returns true if either mTLS or OAuth is enabled
-func (c *ClientAuthConfig) IsAuthenticationEnabled() bool {
+func (c *Config) IsAuthenticationEnabled() bool {
 	return c.EnableMTLS || c.EnableOAuth
 }
 
 // GetConfigSummary returns a summary of the authentication configuration
-func (c *ClientAuthConfig) GetConfigSummary() string {
+func (c *Config) GetConfigSummary() string {
 	summary := "Authentication Configuration:\n"
 	summary += fmt.Sprintf("  mTLS: %t\n", c.EnableMTLS)
 	if c.EnableMTLS {
