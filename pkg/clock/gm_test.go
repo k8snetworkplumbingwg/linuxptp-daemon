@@ -339,7 +339,7 @@ func TestGMClock_AnnounceClockClassIfChanged(t *testing.T) {
 		gm.syncState.ClockClass = fbprotocol.ClockClass7
 		gm.announceClockClassIfChanged(
 			event.Event{Source: event.DPLL, Data: &event.DPLLData{Offset: utils.ToPtr[int64](500)}},
-			SyncState{State: event.PTP_HOLDOVER, ClockClass: fbprotocol.ClockClass7},
+			SyncState{State: event.PTP_HOLDOVER, ClockClass: fbprotocol.ClockClass7, ClockAccuracy: fbprotocol.ClockAccuracyFromOffset(500 * time.Nanosecond)},
 		)
 		setCalls := pmcMock.SnapshotSetCalls()
 		require.Len(t, setCalls, 1)
