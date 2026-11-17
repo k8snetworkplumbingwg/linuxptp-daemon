@@ -9,11 +9,12 @@ import (
 	"strings"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/synce"
 
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 
 	"github.com/golang/glog"
@@ -403,6 +404,39 @@ func (conf *Ptp4lConf) RenderPtp4lConf() (configOut string, ifaces config.IFaces
 	}
 	alias.CalculateAliases()
 	return configOut, ifaces
+}
+
+func InspectProfile(nodeProfile *ptpv1.PtpProfile) (event.ClockType, string, []string, error) {
+	profileClockType, profileClockTypefound := nodeProfile.PtpSettings["clockType"]
+	var leadingNic string
+	var upstreamPorts []string
+	clockType := event.ClockUnset
+
+	if profileClockTypefound {
+		switch profileClockType {
+		case string(event.TGM):
+			clockType = event.TGM
+		case string(event.TBC):
+			clockType = event.TBC
+			leadingNic = nodeProfile.PtpSettings["leadingInterface"]
+			if portsStr, ok := nodeProfile.PtpSettings["upstreamPort"]; ok {
+				upstreamPorts = strings.Split(portsStr, ",")
+			}
+		}
+	}
+	// If unset default to clock type inferred from ptp4l
+	if clockType == event.ClockUnset {
+		ptp4lOutput := &Ptp4lConf{}
+		// Parsing ptp4l needs to be done here to get the fallback clock type.
+		// Needs to be done outside the loop as we need to guarantee clockType
+		// set before the event.Ts2PhcProcessName case where it is used.
+		err := ptp4lOutput.PopulatePtp4lConf(nodeProfile.Ptp4lConf, nodeProfile.Ptp4lOpts)
+		if err != nil {
+			return "", "", nil, err
+		}
+		clockType = ptp4lOutput.ClockType
+	}
+	return clockType, leadingNic, upstreamPorts, nil
 }
 
 func ProcessShouldRun(profile *ptpv1.PtpProfile, processName string) bool {

@@ -488,7 +488,7 @@ func TestForwardEvents_ProcessStatusDownDeadRestarts(t *testing.T) {
 func TestHandleProcessDownRestartsFailureGroup(t *testing.T) {
 	fg := &process.FailureGroup{}
 	failed := &stubProcess{name: string(event.PTP4l), cfgName: ptp4lConfig, state: process.Dead, fg: fg}
-	member := &stubProcess{name: phc2sysProcessName, cfgName: ptp4lConfig, state: process.Running, fg: fg}
+	member := &stubProcess{name: event.Phc2SysProcessName, cfgName: ptp4lConfig, state: process.Running, fg: fg}
 	unrelated := &stubProcess{name: event.Ts2PhcProcessName, cfgName: ptp4lConfig, state: process.Running}
 	fg.AddMember(failed)
 	fg.AddMember(member)

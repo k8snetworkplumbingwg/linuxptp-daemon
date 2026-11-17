@@ -861,7 +861,7 @@ func (p *ptpProcess) cleanup() {
 	// Cleanup metrics
 	deleteMetrics(p.ifaces, p.haProfile, p.name, p.configName, p.messageTag)
 
-	if p.name == syncEProcessName && p.syncERelations != nil {
+	if p.name == event.Synce4lProcessName && p.syncERelations != nil {
 		deleteSyncEMetrics(p.name, p.configName, p.syncERelations)
 	}
 }

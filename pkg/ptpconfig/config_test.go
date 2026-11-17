@@ -69,7 +69,7 @@ func TestPtp4lConf_ResolveInterfaceNames(t *testing.T) {
 	})
 }
 
-// TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs tests clock_type detection with cliArgs parameter
+// TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs tests clockType detection with cliArgs parameter
 func TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -103,7 +103,7 @@ func TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs(t *testing.T) {
 			name:              "GM with masterOnly interfaces",
 			config:            "[global]\n[ens1f0]\nmasterOnly 1\n[ens1f1]\nmasterOnly 1",
 			cliArgs:           utils.ToPtr("-f /etc/ptp4l.conf"),
-			expectedClockType: event.GM,
+			expectedClockType: event.TGM,
 			description:       "masterOnly interfaces should result in GM",
 		},
 		{
@@ -117,7 +117,7 @@ func TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs(t *testing.T) {
 			name:              "GM with masterOnly config",
 			config:            "[global]\n[ens1f0]\nmasterOnly 1\n",
 			cliArgs:           nil,
-			expectedClockType: event.GM,
+			expectedClockType: event.TGM,
 			description:       "masterOnly config should result in GM",
 		},
 		{
@@ -138,7 +138,7 @@ func TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs(t *testing.T) {
 			name:              "GM with empty cliArgs",
 			config:            "[global]\n[ens1f0]\nmasterOnly 1\n",
 			cliArgs:           utils.ToPtr(""),
-			expectedClockType: event.GM,
+			expectedClockType: event.TGM,
 			description:       "Empty CLI args string with masterOnly should result in GM",
 		},
 		{
@@ -180,7 +180,7 @@ func TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs(t *testing.T) {
 			name:              "GM with no slave configuration",
 			config:            "[global]\n[ens1f0]\n[ens1f1]\n",
 			cliArgs:           utils.ToPtr("-f /etc/ptp4l.conf -m"),
-			expectedClockType: event.GM,
+			expectedClockType: event.TGM,
 			description:       "Multiple interfaces with no explicit master/slave settings should result in GM",
 		},
 		{
@@ -201,14 +201,14 @@ func TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs(t *testing.T) {
 			name:              "GM with --slaveOnly 0",
 			config:            "[global]\n[ens1f0]\n",
 			cliArgs:           utils.ToPtr("--slaveOnly 0 -f /etc/ptp4l.conf"),
-			expectedClockType: event.GM,
+			expectedClockType: event.TGM,
 			description:       "CLI --slaveOnly 0 should result in GM",
 		},
 		{
 			name:              "GM with --slaveOnly=0",
 			config:            "[global]\n[ens1f0]\n",
 			cliArgs:           utils.ToPtr("--slaveOnly=0 -f /etc/ptp4l.conf"),
-			expectedClockType: event.GM,
+			expectedClockType: event.TGM,
 			description:       "CLI --slaveOnly=0 should result in GM",
 		},
 		{
@@ -229,14 +229,14 @@ func TestPtp4lConf_PopulatePtp4lConf_ClockTypeWithCliArgs(t *testing.T) {
 			name:              "GM with --clientOnly 0",
 			config:            "[global]\n[ens1f0]\n",
 			cliArgs:           utils.ToPtr("--clientOnly 0 -f /etc/ptp4l.conf"),
-			expectedClockType: event.GM,
+			expectedClockType: event.TGM,
 			description:       "CLI --clientOnly 0 should result in GM",
 		},
 		{
 			name:              "GM with --clientOnly=0",
 			config:            "[global]\n[ens1f0]\n",
 			cliArgs:           utils.ToPtr("--clientOnly=0 -f /etc/ptp4l.conf"),
-			expectedClockType: event.GM,
+			expectedClockType: event.TGM,
 			description:       "CLI --clientOnly=0 should result in GM",
 		},
 		{

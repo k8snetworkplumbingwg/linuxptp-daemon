@@ -22,6 +22,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clockmgr"
 	dpllnl "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
+
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ptpconfig"
@@ -852,7 +853,7 @@ func (dn *Daemon) prepareProfile(nodeProfile *ptpv1.PtpProfile) event.PtpClockTh
 func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile, topology *ProfileTopology) error {
 	th := dn.prepareProfile(nodeProfile)
 
-	clockType, leadingNic, upstreamPorts, err := dn.inspectProfile(nodeProfile)
+	clockType, leadingNic, upstreamPorts, err := ptpconfig.InspectProfile(nodeProfile)
 	if err != nil {
 		printNodeProfile(nodeProfile)
 		return err
@@ -1086,44 +1087,6 @@ func (dn *Daemon) findProfile(name string) *ptpv1.PtpProfile {
 		}
 	}
 	return nil
-}
-
-func (*Daemon) inspectProfile(nodeProfile *ptpv1.PtpProfile) (event.ClockType, string, []string, error) {
-	var clockType event.ClockType
-
-	profileClockType, profileClockTypefound := nodeProfile.PtpSettings["clockType"]
-	var leadingNic string
-	var upstreamPorts []string
-
-	if profileClockTypefound {
-		switch profileClockType {
-		case string(event.TGM):
-			clockType = event.TGM
-		case string(event.TBC):
-			clockType = event.TBC
-			leadingNic = nodeProfile.PtpSettings["leadingInterface"]
-			if portsStr, ok := nodeProfile.PtpSettings["upstreamPort"]; ok {
-				upstreamPorts = strings.Split(portsStr, ",")
-			}
-		default:
-			clockType = event.ClockUnset
-		}
-	} else {
-		clockType = event.ClockUnset
-	}
-	// If unset default to clock type inferred from ptp4l
-	if clockType == event.ClockUnset {
-		ptp4lOutput := &ptpconfig.Ptp4lConf{}
-		// Parsing ptp4l needs to be done here to get the fallback clock type.
-		// Needs to be done outside the loop as we need to guarantee clockType
-		// set before the event.Ts2PhcProcessName case where it is used.
-		err := ptp4lOutput.PopulatePtp4lConf(nodeProfile.Ptp4lConf, nodeProfile.Ptp4lOpts)
-		if err != nil {
-			return "", "", nil, err
-		}
-		clockType = ptp4lOutput.ClockType
-	}
-	return clockType, leadingNic, upstreamPorts, nil
 }
 
 // Validate that all plugin names in the profile match registered plugins
@@ -1451,27 +1414,7 @@ func osClockFilterConfig(nodeProfile *ptpv1.PtpProfile) clock.OSClockFilterConfi
 // cloud-event-proxy's UpdatePTPThreshold. It is the single source of truth for
 // both the openshift_ptp_threshold gauge and the BC/OC clock state machine.
 func resolvePTPThreshold(nodeProfile *ptpv1.PtpProfile) event.PtpClockThreshold {
-	maxOffset, minOffset, holdoverTimeout := int64(100), int64(-100), int64(5)
-	if th := nodeProfile.PtpClockThreshold; th != nil {
-		if th.MaxOffsetThreshold > 0 {
-			maxOffset = th.MaxOffsetThreshold
-		}
-		if th.MinOffsetThreshold > maxOffset {
-			minOffset = maxOffset - 1 // keep min one ns below max
-		} else {
-			minOffset = th.MinOffsetThreshold
-		}
-		if th.HoldOverTimeout > 0 {
-			holdoverTimeout = th.HoldOverTimeout
-		}
-	} else if isNtpFailoverEnabled(nodeProfile) {
-		maxOffset, minOffset = 1000, -1000
-	}
-	return event.PtpClockThreshold{
-		MaxOffsetThreshold: maxOffset,
-		MinOffsetThreshold: minOffset,
-		HoldOverTimeout:    holdoverTimeout,
-	}
+	return ptpconfig.ResolvePTPThreshold(nodeProfile)
 }
 
 func haSocketOpts(topology *ProfileTopology) string {

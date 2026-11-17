@@ -3,6 +3,9 @@ package utils
 
 import (
 	"regexp"
+	"strings"
+
+	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
 // ToPtr returns a pointer to a copy of v.
@@ -51,4 +54,28 @@ func GetAliasValue(ifname string) string {
 		}
 	}
 	return alias
+}
+
+// GetProfileName returns the profile name or "<nil>" if the profile or the name is nil
+func GetProfileName(profile *ptpv1.PtpProfile) string {
+	profileName := "<nil>"
+	if profile != nil && profile.Name != nil {
+		profileName = *profile.Name
+	}
+	return profileName
+}
+
+const ptpHAIdentifier = "haProfiles"
+
+// ListHAMemberProfiles lists all profiles that are a member of the given profile.
+// Returns an empty slice if this is not an HA profile
+func ListHAMemberProfiles(nodeProfile *ptpv1.PtpProfile) []string {
+	var haProfiles []string
+	if profiles, ok := nodeProfile.PtpSettings[ptpHAIdentifier]; ok {
+		haProfiles = strings.Split(profiles, ",")
+		for index, profile := range haProfiles {
+			haProfiles[index] = strings.TrimSpace(profile)
+		}
+	}
+	return haProfiles
 }

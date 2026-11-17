@@ -10,6 +10,8 @@ const (
 	BC ClockType = "BC"
 	// TBC is a Telco Boundary Clock (T-BC) with DPLL, ts2phc, and E810 plugin.
 	TBC ClockType = "T-BC"
+	// TTSC is the TR part of T-BC only
+	TTSC ClockType = "T-TSC"
 	// OC ...
 	OC ClockType = "OC"
 	// HA is a High Availability clock: a composite of multiple BC instances with a
