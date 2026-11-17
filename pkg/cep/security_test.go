@@ -120,7 +120,7 @@ func TestNodeServingHostnameVerification(t *testing.T) {
 }
 
 // Exercise the actual handlers and PubSub writer over TLS, including initial
-// notification and later push, while treating local test sockets as remote peers.
+// notification and later push, over real loopback connections.
 func TestSecureSubscribePullPush(t *testing.T) {
 	cfg := securityTestConfig(t)
 	cfg.RequiredAudiences = []string{"event-api"}
@@ -131,21 +131,15 @@ func TestSecureSubscribePullPush(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			r.RemoteAddr = "192.0.2.1:1234"
-			next.ServeHTTP(w, r)
-		})
-	}
 	pushes := make(chan []byte, 2)
-	callback := httptest.NewUnstartedServer(remote(security.protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	callback := httptest.NewUnstartedServer(security.protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
 			t.Error(readErr)
 		}
 		pushes <- body
 		w.WriteHeader(http.StatusNoContent)
-	}))))
+	})))
 	callback.TLS = security.TLS.Clone()
 	callback.StartTLS()
 	defer callback.Close()
@@ -157,7 +151,7 @@ func TestSecureSubscribePullPush(t *testing.T) {
 	ps := NewPubSub(store, writer)
 	proxy := NewCloudEventProxy(cache, ps, "worker-0", "https://publisher.example:9043")
 	proxy.Security = security
-	api := httptest.NewUnstartedServer(remote(proxy.Handler()))
+	api := httptest.NewUnstartedServer(proxy.Handler())
 	api.TLS = security.TLS.Clone()
 	api.StartTLS()
 	defer api.Close()
@@ -205,21 +199,48 @@ func TestSecureSubscribePullPush(t *testing.T) {
 	ps.Publish(updated)
 	checkPush()
 
-	// A real HTTPS connection with the server CA but no credentials is rejected.
-	tlsConfig, err := cfg.CreateTLSConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tlsConfig.Certificates = nil
-	anonymous := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}}
-	defer anonymous.CloseIdleConnections()
-	response, err = anonymous.Get(api.URL + apiBase + "subscriptions")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != 401 {
-		t.Fatalf("anonymous HTTP %d", response.StatusCode)
+	// Fresh, hostname-verified TLS connections must enforce both credentials
+	// even though the API and callback listeners are on loopback.
+	for _, tc := range []struct {
+		name, method, path, token string
+		cert                      bool
+		want                      int
+	}{
+		{"anonymous", http.MethodGet, "subscriptions", "", false, 401},
+		{"token only", http.MethodGet, "subscriptions", "test-token", false, 401},
+		{"certificate only", http.MethodGet, "subscriptions", "", true, 401},
+		{"invalid token", http.MethodGet, "subscriptions", "invalid", true, 401},
+		{"authenticated discovery", http.MethodGet, "publishers", "test-token", true, 200},
+		{"health", http.MethodGet, "health", "", false, 200},
+		{"health POST anonymous", http.MethodPost, "health", "", false, 401},
+		{"health POST authenticated", http.MethodPost, "health", "test-token", true, 405},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tlsConfig, tlsErr := cfg.CreateTLSConfig()
+			if tlsErr != nil {
+				t.Fatal(tlsErr)
+			}
+			if !tc.cert {
+				tlsConfig.Certificates = nil
+			}
+			client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}, Timeout: 5 * time.Second}
+			defer client.CloseIdleConnections()
+			request, requestErr := http.NewRequest(tc.method, api.URL+apiBase+tc.path, nil)
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			if tc.token != "" {
+				request.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			response, requestErr := client.Do(request)
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != tc.want {
+				t.Fatalf("got HTTP %d want %d", response.StatusCode, tc.want)
+			}
+		})
 	}
 }
 
@@ -233,54 +254,122 @@ func (v testValidator) ValidateToken(_ context.Context, token string, audiences 
 }
 
 func TestProtectedRouteAuthentication(t *testing.T) {
-	for _, route := range []string{"subscriptions", "subscriptions/id", "publishers", "cluster/node/test/sync/ptp-status/lock-state/CurrentState"} {
-		for _, tc := range []struct {
-			name                  string
-			cert, token, accepted bool
-			want                  int
-		}{
-			{"neither", false, false, true, 401}, {"certificate only", true, false, true, 401},
-			{"token only", false, true, true, 401}, {"rejected token", true, true, false, 401},
-			{"both", true, true, true, 204},
-		} {
-			t.Run(route+"/"+tc.name, func(t *testing.T) {
-				s := &Security{Config: &auth.Config{ServerConfig: &auth.ServerConfig{EnableMTLS: true, EnableOAuth: true, RequiredAudiences: []string{"event-api"}}}, Validator: testValidator{tc.accepted}}
-				request := httptest.NewRequest(http.MethodGet, apiBase+route, nil)
-				request.RemoteAddr = "192.0.2.1:1234"
-				if tc.cert {
-					request.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
-				}
-				if tc.token {
-					request.Header.Set("Authorization", "Bearer test-token")
-				}
-				response := httptest.NewRecorder()
-				s.protect(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })).ServeHTTP(response, request)
-				if response.Code != tc.want {
-					t.Fatalf("got %d want %d", response.Code, tc.want)
-				}
-			})
+	for _, remote := range []string{"192.0.2.1:1234", "127.0.0.1:1234", "127.0.0.2:1234", "[::1]:1234", "[::ffff:127.0.0.1]:1234", "malformed"} {
+		for _, route := range []string{"subscriptions", "subscriptions/id", "publishers", "cluster/node/test/sync/ptp-status/lock-state/CurrentState"} {
+			for _, tc := range []struct {
+				name                  string
+				mtls, oauth           bool
+				cert, token, accepted bool
+				want                  int
+			}{
+				{"neither", true, true, false, false, true, 401},
+				{"certificate only", true, true, true, false, true, 401},
+				{"token only", true, true, false, true, true, 401},
+				{"rejected token", true, true, true, true, false, 401},
+				{"both", true, true, true, true, true, 204},
+				{"mtls missing", true, false, false, false, true, 401},
+				{"mtls valid", true, false, true, false, true, 204},
+				{"oauth missing", false, true, false, false, true, 401},
+				{"oauth valid", false, true, false, true, true, 204},
+				{"disabled", false, false, false, false, false, 204},
+			} {
+				t.Run(remote+"/"+route+"/"+tc.name, func(t *testing.T) {
+					s := &Security{Config: &auth.Config{ServerConfig: &auth.ServerConfig{EnableMTLS: tc.mtls, EnableOAuth: tc.oauth, RequiredAudiences: []string{"event-api"}}}, Validator: testValidator{tc.accepted}}
+					request := httptest.NewRequest(http.MethodGet, apiBase+route, nil)
+					request.RemoteAddr = remote
+					// Neither a caller-controlled host nor forwarding headers grant trust.
+					request.Host = "localhost"
+					request.Header.Set("X-Forwarded-For", "127.0.0.1")
+					request.Header.Set("Forwarded", "for=127.0.0.1")
+					if tc.cert {
+						request.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
+					}
+					if tc.token {
+						request.Header.Set("Authorization", "Bearer test-token")
+					}
+					response := httptest.NewRecorder()
+					s.protect(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })).ServeHTTP(response, request)
+					if response.Code != tc.want {
+						t.Fatalf("got %d want %d", response.Code, tc.want)
+					}
+				})
+			}
 		}
 	}
 }
 
 func TestAuthenticationExceptions(t *testing.T) {
 	s := &Security{Config: &auth.Config{ServerConfig: &auth.ServerConfig{EnableMTLS: true, EnableOAuth: true}}}
-	for _, tc := range []struct {
-		path, remote string
-		want         int
-	}{
-		{apiBase + "health", "192.0.2.1:1234", 204},
-		{apiBase + "subscriptions", "127.0.0.1:1234", 204},
-		{apiBase + "subscriptions", "[::1]:1234", 204},
-		{apiBase + "health/extra", "192.0.2.1:1234", 401},
-	} {
-		r := httptest.NewRequest("GET", tc.path, nil)
-		r.RemoteAddr = tc.remote
-		r.Header.Set("X-Forwarded-For", "127.0.0.1")
-		w := httptest.NewRecorder()
-		s.protect(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })).ServeHTTP(w, r)
-		if w.Code != tc.want {
-			t.Fatalf("%s: got %d want %d", tc.path, w.Code, tc.want)
+	for _, remote := range []string{"192.0.2.1:1234", "127.0.0.1:1234", "[::1]:1234"} {
+		for _, tc := range []struct {
+			method, path string
+			want         int
+		}{
+			{http.MethodGet, "health", 204},
+			{http.MethodHead, "health", 401},
+			{http.MethodPost, "health", 401},
+			{http.MethodGet, "subscriptions", 401},
+			{http.MethodGet, "health/extra", 401},
+			{http.MethodGet, "health/", 401},
+		} {
+			t.Run(remote+"/"+tc.method+"/"+tc.path, func(t *testing.T) {
+				r := httptest.NewRequest(tc.method, apiBase+tc.path, nil)
+				r.RemoteAddr = remote
+				w := httptest.NewRecorder()
+				s.protect(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })).ServeHTTP(w, r)
+				if w.Code != tc.want {
+					t.Fatalf("got %d want %d", w.Code, tc.want)
+				}
+			})
+		}
+	}
+}
+
+// Native CEPv2 never exposes legacy registration, injection or debug handlers.
+func TestNativeRouteBoundary(t *testing.T) {
+	for _, secured := range []bool{false, true} {
+		store, err := NewDiskStore(filepath.Join(t.TempDir(), "subscriptions.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ps := NewPubSub(store, func(string) io.Writer {
+			t.Error("unsupported operation attempted a callback")
+			return io.Discard
+		})
+		proxy := NewCloudEventProxy(NewEventCache("worker-0"), ps, "worker-0", "https://publisher.example:9043")
+		proxy.Security = &Security{Config: &auth.Config{ServerConfig: &auth.ServerConfig{EnableMTLS: secured, EnableOAuth: secured, RequiredAudiences: []string{"event-api"}}}, Validator: testValidator{true}}
+		for _, tc := range []struct {
+			method, path string
+			want         int
+		}{
+			{http.MethodGet, "health", 200},
+			{http.MethodPost, "health", 405},
+			{http.MethodHead, "health", 405},
+			{http.MethodGet, "publishers", 200},
+			{http.MethodPost, "publishers", 405},
+			{http.MethodDelete, "publishers", 405},
+			{http.MethodGet, "publishers/id", 404},
+			{http.MethodDelete, "publishers/id", 405},
+			{http.MethodPut, "subscriptions/status/id", 405},
+			{http.MethodPost, "create/event", 405},
+			{http.MethodPost, "log", 405},
+			{http.MethodPost, "dummy", 405},
+			{http.MethodPost, "dummy2", 405},
+		} {
+			t.Run(fmt.Sprintf("secured=%t/%s/%s", secured, tc.method, tc.path), func(t *testing.T) {
+				r := httptest.NewRequest(tc.method, apiBase+tc.path, nil)
+				r.RemoteAddr = "127.0.0.1:1234"
+				r.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
+				r.Header.Set("Authorization", "Bearer test-token")
+				w := httptest.NewRecorder()
+				proxy.Handler().ServeHTTP(w, r)
+				if w.Code != tc.want {
+					t.Fatalf("got %d want %d", w.Code, tc.want)
+				}
+				if tc.path == "health" && tc.want == 405 && w.Header().Get("Allow") != http.MethodGet {
+					t.Fatal("health must advertise GET as its only allowed method")
+				}
+			})
 		}
 	}
 }
