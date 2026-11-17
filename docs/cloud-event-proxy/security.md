@@ -28,9 +28,19 @@ The JSON options retain CEPv1 names:
 ```
 
 Both enabled mechanisms must pass on subscriptions, publishers and CurrentState
-routes. Health and loopback retain CEPv1 exceptions. With hostNetwork, loopback
-is a node boundary, not proof of a caller in the same pod. Forwarding headers
-cannot activate the exception. Endpoint authorization is not part of this step.
+routes, including requests from IPv4 and IPv6 loopback. With hostNetwork,
+loopback is a node boundary, not proof of a caller in the same pod. Source
+addresses, Host values and forwarding headers never grant an authentication
+exception. Only exact GET /api/ocloudNotifications/v2/health is exempt; other
+methods on that path are unsupported. Endpoint authorization is not part of
+this step.
+
+CEPv2 ingests events through native daemon IPC and derives publisher discovery
+from its resources. It does not expose legacy publisher registration, event
+injection or debug APIs such as POST /publishers, /create/event or /dummy.
+GET /publishers remains authenticated discovery. No internal HTTP self-call
+migration is needed in CEPv2; the separate CEPv1 migration remains parked.
+The native IPC permissions and privileged host boundary are unchanged.
 
 The operator provisions a Service CA certificate for each node's publisher
 Service. Its Pod admission webhook selects a direct mount of that node's Secret;
@@ -66,8 +76,9 @@ retains plaintext compatibility when no auth config or TLS flags are supplied.
 CGO_ENABLED=0 go test -tags unittests ./pkg/auth ./pkg/cep ./cmd/cloud-event-proxy
 ```
 
-Tests cover cumulative certificate/token checks, protected routes, health and
-loopback exceptions, missing configuration, TokenReview cache and audience
+Tests cover cumulative certificate/token checks, protected loopback and remote
+requests, the exact GET health exception, unsupported internal APIs, missing
+configuration, TokenReview cache and audience
 behavior, and a TLS integration test covering subscription, initial notification,
 CurrentState pull, later push, and rejection of anonymous requests. A separate
 callback test verifies rotating bearer tokens. Cluster rollout,

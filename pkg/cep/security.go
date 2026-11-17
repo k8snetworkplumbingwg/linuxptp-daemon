@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 
@@ -70,14 +69,13 @@ func (w *authenticatedWriter) Write(data []byte) (int, error) {
 
 func (s *Security) protect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s == nil || s.Config == nil || !s.Config.IsAuthenticationEnabled() || r.URL.Path == apiBase+"health" {
+		if s == nil || s.Config == nil || !s.Config.IsAuthenticationEnabled() {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// CEPv1 compatibility: loopback is a node boundary with hostNetwork, not a
-		// guarantee that the caller runs in this pod. Never trust forwarding headers.
-		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		// Only the minimal GET probe is exempt. With hostNetwork, loopback is
+		// shared with host processes and other workloads, not a caller identity.
+		if r.Method == http.MethodGet && r.URL.Path == apiBase+"health" {
 			next.ServeHTTP(w, r)
 			return
 		}

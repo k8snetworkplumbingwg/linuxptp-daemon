@@ -200,10 +200,10 @@ func (c *Config) CreateTLSConfig() (*tls.Config, error) {
 // It presents the server certificate (ServerCertPath/ServerKeyPath) and, when a
 // CA is configured, verifies a client certificate presented by the peer.
 // The handshake permits a missing certificate; middleware must then enforce
-// every enabled mechanism on protected remote requests. This also supports
-// OAuth-only mode and the loopback exemption. The centrally-managed TLS profile
-// (min version + cipher suites from the cluster TLSSecurityProfile) is applied
-// on top.
+// every enabled mechanism on protected requests, including loopback. This
+// supports OAuth-only mode and the minimal GET health exception. The centrally
+// managed TLS profile (min version + cipher suites from the cluster
+// TLSSecurityProfile) is applied on top.
 //
 // This is the server-role counterpart of CreateTLSConfig: per O-RAN CR-0003
 // clause 4.1.1 a callback reachable from a separate POD/VM must be protected by
@@ -240,10 +240,9 @@ func (c *Config) CreateServerTLSConfig() (*tls.Config, error) {
 		// SECURITY CONTRACT: because a missing client certificate is tolerated
 		// here, the HTTP handler in front of this listener MUST enforce
 		// authentication per request - require a verified client certificate
-		// when EnableMTLS and validate the bearer token when EnableOAuth (with a
-		// loopback exemption). Serving traffic off this tls.Config without middleware
-		// would accept unauthenticated requests. In hostNetwork pods, loopback
-		// identifies the node network namespace, not just this pod.
+		// when EnableMTLS and validate the bearer token when EnableOAuth.
+		// Only the minimal GET health probe is exempt. Serving traffic off this
+		// tls.Config without middleware would accept unauthenticated requests.
 		tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
 	}
 
