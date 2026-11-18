@@ -79,7 +79,7 @@ func main() {
 				glog.Fatalf("TokenReview setup failed: %v", err)
 			}
 		}
-		security, writer, err = cep.NewSecurity(cfg, validator)
+		security, writer, err = cep.NewSecurity(cfg, validator, 2*time.Second)
 		if err != nil {
 			glog.Fatalf("security setup failed: %v", err)
 		}

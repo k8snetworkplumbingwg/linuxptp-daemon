@@ -20,6 +20,7 @@ package auth
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -33,6 +34,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestApplyTLSProfileEnforcesTLS12Floor(t *testing.T) {
+	for _, version := range []string{"", "unknown", "VersionTLS10", "VersionTLS11"} {
+		t.Run(version, func(t *testing.T) {
+			cfg := &tls.Config{}
+			(&ServerConfig{TLSMinVersion: version}).ApplyTLSProfile(cfg)
+			assert.Equal(t, uint16(tls.VersionTLS12), cfg.MinVersion)
+		})
+	}
+
+	cfg := &tls.Config{MinVersion: tls.VersionTLS13}
+	(&ServerConfig{TLSMinVersion: "VersionTLS11"}).ApplyTLSProfile(cfg)
+	assert.Equal(t, uint16(tls.VersionTLS13), cfg.MinVersion)
+}
 
 // writeTestCerts generates a self-signed certificate usable as both a leaf
 // (client) certificate and its own CA, writing cert/key/ca PEM files into a

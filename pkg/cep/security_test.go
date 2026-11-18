@@ -51,7 +51,7 @@ func securityTestConfig(t *testing.T) *auth.Config {
 
 func TestSecuredCallbackTLSAndTokenRotation(t *testing.T) {
 	cfg := securityTestConfig(t)
-	security, writer, err := NewSecurity(cfg, testValidator{true})
+	security, writer, err := NewSecurity(cfg, testValidator{true}, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestSecureSubscribePullPush(t *testing.T) {
 	if writeErr := os.WriteFile(cfg.ServiceAccountToken, []byte("test-token"), 0600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	security, writer, err := NewSecurity(cfg, testValidator{true})
+	security, writer, err := NewSecurity(cfg, testValidator{true}, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestNativeRouteBoundary(t *testing.T) {
 
 func TestSecurityFailsClosedOnIncompleteConfiguration(t *testing.T) {
 	for _, cfg := range []*auth.Config{nil, {ServerConfig: &auth.ServerConfig{EnableMTLS: true}}, {ServerConfig: &auth.ServerConfig{EnableOAuth: true}}} {
-		if _, _, err := NewSecurity(cfg, nil); err == nil {
+		if _, _, err := NewSecurity(cfg, nil, 2*time.Second); err == nil {
 			t.Fatal("accepted incomplete security configuration")
 		}
 	}

@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,6 +42,17 @@ func TestNewAuthenticatedClient_NilConfig(t *testing.T) {
 	assert.False(t, ac.IsAuthenticated())
 	assert.NotNil(t, ac.GetClient())
 	assert.NotNil(t, ac.GetAuthConfig())
+}
+
+func TestNewAuthenticatedClientWithTimeout(t *testing.T) {
+	const timeout = 2 * time.Second
+	ac, err := NewAuthenticatedClientWithTimeout(nil, timeout)
+	require.NoError(t, err)
+	assert.Equal(t, timeout, ac.GetClient().Timeout)
+
+	defaultClient, err := NewAuthenticatedClient(nil)
+	require.NoError(t, err)
+	assert.Equal(t, 30*time.Second, defaultClient.GetClient().Timeout)
 }
 
 func TestNewAuthenticatedClient_InvalidConfig(t *testing.T) {

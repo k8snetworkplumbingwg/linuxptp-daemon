@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/auth"
 )
@@ -18,12 +19,13 @@ type Security struct {
 	Validator auth.TokenValidator
 }
 
-// NewSecurity creates inbound authentication and an outbound callback writer.
-func NewSecurity(config *auth.Config, validator auth.TokenValidator) (*Security, WriterFunc, error) {
+// NewSecurity creates inbound authentication and an outbound callback writer
+// with the supplied callback request timeout.
+func NewSecurity(config *auth.Config, validator auth.TokenValidator, callbackTimeout time.Duration) (*Security, WriterFunc, error) {
 	if config == nil {
 		return nil, nil, fmt.Errorf("authentication configuration is required")
 	}
-	client, err := auth.NewAuthenticatedClient(config)
+	client, err := auth.NewAuthenticatedClientWithTimeout(config, callbackTimeout)
 	if err != nil {
 		return nil, nil, err
 	}
