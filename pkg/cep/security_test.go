@@ -232,13 +232,13 @@ func TestSecureSubscribePullPush(t *testing.T) {
 			if tc.token != "" {
 				request.Header.Set("Authorization", "Bearer "+tc.token)
 			}
-			response, requestErr := client.Do(request)
+			testResponse, requestErr := client.Do(request)
 			if requestErr != nil {
 				t.Fatal(requestErr)
 			}
-			defer response.Body.Close()
-			if response.StatusCode != tc.want {
-				t.Fatalf("got HTTP %d want %d", response.StatusCode, tc.want)
+			defer testResponse.Body.Close()
+			if testResponse.StatusCode != tc.want {
+				t.Fatalf("got HTTP %d want %d", testResponse.StatusCode, tc.want)
 			}
 		})
 	}
