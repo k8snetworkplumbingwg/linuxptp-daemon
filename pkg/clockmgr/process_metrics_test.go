@@ -49,7 +49,7 @@ func newProcessMetricManager(t *testing.T, clockType event.ClockType) (*ClockMan
 	var clk clock.Clock
 	var err error
 	switch clockType {
-	case event.GM:
+	case event.TGM:
 		clk, err = clock.NewGM(testClockmgrPtp4lConfig, func() int { return 37 }, &pmc.MockClient{})
 	case event.TBC:
 		clk, err = clock.NewTBC(testClockmgrPtp4lConfig, func() int { return 37 }, &pmc.MockClient{}, "")
@@ -62,7 +62,7 @@ func newProcessMetricManager(t *testing.T, clockType event.ClockType) (*ClockMan
 }
 
 func TestProcessClockStateMetrics(t *testing.T) {
-	for _, clockType := range []event.ClockType{event.GM, event.TBC} {
+	for _, clockType := range []event.ClockType{event.TGM, event.TBC} {
 		t.Run(string(clockType), func(t *testing.T) {
 			cm, gauge := newProcessMetricManager(t, clockType)
 			const iface = "process-metric-port"
@@ -148,9 +148,9 @@ func TestSyncEClockStateMetrics(t *testing.T) {
 func TestProcessClockStateMetricsWithoutInterface(t *testing.T) {
 	for _, iface := range []string{"", event.LEADING_INTERFACE_UNKNOWN} {
 		t.Run(iface, func(t *testing.T) {
-			cm, gauge := newProcessMetricManager(t, event.GM)
+			cm, gauge := newProcessMetricManager(t, event.TGM)
 			cm.ProcessEvent(event.Event{Source: event.GNSS, CfgName: testClockmgrPtp4lConfig,
-				ClockType: event.GM, IFace: iface, Data: &event.GNSSData{GPSStatus: 3}})
+				ClockType: event.TGM, IFace: iface, Data: &event.GNSSData{GPSStatus: 3}})
 			require.False(t, gauge.Delete(prometheus.Labels{
 				processLabel: "gnss", nodeLabel: "testnode", ifaceLabel: iface,
 			}))
