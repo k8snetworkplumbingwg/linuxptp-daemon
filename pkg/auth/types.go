@@ -37,7 +37,7 @@ type ServerConfig struct {
 	UseOpenShiftOAuth   bool     `json:"useOpenShiftOAuth"`   // Compatibility hint; the token is read from ServiceAccountToken
 
 	// TLS profile - centrally managed by the cluster's TLSSecurityProfile and
-	// propagated by the operator. Nothing is hardcoded in this library.
+	// propagated by the operator, subject to the TLS 1.2 security floor.
 	TLSMinVersion   string   `json:"tlsMinVersion"`   // e.g. "VersionTLS12", "VersionTLS13"
 	TLSCipherSuites []string `json:"tlsCipherSuites"` // IANA cipher suite names
 }
@@ -101,14 +101,13 @@ func cipherSuitesFromNames(names []string) []uint16 {
 
 // ApplyTLSProfile applies the centrally-managed TLS profile (min version and
 // cipher suites, sourced from the cluster's TLSSecurityProfile via the
-// operator) onto a tls.Config. Nothing is hardcoded here: values come from the
-// authentication configuration. Only when no min version is supplied at all do we fall back to
-// TLS 1.2 to avoid negotiating an insecure protocol by default.
+// operator) onto a tls.Config. TLS 1.2 is the minimum supported protocol, even
+// if an older or unknown version is supplied.
 func (c *ServerConfig) ApplyTLSProfile(cfg *tls.Config) {
 	if c == nil {
 		return
 	}
-	if mv := tlsVersionFromString(c.TLSMinVersion); mv != 0 {
+	if mv := tlsVersionFromString(c.TLSMinVersion); mv >= tls.VersionTLS12 {
 		cfg.MinVersion = mv
 	} else if cfg.MinVersion == 0 {
 		cfg.MinVersion = tls.VersionTLS12

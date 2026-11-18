@@ -30,6 +30,8 @@ type AuthenticatedClient struct {
 	authConfig *Config
 }
 
+const defaultHTTPClientTimeout = 30 * time.Second
+
 // rejectInsecureRedirect refuses to follow a redirect to a non-HTTPS target so
 // that a credential-bearing request cannot be downgraded to cleartext.
 func rejectInsecureRedirect(req *http.Request, _ []*http.Request) error {
@@ -53,11 +55,17 @@ func rejectUnsafeRedirect(config *Config) func(*http.Request, []*http.Request) e
 
 // NewAuthenticatedClient creates a new authenticated HTTP client
 func NewAuthenticatedClient(authConfig *Config) (*AuthenticatedClient, error) {
+	return NewAuthenticatedClientWithTimeout(authConfig, defaultHTTPClientTimeout)
+}
+
+// NewAuthenticatedClientWithTimeout creates an authenticated HTTP client with
+// the caller's request timeout.
+func NewAuthenticatedClientWithTimeout(authConfig *Config, timeout time.Duration) (*AuthenticatedClient, error) {
 	if authConfig == nil {
 		// Return a basic HTTP client if no auth config is provided
 		return &AuthenticatedClient{
 			client: &http.Client{
-				Timeout: 30 * time.Second,
+				Timeout: timeout,
 			},
 			// Initialize the embedded Config so the no-auth client is safe
 			// to use: Do/IsAuthenticated read promoted fields (EnableOAuth,
@@ -72,7 +80,7 @@ func NewAuthenticatedClient(authConfig *Config) (*AuthenticatedClient, error) {
 	}
 
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: timeout,
 	}
 
 	// Both modes use HTTPS; OAuth-only also needs the configured server CA.
