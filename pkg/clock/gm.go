@@ -150,7 +150,7 @@ func (c *GM) announceClockClassIfChanged(ev event.Event, clockState SyncState) {
 			glog.Errorf("error updating clock class %s", err)
 		} else {
 			glog.Infof("updated clock class to %d", clockClass)
-			clockClassOut := utils.GetClockClassLogMessage(event.PTP4lProcessName, c.cfgName, clockClass)
+			clockClassOut := utils.GetClockClassLogMessage(event.Ptp4lProcessName, c.cfgName, clockClass)
 			fmt.Printf("%s", clockClassOut)
 		}
 	}
@@ -175,7 +175,7 @@ func (c *GM) getLeadingInterface() string {
 	for _, d := range c.data {
 		if d.ProcessName == event.GNSS && len(d.Details) > 0 {
 			return d.Details[0].IFace
-		} else if d.ProcessName == event.TS2PHCProcessName && len(d.Details) > 0 {
+		} else if d.ProcessName == event.Ts2PhcProcessName && len(d.Details) > 0 {
 			for _, dd := range d.Details {
 				if dd.SignalSource == event.GNSS {
 					return dd.IFace
@@ -228,14 +228,13 @@ func (c *GM) updateClockClass(clockClass fbprotocol.ClockClass) {
 }
 
 func (c *GM) announceClockClass() (clockClass fbprotocol.ClockClass, clockAccuracy fbprotocol.ClockAccuracy, err error) {
-	pmcCfgName := strings.Replace(c.cfgName, event.TS2PHCProcessName, event.PTP4lProcessName, 1)
+	pmcCfgName := strings.Replace(c.cfgName, event.Ts2PhcProcessName, event.Ptp4lProcessName, 1)
 	g, err := c.pmcClient.GetGMSettings(pmcCfgName)
 	if err != nil {
 		glog.Errorf("failed to get current GRANDMASTER_SETTINGS_NP: %s", err)
 		return clockClass, clockAccuracy, err
 	}
 	g.TimePropertiesDS.PtpTimescale = true
-	g.TimePropertiesDS.FrequencyTraceable = true
 	g.TimePropertiesDS.CurrentUtcOffsetValid = true
 	g.TimePropertiesDS.CurrentUtcOffset = int32(c.getUtcOffset())
 	switch c.syncState.ClockClass {
@@ -243,6 +242,7 @@ func (c *GM) announceClockClass() (clockClass fbprotocol.ClockClass, clockAccura
 		if g.ClockQuality.ClockClass != fbprotocol.ClockClass6 || !g.TimePropertiesDS.TimeTraceable {
 			g.ClockQuality.ClockClass = fbprotocol.ClockClass6
 			g.TimePropertiesDS.TimeTraceable = true
+			g.TimePropertiesDS.FrequencyTraceable = true
 			g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyNanosecond100
 			g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceGNSS
 			g.ClockQuality.OffsetScaledLogVariance = 0x4e5d
@@ -252,6 +252,7 @@ func (c *GM) announceClockClass() (clockClass fbprotocol.ClockClass, clockAccura
 		if g.ClockQuality.ClockClass != protocol.ClockClassOutOfSpec {
 			g.ClockQuality.ClockClass = protocol.ClockClassOutOfSpec
 			g.TimePropertiesDS.TimeTraceable = false
+			g.TimePropertiesDS.FrequencyTraceable = true
 			g.ClockQuality.ClockAccuracy = c.syncState.ClockAccuracy
 			g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 			g.ClockQuality.OffsetScaledLogVariance = 0xffff
@@ -261,15 +262,17 @@ func (c *GM) announceClockClass() (clockClass fbprotocol.ClockClass, clockAccura
 		if g.ClockQuality.ClockClass != fbprotocol.ClockClass7 {
 			g.ClockQuality.ClockClass = fbprotocol.ClockClass7
 			g.TimePropertiesDS.TimeTraceable = true
+			g.TimePropertiesDS.FrequencyTraceable = true
 			g.ClockQuality.ClockAccuracy = c.syncState.ClockAccuracy
 			g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 			g.ClockQuality.OffsetScaledLogVariance = 0xffff
 			err = c.pmcClient.SetGMSettings(pmcCfgName, g)
 		}
 	case protocol.ClockClassFreerun:
-		if g.ClockQuality.ClockClass != protocol.ClockClassFreerun {
+		if g.ClockQuality.ClockClass != protocol.ClockClassFreerun || g.TimePropertiesDS.FrequencyTraceable {
 			g.ClockQuality.ClockClass = protocol.ClockClassFreerun
 			g.TimePropertiesDS.TimeTraceable = false
+			g.TimePropertiesDS.FrequencyTraceable = false
 			g.ClockQuality.ClockAccuracy = fbprotocol.ClockAccuracyUnknown
 			g.TimePropertiesDS.TimeSource = fbprotocol.TimeSourceInternalOscillator
 			g.ClockQuality.OffsetScaledLogVariance = 0xffff
@@ -391,7 +394,7 @@ func (c *GM) updateState() SyncState {
 				}
 			case event.GNSS:
 				gnssState = d.State
-			case event.TS2PHCProcessName:
+			case event.Ts2PhcProcessName:
 				ts2phcState = d.State
 				if parser.NoSourceTSCount == 2 {
 					ts2phcState = event.PTP_FREERUN
