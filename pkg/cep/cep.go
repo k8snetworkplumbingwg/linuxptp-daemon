@@ -288,10 +288,16 @@ func (l *CloudEventProxy) ListenAndServe(ctx context.Context, port int, certFile
 		ReadHeaderTimeout: 5 * time.Second,
 		Handler:           l.Handler(),
 	}
+	useTLS := certFile != "" && keyFile != ""
 	if l.Security != nil && l.Security.TLS != nil {
 		server.TLSConfig = l.Security.TLS
-		certFile = l.Security.Config.ServerCertPath
-		keyFile = l.Security.Config.ServerKeyPath
+		certFile, keyFile = "", ""
+		useTLS = true
+		if l.Security.material != nil {
+			reloadCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			go l.Security.material.watch(reloadCtx)
+		}
 	}
 	go func() {
 		<-ctx.Done()
@@ -299,7 +305,7 @@ func (l *CloudEventProxy) ListenAndServe(ctx context.Context, port int, certFile
 			glog.Errorf("API server shutdown error: %v", err)
 		}
 	}()
-	if certFile != "" && keyFile != "" {
+	if useTLS {
 		glog.Infof("API server listening on :%d (TLS)", port)
 		if err := server.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 			return err

@@ -11,12 +11,12 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/auth"
 )
 
-// Security holds startup-loaded TLS material and the bearer validator. Configure
-// it before serving requests. Certificate/trust rotation requires a restart.
+// Security holds the listener configuration and bearer validator.
 type Security struct {
 	Config    *auth.Config
 	TLS       *tls.Config
 	Validator auth.TokenValidator
+	material  *tlsMaterial
 }
 
 // NewSecurity creates inbound authentication and an outbound callback writer
@@ -25,39 +25,58 @@ func NewSecurity(config *auth.Config, validator auth.TokenValidator, callbackTim
 	if config == nil {
 		return nil, nil, fmt.Errorf("authentication configuration is required")
 	}
-	client, err := auth.NewAuthenticatedClientWithTimeout(config, callbackTimeout)
-	if err != nil {
-		return nil, nil, err
-	}
 	security := &Security{Config: config, Validator: validator}
 	if config.IsAuthenticationEnabled() {
-		if err = config.ValidateCallbackHosts(); err != nil {
+		if err := config.ValidateCallbackHosts(); err != nil {
 			return nil, nil, err
 		}
-		security.TLS, err = config.CreateServerTLSConfig()
-		if err != nil {
+		security.material = &tlsMaterial{config: config, timeout: callbackTimeout}
+		if err := security.material.reload(); err != nil {
 			return nil, nil, err
 		}
+		security.TLS = &tls.Config{GetConfigForClient: security.material.serverConfig}
 	}
 	if config.EnableOAuth && validator == nil {
 		return nil, nil, fmt.Errorf("OAuth requires a TokenReview validator")
 	}
+	var plainClient *auth.AuthenticatedClient
+	if security.material == nil {
+		var err error
+		plainClient, err = auth.NewAuthenticatedClientWithTimeout(config, callbackTimeout)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	return security, func(endpoint string) io.Writer {
-		return &authenticatedWriter{endpoint: endpoint, client: client, config: config}
+		return &authenticatedWriter{endpoint: endpoint, client: plainClient, security: security}
 	}, nil
 }
 
 type authenticatedWriter struct {
 	endpoint string
 	client   *auth.AuthenticatedClient
-	config   *auth.Config
+	security *Security
 }
 
 func (w *authenticatedWriter) Write(data []byte) (int, error) {
-	if err := w.config.ValidateCallbackEndpoint(w.endpoint); err != nil {
+	if err := w.security.Config.ValidateCallbackEndpoint(w.endpoint); err != nil {
 		return 0, err
 	}
-	response, err := w.client.Post(w.endpoint, data)
+	client := w.client
+	if w.security.material != nil {
+		snapshot := w.security.material.current.Load()
+		if err := checkLeafTime(snapshot.clientLeaf); err != nil {
+			return 0, err
+		}
+		client = snapshot.client
+		// Close any connections opened by a request racing with rotation.
+		defer func() {
+			if w.security.material.current.Load() != snapshot {
+				client.GetClient().CloseIdleConnections()
+			}
+		}()
+	}
+	response, err := client.Post(w.endpoint, data)
 	if err != nil {
 		return 0, err
 	}

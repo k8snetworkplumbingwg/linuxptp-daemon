@@ -15,9 +15,11 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/url"
 	"os"
@@ -174,13 +176,9 @@ func (c *Config) CreateTLSConfig() (*tls.Config, error) {
 		tlsConfig.Certificates = []tls.Certificate{cert}
 	}
 	if c.CACertPath != "" {
-		caCert, err := os.ReadFile(c.CACertPath)
+		caCertPool, err := readCAPool(c.CACertPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read CA certificate: %v", err)
-		}
-		caCertPool := x509.NewCertPool()
-		if !caCertPool.AppendCertsFromPEM(caCert) {
-			return nil, fmt.Errorf("failed to parse CA certificate")
+			return nil, err
 		}
 		tlsConfig.RootCAs = caCertPool
 	}
@@ -225,13 +223,9 @@ func (c *Config) CreateServerTLSConfig() (*tls.Config, error) {
 	}
 
 	if c.CACertPath != "" {
-		var caCert []byte
-		if caCert, err = os.ReadFile(c.CACertPath); err != nil {
-			return nil, fmt.Errorf("failed to read CA certificate: %v", err)
-		}
-		caCertPool := x509.NewCertPool()
-		if !caCertPool.AppendCertsFromPEM(caCert) {
-			return nil, fmt.Errorf("failed to parse CA certificate")
+		caCertPool, err := readCAPool(c.CACertPath)
+		if err != nil {
+			return nil, err
 		}
 		tlsConfig.ClientCAs = caCertPool
 		// Verify presented certificates during the handshake. Middleware enforces
@@ -250,6 +244,39 @@ func (c *Config) CreateServerTLSConfig() (*tls.Config, error) {
 
 	log.Info("Created TLS configuration for callback server")
 	return tlsConfig, nil
+}
+
+// A partially valid bundle must not silently drop one of the configured CAs.
+func readCAPool(path string) (*x509.CertPool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CA certificate: %w", err)
+	}
+	pool := x509.NewCertPool()
+	begin := []byte("-----BEGIN CERTIFICATE-----")
+	end := []byte("-----END CERTIFICATE-----")
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return nil, fmt.Errorf("CA bundle is empty")
+	}
+	for len(data) > 0 {
+		endIndex := bytes.Index(data, end)
+		if !bytes.HasPrefix(data, begin) || endIndex < 0 {
+			return nil, fmt.Errorf("invalid CA bundle PEM")
+		}
+		certPEM, remaining := data[:endIndex+len(end)], data[endIndex+len(end):]
+		block, _ := pem.Decode(certPEM)
+		if block == nil || len(block.Headers) != 0 || bytes.Count(certPEM, begin) != 1 {
+			return nil, fmt.Errorf("invalid CA certificate PEM")
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse CA certificate: %w", err)
+		}
+		pool.AddCert(cert)
+		data = bytes.TrimSpace(remaining)
+	}
+	return pool, nil
 }
 
 // GetOAuthToken reads the OAuth token from the service account token file
