@@ -70,8 +70,8 @@ func (m *tlsMaterial) reload() error {
 		return fmt.Errorf("mTLS requires an inbound client CA pool")
 	}
 	serverLeaf := server.Certificates[0].Leaf
-	if err := checkLeaf(serverLeaf, x509.ExtKeyUsageServerAuth); err != nil {
-		return fmt.Errorf("serving certificate: %w", err)
+	if leafErr := checkLeaf(serverLeaf, x509.ExtKeyUsageServerAuth); leafErr != nil {
+		return fmt.Errorf("serving certificate: %w", leafErr)
 	}
 	// A new handshake must use the current trust pool, including after a CA is removed.
 	server.SessionTicketsDisabled = true
@@ -83,8 +83,8 @@ func (m *tlsMaterial) reload() error {
 	if m.config.EnableMTLS {
 		transport := client.GetClient().Transport.(*http.Transport)
 		clientLeaf = transport.TLSClientConfig.Certificates[0].Leaf
-		if err := checkLeaf(clientLeaf, x509.ExtKeyUsageClientAuth); err != nil {
-			return fmt.Errorf("callback client certificate: %w", err)
+		if leafErr := checkLeaf(clientLeaf, x509.ExtKeyUsageClientAuth); leafErr != nil {
+			return fmt.Errorf("callback client certificate: %w", leafErr)
 		}
 	}
 	// Kubernetes may swap the projected volume symlinks during a read.

@@ -56,9 +56,9 @@ func TestLiveTLSReload(t *testing.T) {
 	if err := os.WriteFile(cfg.ServiceAccountToken, []byte("test-token"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	security, writer, err := NewSecurity(cfg, testValidator{true}, 2*time.Second)
-	if err != nil {
-		t.Fatal(err)
+	security, writer, setupErr := NewSecurity(cfg, testValidator{true}, 2*time.Second)
+	if setupErr != nil {
+		t.Fatal(setupErr)
 	}
 	old := security.material.current.Load()
 	server := httptest.NewUnstartedServer(security.protect(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -78,14 +78,14 @@ func TestLiveTLSReload(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(dst, data, 0600); err != nil {
-			t.Fatal(err)
+		if writeErr := os.WriteFile(dst, data, 0600); writeErr != nil {
+			t.Fatal(writeErr)
 		}
 	}
 	next := securityTestConfig(t)
-	validCA, err := os.ReadFile(cfg.CACertPath)
-	if err != nil {
-		t.Fatal(err)
+	validCA, readErr := os.ReadFile(cfg.CACertPath)
+	if readErr != nil {
+		t.Fatal(readErr)
 	}
 	if err := os.WriteFile(cfg.CACertPath, append(validCA, []byte("-----BEGIN CERTIFICATE-----\n")...), 0600); err != nil {
 		t.Fatal(err)
