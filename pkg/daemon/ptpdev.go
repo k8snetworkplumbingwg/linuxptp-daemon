@@ -13,6 +13,7 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpclient "github.com/k8snetworkplumbingwg/ptp-operator/pkg/client/clientset/versioned"
 
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
@@ -32,6 +33,12 @@ func populateNodePTPDevices(nodePTPDev *ptpv1.NodePtpDevice, hwconfigs *[]ptpv1.
 		nodePTPDev.Status.Hwconfig = append(nodePTPDev.Status.Hwconfig, hw)
 	}
 	return nodePTPDev, nil
+}
+
+func updateDeviceAliases(devices []ptpv1.PtpDevice) {
+	for i := range devices {
+		devices[i].Alias = alias.GetAlias(devices[i].Name)
+	}
 }
 
 func GetDevStatusUpdate(nodePTPDev *ptpv1.NodePtpDevice) (*ptpv1.NodePtpDevice, error) {
@@ -125,6 +132,7 @@ func GetDevStatusUpdate(nodePTPDev *ptpv1.NodePtpDevice) (*ptpv1.NodePtpDevice, 
 	// Log device changes (additions and removals)
 	ptpnetwork.LogDeviceChanges(nodePTPDev.Status.Devices, newDevices)
 
+	updateDeviceAliases(newDevices)
 	nodePTPDev.Status.Devices = newDevices
 
 	// Populate system and baseboard DMI/SMBIOS info only once (static per-node data).
@@ -283,6 +291,8 @@ func (dn *Daemon) doSyncStatusUpdate(force bool) {
 		})
 
 		removeCondition(&ptpDev.Status.Conditions, conditionSynced)
+
+		updateDeviceAliases(ptpDev.Status.Devices)
 
 		// Backfill devices[].profile
 		for i := range ptpDev.Status.Devices {
