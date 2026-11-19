@@ -212,9 +212,9 @@ func (c *Config) CreateServerTLSConfig() (*tls.Config, error) {
 		return nil, fmt.Errorf("server certificate and key paths are required for a TLS callback server")
 	}
 
-	cert, err := tls.LoadX509KeyPair(c.ServerCertPath, c.ServerKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load server certificate: %v", err)
+	cert, keyPairErr := tls.LoadX509KeyPair(c.ServerCertPath, c.ServerKeyPath)
+	if keyPairErr != nil {
+		return nil, fmt.Errorf("failed to load server certificate: %v", keyPairErr)
 	}
 
 	tlsConfig := &tls.Config{
@@ -269,9 +269,9 @@ func readCAPool(path string) (*x509.CertPool, error) {
 		if block == nil || len(block.Headers) != 0 || bytes.Count(certPEM, begin) != 1 {
 			return nil, fmt.Errorf("invalid CA certificate PEM")
 		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse CA certificate: %w", err)
+		cert, parseErr := x509.ParseCertificate(block.Bytes)
+		if parseErr != nil {
+			return nil, fmt.Errorf("failed to parse CA certificate: %w", parseErr)
 		}
 		pool.AddCert(cert)
 		data = bytes.TrimSpace(remaining)
