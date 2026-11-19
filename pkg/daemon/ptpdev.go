@@ -312,11 +312,8 @@ func reportedClockType(proc *ptpProcess) string {
 	if proc == nil {
 		return ""
 	}
-	if declared, ok := proc.nodeProfile.PtpSettings["clockType"]; ok && (declared == TGM || declared == TBC) {
+	if declared, ok := proc.nodeProfile.PtpSettings["clockType"]; ok && (declared == string(event.TGM) || declared == string(event.TBC)) {
 		return declared
-	}
-	if proc.clockType == event.GM {
-		return TGM
 	}
 	return string(proc.clockType)
 }

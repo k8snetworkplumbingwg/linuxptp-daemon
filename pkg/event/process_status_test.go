@@ -16,7 +16,7 @@ func TestProcessStatusEvent(t *testing.T) {
 	assert.True(t, ev.WriteToLog)
 	assert.Contains(t, ev.GetLogData(), "PTP_PROCESS_STATUS:0")
 
-	evUp := ProcessStatusEvent(TS2PHC, "ts2phc.0.config", GM, "", 1)
+	evUp := ProcessStatusEvent(TS2PHC, "ts2phc.0.config", TGM, "", 1)
 	ps, ok = evUp.Data.(*ProcessStatusData)
 	require.True(t, ok)
 	assert.Equal(t, int64(1), ps.Status)

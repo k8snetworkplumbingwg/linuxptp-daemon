@@ -10,7 +10,7 @@ import (
 )
 
 func TestModelSelectedFromResolvedConstructorConfiguration(t *testing.T) {
-	for _, mode := range []event.ClockType{event.GM, event.TBC} {
+	for _, mode := range []event.ClockType{event.TGM, event.TBC} {
 		t.Run(string(mode), func(t *testing.T) {
 			source := event.GNSS
 			if mode == event.TBC {

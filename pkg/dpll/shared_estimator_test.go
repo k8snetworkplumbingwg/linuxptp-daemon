@@ -34,7 +34,7 @@ func newEstimatorDPLL(t *testing.T, mode event.ClockType, options ...Option) *Dp
 }
 
 func TestConstructorEstimatorDrivesBothHoldoverWorkers(t *testing.T) {
-	for _, mode := range []event.ClockType{event.GM, event.TBC} {
+	for _, mode := range []event.ClockType{event.TGM, event.TBC} {
 		t.Run(string(mode), func(t *testing.T) {
 			var calls atomic.Int32
 			option, err := WithHoldoverModel(holdoverModelFunc(func(elapsed time.Duration) (int64, error) {
@@ -93,14 +93,14 @@ func TestConstructorEstimatorDrivesBothHoldoverWorkers(t *testing.T) {
 }
 
 func TestSharedDefaultEstimateRoundingAndModePolicy(t *testing.T) {
-	for _, mode := range []event.ClockType{event.GM, event.TBC} {
+	for _, mode := range []event.ClockType{event.TGM, event.TBC} {
 		for _, sample := range []struct {
 			elapsed time.Duration
 			offset  int64
 		}{{1499 * time.Millisecond, 1}, {1500 * time.Millisecond, 2}, {40 * time.Second, 40}, {41 * time.Second, 41}} {
 			dpll := newEstimatorDPLL(t, mode)
 			terminal := dpll.advanceHoldover(sample.elapsed)
-			if sample.offset > 40 && mode == event.GM {
+			if sample.offset > 40 && mode == event.TGM {
 				require.True(t, terminal)
 				require.Equal(t, event.PTP_FREERUN, dpll.state)
 				require.Equal(t, int64(FaultyPhaseOffset), dpll.phaseOffset)
@@ -123,7 +123,7 @@ func TestSharedEstimatorInjectionValidation(t *testing.T) {
 	}
 	option, err := WithHoldoverModel(holdoverModelFunc(func(time.Duration) (int64, error) { return 59, nil }))
 	require.NoError(t, err)
-	for _, mode := range []event.ClockType{event.GM, event.TBC} {
+	for _, mode := range []event.ClockType{event.TGM, event.TBC} {
 		dpll := newEstimatorDPLL(t, mode, nil, option)
 		dpll.MaxInSpecOffset = 100
 		require.False(t, dpll.advanceHoldover(3*time.Second))
@@ -132,7 +132,7 @@ func TestSharedEstimatorInjectionValidation(t *testing.T) {
 }
 
 func TestLegacyEstimatorErrorsAndUnsignedLimits(t *testing.T) {
-	for _, mode := range []event.ClockType{event.GM, event.TBC} {
+	for _, mode := range []event.ClockType{event.TGM, event.TBC} {
 		for _, model := range []HoldoverModel{
 			holdoverModelFunc(func(time.Duration) (int64, error) { return 0, errors.New("estimate failed") }),
 			holdoverModelFunc(func(time.Duration) (int64, error) { return -1, nil }),
@@ -154,7 +154,7 @@ func TestLegacyEstimatorErrorsAndUnsignedLimits(t *testing.T) {
 }
 
 func TestSharedEstimatorLegacyTimeoutAndAbsentOffset(t *testing.T) {
-	for _, mode := range []event.ClockType{event.GM, event.TBC} {
+	for _, mode := range []event.ClockType{event.TGM, event.TBC} {
 		var calls atomic.Int32
 		option, err := WithHoldoverModel(holdoverModelFunc(func(time.Duration) (int64, error) {
 			calls.Add(1)

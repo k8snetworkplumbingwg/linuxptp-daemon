@@ -166,7 +166,7 @@ func NewCondiitonsTester(t *testing.T, clockType event.ClockType, cfgNames ...st
 		)
 
 		switch clockType {
-		case event.GM:
+		case event.TGM:
 			clk, err = clock.NewGM(n, cm.GetUtcOffset, &pmc.MockClient{})
 			assert.NoError(t, err)
 		case event.TBC:
@@ -369,7 +369,7 @@ func assertConstructedProcessesRunning(t *testing.T, processes []*stubProcess) {
 
 func TestApplyNodePtpProfileStartupConditions(t *testing.T) {
 	t.Run("T-GM", func(t *testing.T) {
-		ct := NewCondiitonsTester(t, event.GM)
+		ct := NewCondiitonsTester(t, event.TGM)
 		processes, _ := applyProfilesWithStubProcesses(t, ct, "profile-tgm.yaml")
 		ts2phc := findStubProcess(processes, event.Ts2PhcProcessName)
 		phc2sys := findStubProcess(processes, event.Phc2SysProcessName)
@@ -568,7 +568,7 @@ func TestForwardEvents_ProcessStatusDownStoppedNoRestart(t *testing.T) {
 }
 
 func TestForwardEvents_ProcessStatusDownRestartsDep(t *testing.T) {
-	ct := NewCondiitonsTester(t, event.GM, testTs2phcConfig)
+	ct := NewCondiitonsTester(t, event.TGM, testTs2phcConfig)
 	dep := &stubProcess{name: string(event.GPSD), cfgName: testTs2phcConfig, state: process.Dead}
 	parent := ct.AddProcess(&stubProcess{name: string(event.TS2PHC), cfgName: testTs2phcConfig, state: process.Running, deps: []process.Process{dep}})
 	ct.StartPM()
@@ -839,7 +839,7 @@ func TestEvalActions_FullFailoverFlow(t *testing.T) {
 }
 
 func TestForwardEvents_AllStatefulStartsWhenAllConditionsMet(t *testing.T) {
-	ct := NewCondiitonsTester(t, event.GM, testTs2phcConfig)
+	ct := NewCondiitonsTester(t, event.TGM, testTs2phcConfig)
 	parent := ct.AddProcess(&stubProcess{
 		name: string(event.TS2PHC),
 		conds: map[process.Action]process.Condition{
@@ -979,8 +979,8 @@ func TestEvalActions_DelayedPhc2sysHAProfile(t *testing.T) {
 }
 
 func TestPhc2sysOffsetStartCondition_TGM(t *testing.T) {
-	profile := ptpv1.PtpProfile{PtpSettings: map[string]string{clockTypeSetting: TGM}}
-	c := phc2sysOffsetStartCondition(ptpProcessEnv{runID: 2, clockType: event.GM, nodeProfile: &profile})
+	profile := ptpv1.PtpProfile{PtpSettings: map[string]string{clockTypeSetting: string(event.TGM)}}
+	c := phc2sysOffsetStartCondition(ptpProcessEnv{runID: 2, clockType: event.TGM, nodeProfile: &profile})
 	assert.Equal(t, process.OnStateAndOffsetForCount{
 		ClockID:    "ts2phc.2.config",
 		ConfigName: "ts2phc.2.config",
@@ -992,7 +992,7 @@ func TestPhc2sysOffsetStartCondition_TGM(t *testing.T) {
 }
 
 func TestPhc2sysOffsetStartCondition_InferredGM(t *testing.T) {
-	c := phc2sysOffsetStartCondition(ptpProcessEnv{runID: 0, clockType: event.GM})
+	c := phc2sysOffsetStartCondition(ptpProcessEnv{runID: 0, clockType: event.TGM})
 	assert.Equal(t, process.OnStateAndOffsetForCount{
 		ClockID:    "ts2phc.0.config",
 		ConfigName: "ts2phc.0.config",
@@ -1004,7 +1004,7 @@ func TestPhc2sysOffsetStartCondition_InferredGM(t *testing.T) {
 }
 
 func TestPhc2sysOffsetStartCondition_TBC(t *testing.T) {
-	profile := ptpv1.PtpProfile{PtpSettings: map[string]string{clockTypeSetting: TBC}}
+	profile := ptpv1.PtpProfile{PtpSettings: map[string]string{clockTypeSetting: string(event.TBC)}}
 	topology, err := NewProfileTopology([]ptpv1.PtpProfile{profile})
 	require.NoError(t, err)
 	c := phc2sysOffsetStartCondition(ptpProcessEnv{runID: 0, clockType: event.TBC, nodeProfile: &profile, topology: &topology})
@@ -1028,7 +1028,7 @@ func TestPhc2sysOffsetStartCondition_HA(t *testing.T) {
 		Phc2sysConf: utils.ToPtr(" "),
 		Phc2sysOpts: utils.ToPtr(" "),
 		PtpSettings: map[string]string{PTP_HA_IDENTIFIER: master1 + "," + master2,
-			clockTypeSetting: TBC,
+			clockTypeSetting: string(event.TBC),
 		}}
 
 	topology, err := NewProfileTopology([]ptpv1.PtpProfile{profile1, profile2, haProfile})
@@ -1056,7 +1056,7 @@ func TestTBC_Ts2phcUnlocksThroughProcessManager(t *testing.T) {
 	profile := &ptpv1.PtpProfile{
 		Name: &profileName,
 		PtpSettings: map[string]string{
-			clockTypeSetting: TBC,
+			clockTypeSetting: string(event.TBC),
 		},
 		Ts2PhcConf: stringPtr("[global]\n[ts2phc.0.config]\n"),
 		Ts2PhcOpts: stringPtr("-s"),
@@ -1117,7 +1117,7 @@ func TestTBC_Ts2phcWithPhc2sysUnlocksThroughProcessManager(t *testing.T) {
 			profileName := "test-tbc-phc2sys"
 			profile := &ptpv1.PtpProfile{
 				Name:        &profileName,
-				PtpSettings: map[string]string{clockTypeSetting: TBC},
+				PtpSettings: map[string]string{clockTypeSetting: string(event.TBC)},
 				Ts2PhcConf:  stringPtr("[global]\n[ts2phc.0.config]\n"),
 				Ts2PhcOpts:  stringPtr("-s"),
 				Phc2sysConf: stringPtr("[global]\n"),
@@ -1169,7 +1169,7 @@ func TestUnlock_TBC_Phc2sys(t *testing.T) {
 	profile := &ptpv1.PtpProfile{
 		Name: &profileName,
 		PtpSettings: map[string]string{
-			clockTypeSetting: TBC,
+			clockTypeSetting: string(event.TBC),
 		},
 		Phc2sysConf: stringPtr("[global]\n"),
 		Phc2sysOpts: stringPtr("-a -r"),
@@ -1201,13 +1201,13 @@ func TestUnlock_TBC_Phc2sys(t *testing.T) {
 }
 
 func TestUnlock_TGM_Phc2sys(t *testing.T) {
-	ct := NewCondiitonsTester(t, event.GM, "ts2phc.0.config")
+	ct := NewCondiitonsTester(t, event.TGM, "ts2phc.0.config")
 
 	profileName := "test-tgm-phc2sys"
 	profile := &ptpv1.PtpProfile{
 		Name: &profileName,
 		PtpSettings: map[string]string{
-			clockTypeSetting: TGM,
+			clockTypeSetting: string(event.TGM),
 		},
 		Phc2sysConf: stringPtr("[global]\n"),
 		Phc2sysOpts: stringPtr("-a -r"),
@@ -1215,7 +1215,7 @@ func TestUnlock_TGM_Phc2sys(t *testing.T) {
 
 	topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
 	require.NoError(t, err)
-	realPhc2sys, err := NewPhc2sysProcess(ct.Env(0, profile, event.GM, &topology))
+	realPhc2sys, err := NewPhc2sysProcess(ct.Env(0, profile, event.TGM, &topology))
 	require.NoError(t, err)
 	stub := ct.AddProcess(realPhc2sys)
 
@@ -1235,7 +1235,7 @@ func TestUnlock_TGM_Phc2sys(t *testing.T) {
 }
 
 func TestUnlock_Failover_Phc2sysAndChronyd(t *testing.T) {
-	ct := NewCondiitonsTester(t, event.GM, "ts2phc.0.config")
+	ct := NewCondiitonsTester(t, event.TGM, "ts2phc.0.config")
 
 	profileName := "test-failover"
 	profile := &ptpv1.PtpProfile{
@@ -1246,7 +1246,7 @@ func TestUnlock_Failover_Phc2sysAndChronyd(t *testing.T) {
 		},
 		Name: &profileName,
 		PtpSettings: map[string]string{
-			clockTypeSetting: TGM,
+			clockTypeSetting: string(event.TGM),
 		},
 		Phc2sysConf: stringPtr("[global]\n"),
 		Phc2sysOpts: stringPtr("-a -r"),
@@ -1256,9 +1256,9 @@ func TestUnlock_Failover_Phc2sysAndChronyd(t *testing.T) {
 
 	topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
 	require.NoError(t, err)
-	realPhc2sys, err := NewPhc2sysProcess(ct.Env(0, profile, event.GM, &topology))
+	realPhc2sys, err := NewPhc2sysProcess(ct.Env(0, profile, event.TGM, &topology))
 	require.NoError(t, err)
-	realChronyd, err := NewChronydProcess(ct.Env(0, profile, event.GM, &topology))
+	realChronyd, err := NewChronydProcess(ct.Env(0, profile, event.TGM, &topology))
 	require.NoError(t, err)
 
 	phc2sysStub := ct.AddProcess(realPhc2sys)
