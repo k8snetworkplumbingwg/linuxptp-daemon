@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,88 @@ func securityTestConfig(t *testing.T) *auth.Config {
 	}
 	cfg := &auth.Config{ServerConfig: &auth.ServerConfig{EnableMTLS: true, EnableOAuth: true, CACertPath: certPath, ServerCertPath: certPath, ServerKeyPath: keyPath, ServiceAccountToken: tokenPath}, ClientCertPath: certPath, ClientKeyPath: keyPath, AllowedCallbackHosts: []string{"127.0.0.1"}}
 	return cfg
+}
+
+func TestLiveTLSReload(t *testing.T) {
+	cfg := securityTestConfig(t)
+	cfg.RequiredAudiences = []string{"event-api"}
+	if err := os.WriteFile(cfg.ServiceAccountToken, []byte("test-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	security, writer, err := NewSecurity(cfg, testValidator{true}, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := security.material.current.Load()
+	server := httptest.NewUnstartedServer(security.protect(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	server.TLS = security.TLS
+	server.StartTLS()
+	defer server.Close()
+
+	callback := writer(server.URL)
+	if _, err := callback.Write([]byte("{}")); err != nil {
+		t.Fatalf("initial secured request: %v", err)
+	}
+	replace := func(dst, src string) {
+		t.Helper()
+		data, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next := securityTestConfig(t)
+	validCA, err := os.ReadFile(cfg.CACertPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.CACertPath, append(validCA, []byte("-----BEGIN CERTIFICATE-----\n")...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := security.material.reload(); err == nil || security.material.current.Load() != old {
+		t.Fatal("accepted a partially valid CA bundle")
+	}
+	if err := os.WriteFile(cfg.CACertPath, validCA, 0600); err != nil {
+		t.Fatal(err)
+	}
+	replace(cfg.ServerCertPath, next.ServerCertPath)
+	if err := security.material.reload(); err == nil {
+		t.Fatal("accepted a certificate without its matching key")
+	}
+	if security.material.current.Load() != old {
+		t.Fatal("failed rotation replaced active TLS material")
+	}
+	if _, err := callback.Write([]byte("{}")); err != nil {
+		t.Fatalf("request during incomplete rotation: %v", err)
+	}
+
+	replace(cfg.ServerKeyPath, next.ServerKeyPath)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go security.material.watch(ctx)
+	deadline := time.Now().Add(2 * tlsReloadInterval)
+	for security.material.current.Load() == old && time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+	}
+	current := security.material.current.Load()
+	if current == old {
+		t.Fatal("watcher did not activate rotated TLS material")
+	}
+	if slices.Equal(old.serverLeaf.Raw, current.serverLeaf.Raw) ||
+		slices.Equal(old.clientLeaf.Raw, current.clientLeaf.Raw) {
+		t.Fatal("rotation did not replace both leaf certificates")
+	}
+	if _, err := callback.Write([]byte("{}")); err != nil {
+		t.Fatalf("secured request after rotation on the original listener and writer: %v", err)
+	}
+	old.client.GetClient().CloseIdleConnections()
+	if _, err := (&authenticatedWriter{endpoint: server.URL, client: old.client, security: &Security{Config: cfg}}).Write([]byte("{}")); err == nil {
+		t.Fatal("old credentials unexpectedly succeeded after rotation")
+	}
 }
 
 func TestSecuredCallbackTLSAndTokenRotation(t *testing.T) {
