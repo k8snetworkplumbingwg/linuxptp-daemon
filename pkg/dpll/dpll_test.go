@@ -202,9 +202,16 @@ func TestDpllConfig_GNSS(t *testing.T) {
 	go eventProcessor.ProcessEvents(ctx)
 
 	fmt.Println("starting Mock replies ")
-	for _, tt := range getTestData(event.GNSS, 2) {
+	for index, tt := range getTestData(event.GNSS, 2) {
 		d.SetSourceLost(tt.sourceLost)
 		d.SetPhaseOffset(tt.expectedPhaseOffset)
+		if index == 2 {
+			tt.expectedState = event.PTP_HOLDOVER
+			tt.expectedPhaseOffset = 10 * 1000000
+		}
+		if index == 3 {
+			tt.expectedIntermediateState = event.PTP_HOLDOVER
+		}
 		dpll.MockDpllReplies <- tt.reply
 		time.Sleep(10 * time.Millisecond)
 		d.SetDependsOn([]event.EventSource{tt.source})
