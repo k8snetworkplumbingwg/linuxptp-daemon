@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -49,8 +48,21 @@ func rejectUnsafeRedirect(config *Config) func(*http.Request, []*http.Request) e
 		if err := config.ValidateCallbackEndpoint(req.URL.String()); err != nil {
 			return fmt.Errorf("refusing callback redirect: %w", err)
 		}
+		return setOAuthAuthorization(config, req)
+	}
+}
+
+// setOAuthAuthorization reads the current projected token for each request.
+func setOAuthAuthorization(config *Config, req *http.Request) error {
+	if !config.EnableOAuth {
 		return nil
 	}
+	token, err := config.GetOAuthToken()
+	if err != nil {
+		return fmt.Errorf("failed to read OAuth token: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return nil
 }
 
 // NewAuthenticatedClient creates a new authenticated HTTP client
@@ -99,12 +111,8 @@ func NewAuthenticatedClientWithTimeout(authConfig *Config, timeout time.Duration
 		log.Info("Configured HTTPS client")
 	}
 
-	// When OAuth is enabled, block redirects that would downgrade a
-	// token-bearing request to cleartext. Also verify the token is readable up
-	// front so misconfiguration fails fast; the token itself is (re)read on
-	// every request in Do to tolerate ServiceAccount token rotation.
+	// Verify that the token is readable up front so misconfiguration fails fast.
 	if authConfig.EnableOAuth {
-		client.CheckRedirect = rejectUnsafeRedirect(authConfig)
 		if _, err := authConfig.GetOAuthToken(); err != nil {
 			return nil, fmt.Errorf("failed to get OAuth token: %v", err)
 		}
@@ -125,22 +133,8 @@ func (ac *AuthenticatedClient) Do(req *http.Request) (*http.Response, error) {
 	if ac.authConfig.IsAuthenticationEnabled() && req.URL.Scheme != httpsScheme {
 		return nil, fmt.Errorf("refusing authenticated request to non-HTTPS URL %q", req.URL.Redacted())
 	}
-	if ac.authConfig.EnableOAuth {
-		// Never transmit the bearer token over cleartext.
-		if req.URL.Scheme != httpsScheme {
-			return nil, fmt.Errorf("refusing to send OAuth bearer token over non-HTTPS URL %q", req.URL.Redacted())
-		}
-		// Re-read the token on every request: projected ServiceAccount tokens
-		// are rotated on disk before expiry, so a value cached at construction
-		// time would eventually be rejected by the server.
-		token, err := ac.authConfig.GetOAuthToken()
-		if err != nil {
-			return nil, fmt.Errorf("failed to read OAuth token: %v", err)
-		}
-		token = strings.TrimSpace(token)
-		if token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
-		}
+	if err := setOAuthAuthorization(ac.authConfig, req); err != nil {
+		return nil, err
 	}
 
 	// Add content-type if not already set
@@ -202,9 +196,9 @@ func (ac *AuthenticatedClient) GetAuthConfig() *Config {
 }
 
 // RefreshOAuthToken verifies the OAuth token is currently readable from the
-// service account token file. Do reloads the token on every request, so callers
-// no longer need to invoke this to pick up a rotated token; it is retained to
-// let callers proactively surface a missing/unreadable token file.
+// service account token file. The client reloads the token on each request and
+// allowed redirect, so callers no longer need to invoke this to pick up a
+// rotated token. It lets callers proactively surface a missing or unreadable file.
 func (ac *AuthenticatedClient) RefreshOAuthToken() error {
 	if !ac.authConfig.EnableOAuth {
 		return nil

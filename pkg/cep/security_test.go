@@ -285,18 +285,21 @@ func TestSecureSubscribePullPush(t *testing.T) {
 	// Fresh, hostname-verified TLS connections must enforce both credentials
 	// even though the API and callback listeners are on loopback.
 	for _, tc := range []struct {
-		name, method, path, token string
-		cert                      bool
-		want                      int
+		name, method, path, authorization string
+		cert                              bool
+		want                              int
 	}{
 		{"anonymous", http.MethodGet, "subscriptions", "", false, 401},
-		{"token only", http.MethodGet, "subscriptions", "test-token", false, 401},
+		{"token only", http.MethodGet, "subscriptions", "Bearer test-token", false, 401},
 		{"certificate only", http.MethodGet, "subscriptions", "", true, 401},
-		{"invalid token", http.MethodGet, "subscriptions", "invalid", true, 401},
-		{"authenticated discovery", http.MethodGet, "publishers", "test-token", true, 200},
+		{"invalid token", http.MethodGet, "subscriptions", "Bearer invalid", true, 401},
+		{"authenticated discovery", http.MethodGet, "publishers", "Bearer test-token", true, 200},
+		{"lowercase bearer", http.MethodGet, "publishers", "bearer test-token", true, 200},
+		{"uppercase bearer", http.MethodGet, "publishers", "BEARER test-token", true, 200},
+		{"wrong scheme", http.MethodGet, "publishers", "Basic test-token", true, 401},
 		{"health", http.MethodGet, "health", "", false, 200},
 		{"health POST anonymous", http.MethodPost, "health", "", false, 401},
-		{"health POST authenticated", http.MethodPost, "health", "test-token", true, 405},
+		{"health POST authenticated", http.MethodPost, "health", "Bearer test-token", true, 405},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tlsConfig, tlsErr := cfg.CreateTLSConfig()
@@ -312,8 +315,8 @@ func TestSecureSubscribePullPush(t *testing.T) {
 			if requestErr != nil {
 				t.Fatal(requestErr)
 			}
-			if tc.token != "" {
-				request.Header.Set("Authorization", "Bearer "+tc.token)
+			if tc.authorization != "" {
+				request.Header.Set("Authorization", tc.authorization)
 			}
 			testResponse, requestErr := client.Do(request)
 			if requestErr != nil {

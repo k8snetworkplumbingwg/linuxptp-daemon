@@ -20,6 +20,7 @@ package auth
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -33,6 +34,40 @@ func TestRejectInsecureRedirect(t *testing.T) {
 
 	httpReq, _ := http.NewRequest("GET", "http://example.com/x", nil)
 	assert.Error(t, rejectInsecureRedirect(httpReq, nil))
+}
+
+func TestRedirectOAuthAuthorization(t *testing.T) {
+	tokenPath := writeFile(t, "token", "original-token")
+	cfg := &Config{
+		ServerConfig:         &ServerConfig{EnableOAuth: true, ServiceAccountToken: tokenPath},
+		AllowedCallbackHosts: []string{"consumer-a.example", "consumer-b.example"},
+	}
+	ac, err := NewAuthenticatedClient(cfg)
+	require.NoError(t, err)
+	initial, err := http.NewRequest(http.MethodPost, "https://consumer-a.example/events", nil)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(tokenPath, []byte("rotated-token"), 0600))
+
+	for _, tc := range []struct {
+		url  string
+		want string
+	}{
+		{"https://consumer-b.example/events", "Bearer rotated-token"},
+		{"http://consumer-b.example/events", ""},
+		{"https://unlisted.example/events", ""},
+	} {
+		t.Run(tc.url, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, tc.url, nil)
+			require.NoError(t, err)
+			err = ac.GetClient().CheckRedirect(req, []*http.Request{initial})
+			if tc.want == "" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.want, req.Header.Get("Authorization"))
+		})
+	}
 }
 
 func TestNewAuthenticatedClient_NilConfig(t *testing.T) {
