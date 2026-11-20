@@ -1227,10 +1227,12 @@ func TestUpdateBCStateHoldoverDisabled(t *testing.T) {
 			ClockType: event.BC,
 			Time:      time.Now().UnixMilli(),
 			Data: &event.DPLLData{
-				State:            event.PTP_LOCKED,
-				LeadingSource:    leading,
-				Offset:           &offset,
-				HoldoverDisabled: holdoverDisabled,
+				State:              event.PTP_LOCKED,
+				LeadingSource:      leading,
+				Offset:             &offset,
+				HoldoverDisabled:   holdoverDisabled,
+				ToFreeRunThreshold: 1500,
+				MaxInSpecOffset:    500,
 			},
 		}
 	}

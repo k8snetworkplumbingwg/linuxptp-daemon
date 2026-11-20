@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func stopTGMTestHoldover(t *testing.T, dpll *DpllConfig, events <-chan event.Event) {
+func stopModeledTestHoldover(t *testing.T, dpll *DpllConfig, events <-chan event.Event) {
 	t.Helper()
 	dpll.Lock()
 	dpll.phaseOffset = 0
@@ -35,7 +35,7 @@ func stopTGMTestHoldover(t *testing.T, dpll *DpllConfig, events <-chan event.Eve
 	}
 }
 
-func TestTGMHoldoverWorkerHandoff(t *testing.T) {
+func testModeledHoldoverWorkerHandoff(t *testing.T, mode event.ClockType) {
 	for _, renewedLoss := range []bool{false, true} {
 		name := "stable recovery"
 		if renewedLoss {
@@ -53,13 +53,13 @@ func TestTGMHoldoverWorkerHandoff(t *testing.T) {
 				return offset, nil
 			}))
 			require.NoError(t, err)
-			dpll := newEstimatorDPLL(t, event.GM, option)
+			dpll := newEstimatorDPLL(t, mode, option)
 			events := make(chan event.Event, 64)
 			dpll.processConfig.EventChannel = events
 			done := make(chan struct{})
 			entered := make(chan struct{})
 			t.Cleanup(func() {
-				stopTGMTestHoldover(t, dpll, events)
+				stopModeledTestHoldover(t, dpll, events)
 			})
 			dpll.Lock()
 			dpll.onHoldover = true
@@ -133,7 +133,7 @@ func TestTGMHoldoverWorkerHandoff(t *testing.T) {
 	}
 }
 
-func TestTGMHoldoverHandoffRetirementGuards(t *testing.T) {
+func testModeledHoldoverHandoffRetirementGuards(t *testing.T, mode event.ClockType) {
 	for _, reason := range []string{"Stop", "closed channel", "closing", "terminal freerun"} {
 		t.Run(reason, func(t *testing.T) {
 			var calls atomic.Int32
@@ -142,7 +142,7 @@ func TestTGMHoldoverHandoffRetirementGuards(t *testing.T) {
 				return 5, nil
 			}))
 			require.NoError(t, err)
-			dpll := newEstimatorDPLL(t, event.GM, option)
+			dpll := newEstimatorDPLL(t, mode, option)
 			events := make(chan event.Event, 64)
 			dpll.processConfig.EventChannel = events
 			dpll.onHoldover = true
@@ -163,7 +163,7 @@ func TestTGMHoldoverHandoffRetirementGuards(t *testing.T) {
 				dpll.inSpec = false
 				dpll.phaseOffset = FaultyPhaseOffset
 			}
-			t.Cleanup(func() { stopTGMTestHoldover(t, dpll, events) })
+			t.Cleanup(func() { stopModeledTestHoldover(t, dpll, events) })
 			done := make(chan struct{})
 			go func() { dpll.holdover(); close(done) }()
 			select {
@@ -185,7 +185,7 @@ func TestTGMHoldoverHandoffRetirementGuards(t *testing.T) {
 	}
 }
 
-func TestTGMHoldoverThresholds(t *testing.T) {
+func testModeledHoldoverThresholds(t *testing.T, mode event.ClockType) {
 	for _, sample := range []struct {
 		name     string
 		elapsed  time.Duration
@@ -199,7 +199,7 @@ func TestTGMHoldoverThresholds(t *testing.T) {
 		{"terminal wins", 101 * time.Second, event.PTP_FREERUN, false, true},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
-			dpll := newEstimatorDPLL(t, event.GM)
+			dpll := newEstimatorDPLL(t, mode)
 			require.Equal(t, sample.terminal, dpll.advanceHoldover(sample.elapsed))
 			require.Equal(t, sample.state, dpll.state)
 			require.Equal(t, sample.inSpec, dpll.inSpec)
@@ -210,12 +210,12 @@ func TestTGMHoldoverThresholds(t *testing.T) {
 	}
 }
 
-func TestTGMHoldoverTimeoutAndRepeatedHardware(t *testing.T) {
+func testModeledHoldoverTimeoutAndRepeatedHardware(t *testing.T, mode event.ClockType) {
 	model, err := NewLinearHoldoverModel(10, 100*time.Second)
 	require.NoError(t, err)
 	option, err := WithHoldoverModel(model)
 	require.NoError(t, err)
-	dpll := newEstimatorDPLL(t, event.GM, option)
+	dpll := newEstimatorDPLL(t, mode, option)
 	dpll.MaxInSpecOffset = 50
 	dpll.onHoldover = true
 	dpll.phaseStatus, dpll.frequencyStatus = DPLL_HOLDOVER, DPLL_HOLDOVER
@@ -237,9 +237,9 @@ func TestTGMHoldoverTimeoutAndRepeatedHardware(t *testing.T) {
 	require.True(t, dpll.inSpec)
 }
 
-func TestTGMHoldoverRequiresAcquisitionAndEnabledTimeout(t *testing.T) {
+func testModeledHoldoverRequiresAcquisitionAndEnabledTimeout(t *testing.T, mode event.ClockType) {
 	for _, disabled := range []bool{false, true} {
-		dpll := newEstimatorDPLL(t, event.GM)
+		dpll := newEstimatorDPLL(t, mode)
 		dpll.inSpec = disabled
 		dpll.state = event.PTP_FREERUN
 		if disabled {
@@ -252,30 +252,29 @@ func TestTGMHoldoverRequiresAcquisitionAndEnabledTimeout(t *testing.T) {
 	}
 }
 
-func TestTGMHoldoverEligibilityPreservesOtherHardwareAndSources(t *testing.T) {
+func testModeledHoldoverEligibilityPreservesOtherHardwareAndSources(t *testing.T, mode event.ClockType) {
 	for _, sample := range []struct {
 		name   string
-		mode   event.ClockType
 		source event.EventSource
 		flags  Flag
 	}{
-		{"TBC", event.TBC, event.PTP4l, 0},
-		{"GM with PTP source", event.GM, event.PTP4l, 0},
-		{"GM without phase offset", event.GM, event.GNSS, FlagNoPhaseOffset},
+		{"PTP source", event.PTP4l, 0},
+		{"GNSS source", event.GNSS, 0},
+		{"without phase offset", event.GNSS, FlagNoPhaseOffset},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
-			dpll := newEstimatorDPLL(t, sample.mode)
+			dpll := newEstimatorDPLL(t, mode)
 			dpll.dependsOn = []event.EventSource{sample.source}
 			dpll.flags = sample.flags
-			require.False(t, dpll.tgmHoldover())
+			require.Equal(t, sample.flags&FlagNoPhaseOffset == 0, dpll.modeledHoldover())
 		})
 	}
 }
 
-func TestTGMHoldoverWorkerTimeoutAndRecovery(t *testing.T) {
+func testModeledHoldoverWorkerTimeoutAndRecovery(t *testing.T, mode event.ClockType) {
 	option, err := WithHoldoverModel(holdoverModelFunc(func(time.Duration) (int64, error) { return 5, nil }))
 	require.NoError(t, err)
-	dpll := newEstimatorDPLL(t, event.GM, option)
+	dpll := newEstimatorDPLL(t, mode, option)
 	dpll.LocalHoldoverTimeout = 1
 	dpll.onHoldover = true
 	dpll.holdoverCloseCh = make(chan bool)
@@ -323,5 +322,47 @@ func TestTGMHoldoverWorkerTimeoutAndRecovery(t *testing.T) {
 		case <-deadline.C:
 			t.Fatal("holdover worker did not report timeout quality")
 		}
+	}
+}
+
+func TestCommonHoldoverWorkerHandoff(t *testing.T) {
+	for _, mode := range []event.ClockType{event.GM, event.TBC} {
+		t.Run(string(mode), func(t *testing.T) { testModeledHoldoverWorkerHandoff(t, mode) })
+	}
+}
+
+func TestCommonHoldoverHandoffRetirementGuards(t *testing.T) {
+	for _, mode := range []event.ClockType{event.GM, event.TBC} {
+		t.Run(string(mode), func(t *testing.T) { testModeledHoldoverHandoffRetirementGuards(t, mode) })
+	}
+}
+
+func TestCommonHoldoverThresholds(t *testing.T) {
+	for _, mode := range []event.ClockType{event.GM, event.TBC} {
+		t.Run(string(mode), func(t *testing.T) { testModeledHoldoverThresholds(t, mode) })
+	}
+}
+
+func TestCommonHoldoverTimeoutAndRepeatedHardware(t *testing.T) {
+	for _, mode := range []event.ClockType{event.GM, event.TBC} {
+		t.Run(string(mode), func(t *testing.T) { testModeledHoldoverTimeoutAndRepeatedHardware(t, mode) })
+	}
+}
+
+func TestCommonHoldoverRequiresAcquisitionAndEnabledTimeout(t *testing.T) {
+	for _, mode := range []event.ClockType{event.GM, event.TBC} {
+		t.Run(string(mode), func(t *testing.T) { testModeledHoldoverRequiresAcquisitionAndEnabledTimeout(t, mode) })
+	}
+}
+
+func TestCommonHoldoverEligibilityPreservesOtherHardwareAndSources(t *testing.T) {
+	for _, mode := range []event.ClockType{event.GM, event.TBC} {
+		t.Run(string(mode), func(t *testing.T) { testModeledHoldoverEligibilityPreservesOtherHardwareAndSources(t, mode) })
+	}
+}
+
+func TestCommonHoldoverWorkerTimeoutAndRecovery(t *testing.T) {
+	for _, mode := range []event.ClockType{event.GM, event.TBC} {
+		t.Run(string(mode), func(t *testing.T) { testModeledHoldoverWorkerTimeoutAndRecovery(t, mode) })
 	}
 }
