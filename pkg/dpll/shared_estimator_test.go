@@ -100,15 +100,9 @@ func TestSharedDefaultEstimateRoundingAndModePolicy(t *testing.T) {
 		}{{1499 * time.Millisecond, 1}, {1500 * time.Millisecond, 2}, {40 * time.Second, 40}, {41 * time.Second, 41}} {
 			dpll := newEstimatorDPLL(t, mode)
 			terminal := dpll.advanceHoldover(sample.elapsed)
-			if sample.offset > 40 && mode == event.GM {
-				require.True(t, terminal)
-				require.Equal(t, event.PTP_FREERUN, dpll.state)
-				require.Equal(t, int64(FaultyPhaseOffset), dpll.phaseOffset)
-			} else {
-				require.False(t, terminal)
-				require.Equal(t, event.PTP_HOLDOVER, dpll.state)
-				require.Equal(t, sample.offset, dpll.phaseOffset)
-			}
+			require.False(t, terminal)
+			require.Equal(t, event.PTP_HOLDOVER, dpll.state)
+			require.Equal(t, sample.offset, dpll.phaseOffset)
 			require.Equal(t, sample.offset <= 40, dpll.inSpec)
 		}
 	}
