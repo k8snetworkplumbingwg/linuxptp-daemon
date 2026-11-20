@@ -105,12 +105,12 @@ func (s *Security) protect(next http.Handler) http.Handler {
 			return
 		}
 		if s.Config.EnableOAuth {
-			header := r.Header.Get("Authorization")
-			if !strings.HasPrefix(header, "Bearer ") || s.Validator == nil {
+			scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+			if !ok || !strings.EqualFold(scheme, "Bearer") || s.Validator == nil {
 				http.Error(w, "Bearer token required", http.StatusUnauthorized)
 				return
 			}
-			info, err := s.Validator.ValidateToken(r.Context(), strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")), s.Config.RequiredAudiences)
+			info, err := s.Validator.ValidateToken(r.Context(), strings.TrimSpace(token), s.Config.RequiredAudiences)
 			if err != nil || info == nil {
 				http.Error(w, "Invalid bearer token", http.StatusUnauthorized)
 				return
