@@ -101,6 +101,7 @@ type DpllConfig struct {
 	state                  event.PTPState
 	processState           process.State
 	onHoldover             bool
+	holdoverEstimate       int64
 	closing                bool
 	sourceLost             bool
 	processConfig          config.ProcessConfig
@@ -764,6 +765,11 @@ func (d *DpllConfig) MonitorDpll() {
 	}
 }
 
+// tgmHoldover identifies the GNSS-leading clocks with a usable phase estimate.
+func (d *DpllConfig) tgmHoldover() bool {
+	return d.processConfig.ClockType == event.GM && d.hasGNSSAsSource() && !d.hasFlag(FlagNoPhaseOffset)
+}
+
 // stateDecision
 func (d *DpllConfig) stateDecision() {
 	dpllStatus := d.getDpllState()
@@ -790,9 +796,9 @@ func (d *DpllConfig) stateDecision() {
 			d.state = event.PTP_FREERUN
 			d.phaseOffset = FaultyPhaseOffset
 			glog.Infof("non-leading DPLL %s is in holdover, reporting FREERUN", d.iface)
-		// TODO: GNSS holdover currently doesn't offer holdover out of spec. Tech Debt: should work the same as T-BC
-		// making transitions programmable by users
-		case !d.inSpec || (d.hasPTPAsSource() && math.Abs(float64(d.PhaseOffset())) > float64(d.LocalMaxHoldoverOffSet)):
+		case (!d.inSpec && (!d.tgmHoldover() || d.state != event.PTP_HOLDOVER)) ||
+			(d.tgmHoldover() && d.LocalHoldoverTimeout == 0) ||
+			(d.hasPTPAsSource() && math.Abs(float64(d.PhaseOffset())) > float64(d.LocalMaxHoldoverOffSet)):
 			glog.Infof("leading DPLL %s holdover out of spec (inSpec=%v, offset=%d, max=%d), state is FREERUN",
 				d.iface, d.inSpec, d.PhaseOffset(), d.LocalMaxHoldoverOffSet)
 			d.state = event.PTP_FREERUN
@@ -807,8 +813,13 @@ func (d *DpllConfig) stateDecision() {
 			d.holdoverCloseCh = make(chan bool)
 			d.onHoldover = true
 			d.state = event.PTP_HOLDOVER
+			d.holdoverEstimate = d.phaseOffset
 			glog.Infof("starting holdover (%s)", d.iface)
 			go d.holdover()
+		}
+		if d.tgmHoldover() && d.state == event.PTP_HOLDOVER {
+			d.sourceLost = true
+			d.phaseOffset = d.holdoverEstimate
 		}
 
 	case DPLL_LOCKED_HO_ACQ, DPLL_LOCKED:
@@ -938,27 +949,59 @@ func (d *DpllConfig) holdover() {
 		ticker.Stop()
 		d.Lock()
 		d.onHoldover = false
-		d.sendDpllEvent()
+		restart := d.tgmHoldover() && d.state == event.PTP_LOCKED && d.getDpllState() == DPLL_HOLDOVER &&
+			d.processState != process.Stopping && d.processState != process.Stopped && d.processState != process.Dead
+		if restart {
+			select {
+			case _, open := <-d.holdoverCloseCh:
+				restart = open
+			default:
+			}
+		}
+		if restart {
+			d.stateDecision()
+		} else {
+			d.sendDpllEvent()
+		}
 		d.Unlock()
 	}()
+	d.Lock()
 	d.sendDpllEvent()
+	d.Unlock()
 	glog.Infof("setting dpll holdover for max holdover %v", d.LocalHoldoverTimeout)
 	for timeout := time.After(time.Duration(int64(d.LocalHoldoverTimeout) * int64(time.Second))); ; {
 		select {
 		case <-ticker.C:
-			if d.advanceHoldover(time.Since(start)) {
+			d.Lock()
+			stop := (d.tgmHoldover() && d.state != event.PTP_HOLDOVER) || d.advanceHoldover(time.Since(start))
+			d.Unlock()
+			if stop {
 				return
 			}
-		case <-timeout: // since ts2phc has same timer , ts2phc should also move out of holdover
+		case <-timeout:
+			d.Lock()
+			if d.tgmHoldover() && d.LocalHoldoverTimeout != 0 {
+				stop := d.state != event.PTP_HOLDOVER || d.advanceHoldover(time.Since(start))
+				d.Unlock()
+				if stop {
+					return
+				}
+				continue
+			}
 			d.inSpec = false // not in HO, Out of spec
 			d.state = event.PTP_FREERUN
 			d.phaseOffset = FaultyPhaseOffset
 			glog.Infof("holdover timer %d expired", d.timer)
 			d.sendDpllEvent()
+			d.Unlock()
 			return
 		case <-d.holdoverCloseCh:
 			glog.Info("holdover was closed")
-			d.inSpec = true // if someone else is closing then it should be back in spec (if it was not in spec before)
+			d.Lock()
+			if !d.tgmHoldover() {
+				d.inSpec = true
+			}
+			d.Unlock()
 			return
 		}
 	}
@@ -977,7 +1020,18 @@ func (d *DpllConfig) advanceHoldover(elapsed time.Duration) bool {
 	}
 	d.phaseOffset = offset
 	glog.Infof("(%s) time since holdover start %f, offset %d nanosecond holdover %s", d.iface, elapsed.Seconds(), d.phaseOffset, strconv.FormatBool(d.onHoldover))
-	if d.hasGNSSAsSource() {
+	if d.tgmHoldover() {
+		if uint64(offset) > d.LocalMaxHoldoverOffSet {
+			d.inSpec = false
+			d.state = event.PTP_FREERUN
+			d.phaseOffset = FaultyPhaseOffset
+			d.sendDpllEvent()
+			return true
+		}
+		d.holdoverEstimate = offset
+		d.inSpec = d.inSpec && uint64(offset) <= d.MaxInSpecOffset && elapsed.Seconds() <= float64(d.LocalHoldoverTimeout)
+		d.state = event.PTP_HOLDOVER
+	} else if d.hasGNSSAsSource() {
 		if !d.frequencyTraceable && !d.isInSpecOffsetInRange() {
 			d.inSpec = false
 			d.state = event.PTP_FREERUN
