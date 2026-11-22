@@ -110,8 +110,10 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 
 	// Update clock state metrics if available. BC/OC clock_state is owned by the
 	// BCClock state machine (emitted from clockmgr as process="ptp4l"), so the
-	// log parser must not also emit it here.
-	if masterIfaceResolved && ptpMetrics.ClockState != "" && process.clockType != event.BC && process.clockType != event.OC {
+	// log parser must not also emit it here. T-BC ptp4l state is clock-owned source
+	// readiness, not the servo's raw state.
+	if masterIfaceResolved && ptpMetrics.ClockState != "" && process.clockType != event.BC && process.clockType != event.OC &&
+		(process.clockType != event.TBC || process.name != event.Ptp4lProcessName) {
 		updateClockStateMetrics(process.name, iface, string(ptpMetrics.ClockState), ptpMetrics.ServoState)
 	}
 
@@ -238,7 +240,7 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 
 func processPtp4lEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 	// Update interface role metrics
-	if ptpEvent.PortID > 0 && len(process.ifaces) >= ptpEvent.PortID-1 {
+	if ptpEvent.PortID > 0 && ptpEvent.PortID <= len(process.ifaces) {
 		configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
 		configName = strings.Split(configName, MessageTagSuffixSeperator)[0]
 
@@ -261,6 +263,12 @@ func processPtp4lEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 			stateChanged := slaveIface.isFollowerIface(configName, interfaceName)
 			sourceIsPtp4l := masterOffsetSource.get(configName) == event.Ptp4lProcessName
 			if stateChanged && sourceIsPtp4l {
+				if process.clockType == event.TBC {
+					// Port-role changes may be hitless BMCA reselection. Keep role
+					// telemetry, but do not fabricate source-wide failure or corrupt
+					// phc2sys offset metrics while another upstream remains usable.
+					return
+				}
 				// Set fault metrics and clear slave & master offset interfaces
 				updatePTPMetrics(master, process.name, masterOffsetIface.get(configName).alias, faultyOffset, faultyOffset, 0, 0)
 				updatePTPMetrics(phc, event.Phc2SysProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)

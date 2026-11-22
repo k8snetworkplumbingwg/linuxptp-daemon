@@ -99,12 +99,9 @@ func RunPMCExpSetGMSettings(configFileName string, g protocol.GrandmasterSetting
 			time.Sleep(10 * time.Millisecond)
 		}
 
-		glog.Infof("RunPMCExpSetGMSettings: configFileName=%s, ClockClass=%d, ClockAccuracy=%v",
-			configFileName, g.ClockQuality.ClockClass, g.ClockQuality.ClockAccuracy)
 		cmdStr := cmdSetGMSettings
 		cmdStr += strings.ReplaceAll(g.String(), "\n", " ")
 		pmcCmd := pmcCmdConstPart + configFileName
-		glog.Infof("RunPMCExpSetGMSettings: pmcCmd=%s, cmdStr=%s", pmcCmd, cmdStr)
 		exp, r, err = expect.Spawn(pmcCmd, -1)
 		if err != nil {
 			glog.Errorf("RunPMCExpSetGMSettings: failed to spawn pmc: %v", err)
@@ -112,7 +109,9 @@ func RunPMCExpSetGMSettings(configFileName string, g protocol.GrandmasterSetting
 		}
 		defer utils.CloseExpect(exp, r)
 
-		if err = exp.Send(cmdStr + "\n"); err != nil {
+		request := cmdStr + "\n"
+		glog.Infof("PMC SET GRANDMASTER_SETTINGS_NP: config=%s, pmc=%q, request=%q", configFileName, pmcCmd, request)
+		if err = exp.Send(request); err != nil {
 			glog.Errorf("RunPMCExpSetGMSettings: failed to send command: %v", err)
 			continue
 		}
@@ -201,7 +200,6 @@ func RunPMCExpSetExternalGMPropertiesNP(configFileName string, egp protocol.Exte
 	cmdStr := cmdSetExternalGMPropertiesNP
 	cmdStr += strings.ReplaceAll(egp.String(), "\n", " ")
 	pmcCmd := pmcCmdConstPart + configFileName
-	glog.Infof("Sending %s %s", pmcCmd, cmdStr)
 
 	e, r, err := expect.Spawn(pmcCmd, -1)
 	if err != nil {
@@ -209,7 +207,9 @@ func RunPMCExpSetExternalGMPropertiesNP(configFileName string, egp protocol.Exte
 	}
 	defer utils.CloseExpect(e, r)
 
-	if err = e.Send(cmdStr + "\n"); err == nil {
+	request := cmdStr + "\n"
+	glog.Infof("PMC SET EXTERNAL_GRANDMASTER_PROPERTIES_NP: config=%s, pmc=%q, request=%q", configFileName, pmcCmd, request)
+	if err = e.Send(request); err == nil {
 		result, dbg, err1 := e.Expect(externalGMPropertiesNPRegExp, cmdTimeout)
 		if err1 != nil {
 			glog.Errorf("pmc result match error %v", err1)

@@ -205,7 +205,8 @@ func (c OnStateAndOffsetForCount) GetStatsRequests() []StatsRequest {
 	return []StatsRequest{{ClockID: c.ClockID, Source: c.Source}}
 }
 
-// OnSourceQualified requires the retained qualification of the identified upstream.
+// OnSourceQualified requires the identified TR instance's retained readiness:
+// an external BMCA reference is selected and its timing stream is qualified.
 // It never interprets a raw log/process event as evaluated readiness.
 type OnSourceQualified struct {
 	ConfigName string

@@ -9,6 +9,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
@@ -44,7 +45,7 @@ func TestSourceQualificationIndependentOfAggregateInSync(t *testing.T) {
 			t.Parallel()
 			source, err := utils.NewQualificationState(utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 2, DisqualifiedSamples: 1})
 			require.NoError(t, err)
-			sample := utils.QualificationSample{Source: PTPPortSource{Port: "tr0"}, SourceAvailable: true, Offset: 50}
+			sample := utils.QualificationSample{Source: PTPInstanceSource{ConfigName: testPTP4lCfg}, SourceAvailable: true, Offset: 50}
 			source.Evaluate(sample)
 			require.True(t, source.Evaluate(sample).Qualified)
 			bc := newPMCTestTBCClock(nil)
@@ -74,6 +75,39 @@ func TestSourceQualificationIndependentOfAggregateInSync(t *testing.T) {
 			require.False(t, source.Evaluate(sample).Qualified, "source has its own one-sample disqualification window")
 		})
 	}
+}
+
+func TestTBCQualificationHistoryAcrossBMCAReselection(t *testing.T) {
+	t.Parallel()
+	bc := newPMCTestTBCClock(&pmc.MockClient{})
+	bc.cfgName = testPTP4lCfg
+	generation, err := bc.ConfigureSourceQualification([]string{"tr0", "tr1"}, utils.QualificationConfig{
+		QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 2, DisqualifiedSamples: 2})
+	require.NoError(t, err)
+	observe := func(port string, data event.PTPSourceObservation) event.SourceQualification {
+		data.Generation = generation
+		return bc.ObserveSource(event.Event{Source: event.PTP4l, CfgName: testPTP4lCfg, IFace: port}, &data)
+	}
+	role := func(port string, value parserconstants.PTPPortRole) {
+		require.Empty(t, observe(port, event.PTPSourceObservation{PortRole: &value}).SourceType)
+	}
+	role("tr0", parserconstants.PortRoleSlave)
+	observe("", event.PTPSourceObservation{Selection: parserconstants.BMCAExternal})
+	require.False(t, observe("tr0", event.PTPSourceObservation{ServoState: "s2", Offset: 10}).Ready)
+	role("tr0", parserconstants.PortRoleFaulty)
+	role("tr1", parserconstants.PortRoleSlave)
+	observe("", event.PTPSourceObservation{Selection: parserconstants.BMCAExternal})
+	result := observe("tr1", event.PTPSourceObservation{ServoState: "s2", Offset: 10})
+	require.True(t, result.Ready, "partial qualification survives hitless reselection")
+	require.Equal(t, 2, result.Samples)
+	require.True(t, observe("tr1", event.PTPSourceObservation{ServoState: "s2", Offset: 201}).Ready)
+	role("tr1", parserconstants.PortRoleListening)
+	role("tr0", parserconstants.PortRoleSlave)
+	observe("", event.PTPSourceObservation{Selection: parserconstants.BMCAExternal})
+	result = observe("tr0", event.PTPSourceObservation{ServoState: "s2", Offset: 201})
+	require.False(t, result.Ready, "partial disqualification also survives reselection")
+	require.Equal(t, 2, result.Samples)
+	require.Equal(t, PTPInstanceSource{ConfigName: testPTP4lCfg, Generation: generation}, result.Source)
 }
 
 func ensureLeapMocked(t *testing.T) {
@@ -213,16 +247,17 @@ func TestUpdateTSCState(t *testing.T) {
 		return bc
 	}
 	lock := func(bc *TBC) SyncState {
-		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
-		bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_LOCKED, 10, false))
+		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10))
+		bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_LOCKED, 10))
 		fillBCDataWindows(bc, 10)
-		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
+		setTBCSourceReadyForTest(bc, true)
+		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10))
 		return bc.AddEvent(event.Event{Source: event.PMC, Data: &event.ParentDSData{ParentDataSet: protocol.ParentDataSet{GrandmasterClockClass: 6}}})
 	}
 
 	t.Run("FREERUN", func(t *testing.T) {
 		bc := newClock(t)
-		state := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
+		state := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10))
 		assert.Equal(t, event.PTP_FREERUN, state.State)
 		assert.Equal(t, fbprotocol.ClockClassSlaveOnly, state.ClockClass)
 	})
@@ -234,18 +269,18 @@ func TestUpdateTSCState(t *testing.T) {
 	t.Run("LOCKED to HOLDOVER", func(t *testing.T) {
 		bc := newClock(t)
 		require.Equal(t, event.PTP_LOCKED, lock(bc).State)
-		state := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
+		state := setTBCSourceReadyForTest(bc, false)
 		assert.Equal(t, event.PTP_HOLDOVER, state.State)
 		assert.Equal(t, fbprotocol.ClockClassSlaveOnly, state.ClockClass)
 	})
 	t.Run("HOLDOVER in-spec to out-of-spec", func(t *testing.T) {
 		bc := newClock(t)
 		require.Equal(t, event.PTP_LOCKED, lock(bc).State)
-		holdover := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
+		holdover := setTBCSourceReadyForTest(bc, false)
 		require.Equal(t, event.PTP_HOLDOVER, holdover.State)
 		require.Equal(t, fbprotocol.ClockClassSlaveOnly, holdover.ClockClass)
 		fillBCDataWindows(bc, 600)
-		state := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_HOLDOVER, 600, false))
+		state := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_HOLDOVER, 600))
 		assert.Equal(t, event.PTP_HOLDOVER, state.State)
 		assert.Equal(t, fbprotocol.ClockClassSlaveOnly, state.ClockClass)
 	})
@@ -267,9 +302,9 @@ func TestAnnounceLocalData_Freerun_SetsGMSettingsAndEGP(t *testing.T) {
 
 	bc.announceLocalData(cfgName)
 
-	// 3 async goroutines: 1 EGP + 2 GM settings
+	// Only the controlled ports receive settings; the leading TR is not updated.
 	if !assert.Eventually(t, func() bool {
-		return len(mock.SnapshotSetCalls()) >= 3
+		return len(mock.SnapshotSetCalls()) >= 2
 	}, 1*time.Second, 10*time.Millisecond) {
 		return
 	}
@@ -283,13 +318,18 @@ func TestAnnounceLocalData_Freerun_SetsGMSettingsAndEGP(t *testing.T) {
 	assert.Equal(t, uint16(0), egpCalls[0].ExternalGMPropertiesNP.StepsRemoved)
 
 	gmCalls := filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")
-	if !assert.Len(t, gmCalls, 2) {
+	if !assert.Len(t, gmCalls, 1) {
 		return
 	}
-
-	configs := []string{gmCalls[0].CfgName, gmCalls[1].CfgName}
-	assert.Contains(t, configs, testControlledCfg)
-	assert.Contains(t, configs, cfgName)
+	assert.Equal(t, testControlledCfg, gmCalls[0].CfgName)
+	assert.Never(t, func() bool {
+		for _, call := range filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings") {
+			if call.CfgName == cfgName {
+				return true
+			}
+		}
+		return false
+	}, 100*time.Millisecond, 10*time.Millisecond, "leading TR settings must not be updated")
 
 	for _, call := range gmCalls {
 		gs := call.GMSettings
@@ -323,15 +363,16 @@ func TestAnnounceLocalData_Holdover135_SetsTimeProperties(t *testing.T) {
 	bc.announceLocalData(cfgName)
 
 	if !assert.Eventually(t, func() bool {
-		return len(filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")) >= 2
+		return len(mock.SnapshotSetCalls()) >= 2
 	}, 1*time.Second, 10*time.Millisecond) {
 		return
 	}
 
 	gmCalls := filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")
-	if !assert.Len(t, gmCalls, 2) {
+	if !assert.Len(t, gmCalls, 1) {
 		return
 	}
+	assert.Equal(t, testControlledCfg, gmCalls[0].CfgName)
 
 	for _, call := range gmCalls {
 		gs := call.GMSettings
@@ -364,15 +405,16 @@ func TestAnnounceLocalData_Holdover165_NotTimeTraceable(t *testing.T) {
 	bc.announceLocalData(cfgName)
 
 	if !assert.Eventually(t, func() bool {
-		return len(filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")) >= 2
+		return len(mock.SnapshotSetCalls()) >= 2
 	}, 1*time.Second, 10*time.Millisecond) {
 		return
 	}
 
 	gmCalls := filterSetCalls(mock.SnapshotSetCalls(), "SetGMSettings")
-	if !assert.Len(t, gmCalls, 2) {
+	if !assert.Len(t, gmCalls, 1) {
 		return
 	}
+	assert.Equal(t, testControlledCfg, gmCalls[0].CfgName)
 
 	for _, call := range gmCalls {
 		gs := call.GMSettings
@@ -1087,7 +1129,7 @@ func TestAddEvent_SourceLostPropagation(t *testing.T) {
 func TestIsSourceLostBC_StaleDetailFixed(t *testing.T) {
 	now := time.Now().UnixMilli()
 
-	t.Run("stale LOCKED detail on other iface keeps isSourceLostBC false (no cross-hardware bleeding)", func(t *testing.T) {
+	t.Run("LOCKED port details cannot establish source readiness", func(t *testing.T) {
 		ptp4lData := &event.Data{
 			ProcessName: event.PTP4l,
 			Details: []*event.DataDetails{
@@ -1105,7 +1147,7 @@ func TestIsSourceLostBC_StaleDetailFixed(t *testing.T) {
 		bc := newPMCTestTBCClock(nil)
 		bc.data = []*event.Data{ptp4lData, dpllData}
 
-		assert.False(t, bc.isSourceLostBC(), "before source-lost event, ptpLost should be false")
+		assert.True(t, bc.isSourceLostBC(), "without BMCA and qualification evidence the source is unavailable")
 
 		ptp4lData.AddEvent(event.Event{
 			Source: event.PTP4l,
@@ -1114,8 +1156,71 @@ func TestIsSourceLostBC_StaleDetailFixed(t *testing.T) {
 			Data:   &event.StateData{State: event.PTP_FREERUN, SourceLost: true},
 		})
 
-		assert.False(t, bc.isSourceLostBC(), "stale LOCKED detail on other iface prevents ptpLost")
+		assert.True(t, bc.isSourceLostBC(), "another port's LOCKED detail cannot override source availability")
 	})
+}
+
+func TestTBCBMCAOverridesStaleLockedPort(t *testing.T) {
+	bc, ipcMessages := newLockedTBCClock()
+	bc.cfgName = testPTP4lCfg
+	bc.controlledPortsConfig = testControlledCfg
+	require.Equal(t, event.PTP_LOCKED, bc.GetState())
+
+	now := time.Now().UnixMilli()
+	ptpData := bc.GetData(event.PTP4l)
+	ptpData.Details = event.DDetails{
+		{IFace: "eno8303np0", State: event.PTP_FREERUN, Offset: 10, Time: now},
+		{IFace: "eno8403np1", State: event.PTP_LOCKED, Offset: 10, Time: now},
+	}
+	require.False(t, bc.isSourceLostBC())
+
+	observe := func(cfg string, observation event.PTPSourceObservation) event.SourceQualification {
+		observation.Generation = bc.ptpSource.generation
+		return bc.ObserveSource(event.Event{Source: event.PTP4l, CfgName: cfg}, &observation)
+	}
+	oldRevision := bc.ptpSource.revision
+	assert.Empty(t, observe("ptp4l.9.config", event.PTPSourceObservation{Selection: parserconstants.BMCALocal}).SourceType)
+	assert.Equal(t, event.PTP_LOCKED, bc.GetState(), "another config cannot change source selection")
+
+	ipcMessages.messages = nil
+	result := observe(testPTP4lCfg, event.PTPSourceObservation{Selection: parserconstants.BMCALocal})
+	assert.False(t, result.Ready)
+	state := bc.GetSyncState()
+	assert.Equal(t, event.PTP_LOCKED, ptpData.GetDataDetails("eno8403np1").State, "the old port detail is still locked")
+	assert.Equal(t, event.PTP_LOCKED, bc.GetData(event.DPLL).GetDataDetails(testTBCIface).State, "DPLL has not reported loss")
+	assert.True(t, bc.isSourceLostBC())
+	assert.Equal(t, event.PTP_HOLDOVER, state.State)
+	assert.Equal(t, fbprotocol.ClockClass(135), state.ClockClass)
+	classMessage := findMessage(ipcMessages.messages, ipc.TypeClockClass)
+	require.NotNil(t, classMessage)
+	assert.Equal(t, ipc.ClockClassValue{ClockClass: 135}, classMessage.Values)
+
+	// A stale-looking offset sample cannot clear the authoritative loss.
+	state = bc.AddEvent(event.Event{Source: event.PTP4l, CfgName: testPTP4lCfg, IFace: "eno8403np1", Time: now + 2,
+		Data: &event.OffsetData{State: event.PTP_LOCKED, Offset: 10}})
+	assert.Equal(t, event.PTP_HOLDOVER, state.State)
+	assert.Equal(t, parserconstants.BMCALocal, bc.ptpSource.selection)
+	bc.AddEvent(event.Event{Source: event.PTP4l, CfgName: testPTP4lCfg, IFace: "eno8403np1", Time: now + 3,
+		Data: &event.StateData{State: event.PTP_LOCKED}})
+	assert.Equal(t, event.PTP_HOLDOVER, bc.GetState(), "synthetic LOCKED cannot change BMCA selection")
+	assert.False(t, observe(testPTP4lCfg, event.PTPSourceObservation{ServoState: "s2", Offset: 10}).Ready)
+
+	// External selection is necessary, but is neither fresh quality evidence nor
+	// a successful input action. Only all three permit aggregate recovery.
+	assert.False(t, observe(testPTP4lCfg, event.PTPSourceObservation{Selection: parserconstants.BMCAExternal}).Ready)
+	result = observe(testPTP4lCfg, event.PTPSourceObservation{ServoState: "s2", Offset: 10})
+	require.True(t, result.Ready)
+	assert.Equal(t, event.PTP_HOLDOVER, bc.GetState(), "a failed/missing locked apply must not recover the clock")
+	ack := event.Event{Source: event.PTP4l, CfgName: testPTP4lCfg,
+		Data: &event.PTPSourceApplied{Generation: result.Generation, Revision: oldRevision, Enabled: true}}
+	assert.Equal(t, event.PTP_HOLDOVER, bc.AddEvent(ack).State, "an old successful action cannot acknowledge recovery")
+	ack.Data.(*event.PTPSourceApplied).Revision = result.Revision
+	assert.Equal(t, event.PTP_LOCKED, bc.AddEvent(ack).State)
+
+	observe(testPTP4lCfg, event.PTPSourceObservation{Selection: parserconstants.BMCALocal})
+	assert.Equal(t, event.PTP_HOLDOVER, bc.GetState())
+	bc.Reset()
+	assert.Equal(t, parserconstants.BMCAUnknown, bc.ptpSource.selection, "reset invalidates selection")
 }
 
 func TestUpdateBCState(t *testing.T) {
@@ -1133,7 +1238,7 @@ func TestUpdateBCState(t *testing.T) {
 		})
 		assert.Equal(t, event.PTP_FREERUN, bc.syncState.State, "ts2phc failure should degrade the composite clock")
 
-		result := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
+		result := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10))
 		assert.Equal(t, event.PTP_FREERUN, result.State,
 			"healthy offsets and source state must not recover while ts2phc still reports FREERUN")
 
@@ -1148,7 +1253,7 @@ func TestUpdateBCState(t *testing.T) {
 	t.Run("LOCKED to FREERUN via offset", func(t *testing.T) {
 		bc, _ := newLockedTBCClock()
 
-		result := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 2000, false))
+		result := bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 2000))
 		assert.Equal(t, event.PTP_FREERUN, result.State, "should transition to FREERUN")
 		assert.Equal(t, protocol.ClockClassFreerun, result.ClockClass, "clockClass should be 248")
 	})
@@ -1174,7 +1279,7 @@ func TestUpdateBCState(t *testing.T) {
 	t.Run("LOCKED to HOLDOVER via source lost", func(t *testing.T) {
 		bc, _ := newLockedTBCClock()
 
-		result := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
+		result := setTBCSourceReadyForTest(bc, false)
 		assert.Equal(t, event.PTP_HOLDOVER, result.State, "should transition to HOLDOVER")
 		assert.Equal(t, fbprotocol.ClockClass(135), result.ClockClass, "clockClass should be 135 (holdover in-spec)")
 	})
@@ -1182,23 +1287,23 @@ func TestUpdateBCState(t *testing.T) {
 	t.Run("HOLDOVER to LOCKED", func(t *testing.T) {
 		bc, _ := newLockedTBCClock()
 
-		result := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
+		result := setTBCSourceReadyForTest(bc, false)
 		assert.Equal(t, event.PTP_HOLDOVER, result.State, "setup: should be HOLDOVER")
 
 		bc.leadingClockData.inSyncFilter.Reset()
-		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 5, false))
+		bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 5))
 		fillBCDataWindows(bc, 5)
-		result = bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_LOCKED, 5, false))
+		result = setTBCSourceReadyForTest(bc, true)
 		assert.Equal(t, event.PTP_LOCKED, result.State, "should transition back to LOCKED")
 	})
 
 	t.Run("HOLDOVER to FREERUN via offset", func(t *testing.T) {
 		bc, _ := newLockedTBCClock()
 
-		result := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
+		result := setTBCSourceReadyForTest(bc, false)
 		assert.Equal(t, event.PTP_HOLDOVER, result.State, "setup: should be HOLDOVER")
 
-		result = bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_HOLDOVER, 2000, false))
+		result = bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_HOLDOVER, 2000))
 		assert.Equal(t, event.PTP_FREERUN, result.State, "should transition to FREERUN")
 		assert.Equal(t, protocol.ClockClassFreerun, result.ClockClass, "clockClass should be 248")
 	})
@@ -1206,12 +1311,12 @@ func TestUpdateBCState(t *testing.T) {
 	t.Run("HOLDOVER in-spec to out-of-spec", func(t *testing.T) {
 		bc, _ := newLockedTBCClock()
 
-		result := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
+		result := setTBCSourceReadyForTest(bc, false)
 		assert.Equal(t, event.PTP_HOLDOVER, result.State, "setup: should be HOLDOVER")
 		assert.Equal(t, fbprotocol.ClockClass(135), result.ClockClass, "setup: should be in-spec (135)")
 
 		fillBCDataWindows(bc, 600)
-		result = bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_HOLDOVER, 600, false))
+		result = bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_HOLDOVER, 600))
 		assert.Equal(t, event.PTP_HOLDOVER, result.State, "should stay in HOLDOVER")
 		assert.Equal(t, fbprotocol.ClockClass(165), result.ClockClass, "clockClass should change to 165 (out-of-spec)")
 	})
@@ -1267,7 +1372,7 @@ func TestUpdateBCStateHoldoverDisabled(t *testing.T) {
 			rec.messages = nil
 
 			// Upstream lost while the cached leading DPLL is still locked with a small offset.
-			result := bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_FREERUN, 10, true))
+			result := setTBCSourceReadyForTest(bc, false)
 			assert.Equal(t, tt.wantState, result.State)
 			assert.Equal(t, tt.wantClass, result.ClockClass)
 
@@ -1417,7 +1522,7 @@ func fillBCDataWindows(bc *TBC, offset int64) {
 	}
 }
 
-func makeTBCEvent(process event.EventSource, state event.PTPState, offset int64, sourceLost bool) event.Event {
+func makeTBCEvent(process event.EventSource, state event.PTPState, offset int64) event.Event {
 	return event.Event{
 		Source:     process,
 		IFace:      testTBCIface,
@@ -1426,9 +1531,8 @@ func makeTBCEvent(process event.EventSource, state event.PTPState, offset int64,
 		Time:       time.Now().UnixMilli(),
 		WriteToLog: true,
 		Data: &event.OffsetData{
-			State:      state,
-			Offset:     offset,
-			SourceLost: sourceLost,
+			State:  state,
+			Offset: offset,
 		},
 	}
 }
@@ -1453,7 +1557,7 @@ func newLockedTBCClock() (*TBC, *ipcRecorder) {
 	rec := ipcRecorder{}
 	bc := &TBC{
 		BaseClock: BaseClock{
-			cfgName:          testTS2PHCCfg,
+			cfgName:          testPTP4lCfg,
 			sendIPC:          rec.send,
 			overallSyncState: event.PTP_NOTSET,
 			osClock:          &OsClock{State: event.PTP_NOTSET},
@@ -1468,9 +1572,32 @@ func newLockedTBCClock() (*TBC, *ipcRecorder) {
 			ClockAccuracy: fbprotocol.ClockAccuracyUnknown,
 		},
 	}
-	bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
-	bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_LOCKED, 10, false))
+	bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10))
+	bc.AddEvent(makeTBCEvent(event.Ptp4lProcessName, event.PTP_LOCKED, 10))
 	fillBCDataWindows(bc, 10)
-	bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10, false))
+	setTBCSourceReadyForTest(bc, true)
+	bc.AddEvent(makeTBCEvent(event.DPLL, event.PTP_LOCKED, 10))
 	return bc, &rec
+}
+
+func setTBCSourceReadyForTest(bc *TBC, ready bool) SyncState {
+	if bc.ptpSource == nil {
+		if _, err := bc.ConfigureSourceQualification([]string{testTBCIface}, utils.QualificationConfig{
+			QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 1, DisqualifiedSamples: 1}); err != nil {
+			panic(err)
+		}
+	}
+	generation := bc.ptpSource.generation
+	if !ready {
+		bc.ObserveSource(event.Event{Source: event.PTP4l, CfgName: bc.cfgName}, &event.PTPSourceObservation{
+			Generation: generation, Selection: parserconstants.BMCALocal})
+		return bc.GetSyncState()
+	}
+	bc.ObserveSource(event.Event{Source: event.PTP4l, CfgName: bc.cfgName}, &event.PTPSourceObservation{
+		Generation: generation, Selection: parserconstants.BMCAExternal})
+	result := bc.ObserveSource(event.Event{Source: event.PTP4l, CfgName: bc.cfgName}, &event.PTPSourceObservation{
+		Generation: generation, ServoState: "s2", Offset: 10})
+	bc.AddEvent(event.Event{Source: event.PTP4l, CfgName: bc.cfgName,
+		Data: &event.PTPSourceApplied{Generation: generation, Revision: result.Revision, Enabled: true}})
+	return bc.GetSyncState()
 }

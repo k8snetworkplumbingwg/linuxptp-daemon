@@ -15,6 +15,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/testhelpers"
@@ -348,6 +349,44 @@ func bcEvent(cfgName string, source event.EventSource, data event.EventData) eve
 	}
 }
 
+// configureTBCSource drives source facts through the real event loop. Offset
+// telemetry and per-port LOCKED state alone cannot release a T-BC clock.
+func configureTBCSource(t *testing.T, manager *clockmgr.ClockManager, events chan event.Event, cfg, iface string) func(bool) {
+	t.Helper()
+	generation, err := manager.ConfigureSourceQualification(cfg, []string{iface}, utils.QualificationConfig{
+		QualifiedThreshold: 100, DisqualifiedThreshold: 100, QualifiedSamples: 5, DisqualifiedSamples: 5})
+	require.NoError(t, err)
+	observe := func(observation event.PTPSourceObservation) event.SourceQualification {
+		t.Helper()
+		observation.Generation = generation
+		observation.Reply = make(chan event.SourceQualification, 1)
+		events <- event.Event{Source: event.PTP4l, CfgName: cfg, IFace: iface, ClockType: event.TBC,
+			Time: time.Now().UnixMilli(), Data: &observation}
+		select {
+		case result := <-observation.Reply:
+			return result
+		case <-time.After(time.Second):
+			t.Fatal("source observation was not processed")
+			return event.SourceQualification{}
+		}
+	}
+	return func(ready bool) {
+		t.Helper()
+		if !ready {
+			observe(event.PTPSourceObservation{Selection: parserconstants.BMCALocal})
+			return
+		}
+		observe(event.PTPSourceObservation{Selection: parserconstants.BMCAExternal, ClockID: testClockID})
+		var result event.SourceQualification
+		for i := 0; i < 5; i++ {
+			result = observe(event.PTPSourceObservation{ServoState: "s2", Offset: 10})
+		}
+		require.True(t, result.Ready)
+		events <- event.Event{Source: event.PTP4l, CfgName: cfg, ClockType: event.TBC, Time: time.Now().UnixMilli(),
+			Data: &event.PTPSourceApplied{Generation: generation, Revision: result.Revision, Enabled: true}}
+	}
+}
+
 func TestTBCClockClassThroughProcessEvents(t *testing.T) {
 	pmcMock := &pmc.MockClient{
 		ParentTimeCurrentDSResult: pmc.ParentTimeCurrentDS{
@@ -378,6 +417,7 @@ func TestTBCClockClassThroughProcessEvents(t *testing.T) {
 	require.NoError(t, err)
 	addErr := eventManager.AddClock(tbcClk)
 	assert.NoError(t, addErr)
+	setSourceReady := configureTBCSource(t, eventManager, eChannel, testBCCfgPTP4l, "ens1f0")
 	eChannel <- event.Event{
 		Source:    event.PMC,
 		CfgName:   testBCCfgPTP4l,
@@ -426,6 +466,7 @@ func TestTBCClockClassThroughProcessEvents(t *testing.T) {
 	}
 
 	// One more DPLL event in LOCKED state triggers "stay LOCKED" path:
+	setSourceReady(true)
 	// upstream ParentDataSet (class 6) != downstream (class 0) → needsDownstreamUpdate
 	// → downstreamAnnounceIWF → announceClockClass(6)
 	eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.DPLLData{State: event.PTP_LOCKED, Offset: utils.ToPtr[int64](10)})
@@ -434,7 +475,7 @@ func TestTBCClockClassThroughProcessEvents(t *testing.T) {
 		"expected clock class 6 after BC reaches LOCKED")
 
 	// Phase 2: PTP4l source lost triggers LOCKED→HOLDOVER (class 135)
-	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_FREERUN, Offset: 10, SourceLost: true})
+	setSourceReady(false)
 
 	assert.True(t, waitForMetric(clockClassGauge, 135),
 		"expected clock class 135 after BC enters HOLDOVER")
@@ -530,6 +571,7 @@ func TestTBCClockClassMetric(t *testing.T) {
 	require.NoError(t, err)
 	addErr := eventManager.AddClock(tbcClk)
 	assert.NoError(t, addErr)
+	setSourceReady := configureTBCSource(t, eventManager, eChannel, testBCCfgPTP4l, "ens1f0")
 	eChannel <- event.Event{
 		Source:    event.PMC,
 		CfgName:   testBCCfgPTP4l,
@@ -573,13 +615,14 @@ func TestTBCClockClassMetric(t *testing.T) {
 	}
 
 	// Trigger "stay LOCKED" → upstream data mismatch → announceClockClass(6)
+	setSourceReady(true)
 	eChannel <- bcEvent(bcCfgDPLL, event.DPLL, &event.DPLLData{State: event.PTP_LOCKED, Offset: utils.ToPtr[int64](10)})
 
 	assert.True(t, waitForMetric(clockClassGauge, 6),
 		"expected clock class metric = 6 for %s after LOCKED", bcCfgPTP4l)
 
 	// PTP4l source lost → LOCKED→HOLDOVER (class 135)
-	eChannel <- bcEvent(bcCfgPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_FREERUN, Offset: 10, SourceLost: true})
+	setSourceReady(false)
 
 	assert.True(t, waitForMetric(clockClassGauge, 135),
 		"expected clock class metric = 135 for %s after HOLDOVER", bcCfgPTP4l)
@@ -729,6 +772,7 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 	require.NoError(t, err)
 	addErr = eventManager.AddClock(tbcClk)
 	require.NoError(t, addErr)
+	setTBCSourceReady := configureTBCSource(t, eventManager, eChannel, tbcPTP4l, tbcIface)
 	eChannel <- event.Event{
 		Source:    event.PMC,
 		CfgName:   tbcPTP4l,
@@ -908,6 +952,7 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	setTBCSourceReady(true)
 	msgs = drainIPCMessages(socketCh, 2*time.Second)
 
 	var gotTBCStateLocked bool
@@ -930,7 +975,7 @@ func TestMultiClockIPCIsolation(t *testing.T) {
 
 	drainIPCMessages(socketCh, 200*time.Millisecond)
 
-	eChannel <- tbcEvent(tbcPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_FREERUN, Offset: 10, SourceLost: true})
+	setTBCSourceReady(false)
 
 	msgs = drainIPCMessages(socketCh, 2*time.Second)
 
@@ -1065,6 +1110,10 @@ func TestOverallClockStateIntegration(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// --- Phase 1: Lock both TBCClocks' PTP state ---
+	setSourceReady := map[string]func(bool){
+		testBCCfgPTP4l:   configureTBCSource(t, eventManager, eChannel, testBCCfgPTP4l, "ens1f0"),
+		secondTBCCfgName: configureTBCSource(t, eventManager, eChannel, secondTBCCfgName, "ens1f0"),
+	}
 
 	lockTBCClock := func(cfgDPLL, cfgPTP4l string) {
 		eChannel <- bcEvent(cfgDPLL, event.DPLL, &event.DPLLData{
@@ -1086,6 +1135,7 @@ func TestOverallClockStateIntegration(t *testing.T) {
 			eChannel <- bcEvent(cfgPTP4l, event.PTP4l, &event.OffsetData{State: event.PTP_LOCKED, Offset: 10})
 			time.Sleep(50 * time.Millisecond)
 		}
+		setSourceReady[cfgPTP4l](true)
 	}
 
 	lockTBCClock(testBCCfgTS2PHC, testBCCfgPTP4l)

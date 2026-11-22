@@ -87,6 +87,8 @@ func TestSourceQualificationStartupAndRestart(t *testing.T) {
 	require.NoError(t, err)
 	setQualified := func(qualified bool) {
 		if qualified {
+			ct.cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: ptp4lConfig, Data: &event.PTPSourceObservation{
+				Generation: generation, Selection: parserconstants.BMCAExternal}})
 			ct.cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: ptp4lConfig, IFace: "tr0", Data: &event.PTPSourceObservation{
 				Generation: generation, PortRole: utils.ToPtr(parserconstants.PortRoleSlave)}})
 		}

@@ -6,10 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/exec"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,7 +20,6 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/logfilter"
 	ptpnetwork "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/network"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
@@ -102,7 +99,6 @@ type ptpProcess struct {
 	syncERelations        *synce.Relations
 	tBCAttributes         tBCProcessAttributes
 	GrandmasterClockClass uint8
-	tbcStateDetector      *hardwareconfig.PTPStateDetector // Cached PTP state detector instance
 	offset                float64
 	gnssSerialPort        string
 	sourceQualification   *sourceQualificationRuntime
@@ -118,69 +114,6 @@ func (p *ptpProcess) ClockType() event.ClockType {
 
 func (p *ptpProcess) DependentProcesses() []process.Process {
 	return p.depProcess
-}
-
-// prepareTBCResources prepares cached resources for T-BC processing
-// This method caches expensive operations that would otherwise be repeated 16x/second
-func (p *ptpProcess) prepareTBCResources() {
-	// TODO: I thinks belongs on a clock object.
-
-	// Cache hardwareconfig availability (expensive lookup)
-	if p.dn != nil {
-		vTbcHasHardwareConfig = p.dn.hardwareConfigManager.HasHardwareConfigForProfile(p.nodeProfile)
-	}
-
-	// Cache PTP state detector instance (expensive creation)
-	if vTbcHasHardwareConfig {
-		p.tbcStateDetector = p.dn.hardwareConfigManager.GetPTPStateDetector()
-	}
-}
-
-// tBCTransitionCheck performs ultra-fast T-BC transition detection (called 16x/second)
-// Uses cached values and optimized processing to minimize performance impact
-func (p *ptpProcess) tBCTransitionCheck(output string, pm *plugin.PluginManager) {
-	if p.sourceQualification != nil {
-		// Parsed source observations already drive the opted-in policy. Never
-		// also run the per-log-line legacy moving-average gate.
-		return
-	}
-	// TODO: I thinks belongs on a clock object.
-
-	// Use cached hardwareconfig availability (no expensive lookups)
-	if vTbcHasHardwareConfig && p.tbcStateDetector != nil {
-		// Hardwareconfig path: Use cached PTP state detector
-		p.processTBCTransitionHardwareConfig(output)
-	} else {
-		// Legacy path: Use optimized string matching
-		p.processTBCTransitionLegacy(output, pm)
-	}
-}
-
-// checkOffsetFilterAndTransition checks if offset filter conditions are met and transitions to LOCKED state
-// This function is called for every log line when processing the TR ports config file.
-// It collects offset samples and only transitions when the filter is full and mean offset is below threshold.
-// The transitionAction callback is called when conditions are met to perform the actual transition.
-func (p *ptpProcess) checkOffsetFilterAndTransition(transitionAction func()) {
-	// TODO: Clock object?
-
-	if p.configName != p.tBCAttributes.trPortsConfigFile || p.tBCAttributes.offsetFilter == nil {
-		return
-	}
-
-	p.tBCAttributes.offsetFilter.Insert(math.Abs(p.offset))
-	if p.tBCAttributes.lastReportedState == event.PTP_LOCKED &&
-		p.tBCAttributes.lastAppliedState != event.PTP_LOCKED {
-		// Require filter to be full before sending event to ensure meaningful filtering
-		if p.tBCAttributes.offsetFilter.IsFull() {
-			tempOffset := p.tBCAttributes.offsetFilter.Mean()
-			glog.Infof("Filtered Offset: %f, threshold %f", tempOffset, p.tBCAttributes.offsetThreshold)
-			if tempOffset < p.tBCAttributes.offsetThreshold {
-				glog.Infof("T-BC MOVE TO NORMAL STATE")
-				transitionAction()
-				p.tBCAttributes.lastAppliedState = event.PTP_LOCKED
-			}
-		}
-	}
 }
 
 // sendPtp4lOffsetEvent inserts the current ptp4l offset into a sliding window and,
@@ -219,105 +152,9 @@ func (p *ptpProcess) sendPtp4lOffsetEvent() {
 	}
 }
 
-// processTBCTransitionHardwareConfig handles T-BC transitions using hardwareconfig.
-// Tracks per-port state and derives aggregate state:
-//   - Any upstream port in SLAVE -> aggregate LOCKED
-//   - All upstream ports lost SLAVE -> aggregate LOST (enter holdover)
-//
-// During a switchover (one port loses SLAVE, BMCA promotes the other), there is a
-// brief gap where no port is SLAVE. Entering holdover during this gap is correct
-// because the DPLL is not being disciplined by PTP. When the new port reaches SLAVE,
-// the offset filter will confirm stability before exiting holdover.
-func (p *ptpProcess) processTBCTransitionHardwareConfig(output string) {
-	// TODO: clock objec?
-
-	portName, conditionType := p.tbcStateDetector.DetectStateChange(output)
-
-	switch conditionType {
-	case hardwareconfig.ConditionTypeLocked:
-		p.tBCAttributes.perPortState[portName] = event.PTP_LOCKED
-		p.tBCAttributes.activePort = portName
-		p.tBCAttributes.lastReportedState = event.PTP_LOCKED
-		glog.Infof("T-BC port %s LOCKED (reported state)", portName)
-		p.tBCAttributes.offsetFilter = utils.NewWindow(offsetFilterSize)
-
-	case hardwareconfig.ConditionTypeLost:
-		p.tBCAttributes.perPortState[portName] = event.PTP_FREERUN
-		glog.Infof("T-BC port %s lost SLAVE", portName)
-
-		if p.tBCAttributes.allPortsLost() {
-			if err := p.dn.hardwareConfigManager.ApplyConditionForProfile(p.nodeProfile, hardwareconfig.ConditionTypeLost); err != nil {
-				glog.Errorf("Failed to apply hardware config for '%s' condition: %v", hardwareconfig.ConditionTypeLost, err)
-			} else {
-				glog.Infof("Successfully applied hardware config for '%s' condition", hardwareconfig.ConditionTypeLost)
-			}
-
-			p.tBCAttributes.lastReportedState = event.PTP_FREERUN
-			p.tBCAttributes.activePort = ""
-			p.tBCAttributes.offsetFilter = nil
-			glog.Info("T-BC all upstream ports lost - MOVE TO HOLDOVER")
-			p.sendPtp4lStateEvent()
-			p.tBCAttributes.lastAppliedState = event.PTP_HOLDOVER
-		}
-	}
-
-	p.checkOffsetFilterAndTransition(func() {
-		if err := p.dn.hardwareConfigManager.ApplyConditionForProfile(p.nodeProfile, hardwareconfig.ConditionTypeLocked); err != nil {
-			glog.Errorf("Failed to apply hardware config for '%s' condition: %v", hardwareconfig.ConditionTypeLocked, err)
-		} else {
-			glog.Infof("Successfully applied hardware config for '%s' condition", hardwareconfig.ConditionTypeLocked)
-		}
-		p.sendPtp4lStateEvent()
-		// ts2phc start is now driven by conditions, not by explicit notification
-	})
-}
-
-// processTBCTransitionLegacy is the original implementation as ultimate fallback
-func (p *ptpProcess) processTBCTransitionLegacy(output string, pm *plugin.PluginManager) {
-	// TODO: clock object
-
-	portMatched := false
-	for _, iface := range p.tBCAttributes.trIfaceNames {
-		if strings.Contains(output, iface) {
-			portMatched = true
-			break
-		}
-	}
-	if portMatched {
-		if strings.Contains(output, "to SLAVE on MASTER_CLOCK_SELECTED") {
-			portName := parser.ExtractPortName(output)
-			if portName != "" {
-				if len(p.tBCAttributes.trIfaceNames) > 1 && !slices.Contains(p.tBCAttributes.trIfaceNames, portName) {
-					glog.Warningf("Ignoring non-TR port in legacy MASTER_CLOCK_SELECTED event: %s", portName)
-				} else {
-					p.tBCAttributes.activePort = portName
-					glog.Infof("T-BC active upstream port: %s", portName)
-				}
-			}
-			p.tBCAttributes.lastReportedState = event.PTP_LOCKED
-			p.tBCAttributes.offsetFilter = utils.NewWindow(offsetFilterSize)
-		} else if strings.Contains(output, "to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES") ||
-			strings.Contains(output, "SLAVE to") {
-			pm.AfterRunPTPCommand(p.nodeProfile, "tbc-ho-entry")
-			p.tBCAttributes.lastReportedState = event.PTP_FREERUN
-			glog.Info("T-BC MOVE TO HOLDOVER")
-			p.sendPtp4lStateEvent()
-			p.tBCAttributes.lastAppliedState = event.PTP_HOLDOVER
-			p.tBCAttributes.offsetFilter = nil
-		}
-	}
-
-	p.checkOffsetFilterAndTransition(func() {
-		pm.AfterRunPTPCommand(p.nodeProfile, "tbc-ho-exit")
-		p.sendPtp4lStateEvent()
-		// ts2phc start is now driven by conditions, not by explicit notification
-	})
-}
-
-// cmdRun runs given ptpProcess and restarts on errors
 // processOutput handles shared per-line processing for all process types:
 // chronyd prefix, plugin processing, clock ID replacement, log filtering,
-// metrics extraction, TBC transition check, and HA failover.
+// metrics extraction, source observations, and HA failover.
 func (p *ptpProcess) processOutput(output string) string {
 	if p.name == event.ChronydProcessName {
 		output = fmt.Sprintf("%s[%d]%s: %s", event.ChronydProcessName, p.cmd.Pid(), p.messageTag, output)
@@ -326,11 +163,6 @@ func (p *ptpProcess) processOutput(output string) string {
 	output = p.replaceClockID(output)
 	printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
 	p.processPTPMetrics(output)
-	if p.name == event.Ptp4lProcessName {
-		if p.profileClockType() == TBC {
-			p.tBCTransitionCheck(output, p.pm)
-		}
-	}
 	return output
 }
 
@@ -378,6 +210,7 @@ func (p *ptpProcess) Start(ctx context.Context) error {
 		}
 		q.mu.Lock()
 		q.generation, q.ctx = result.Generation, ctx
+		q.appliedKnown, q.desiredKnown = false, false
 		q.mu.Unlock()
 	}
 	p.run()
@@ -825,42 +658,11 @@ func (p *ptpProcess) getPTPClockID() (string, error) {
 		id&0xffffff0000000000>>40, id&0xffffff), nil
 }
 
-func (p *ptpProcess) sendPtp4lStateEvent() {
-	// TODO refactor into Ptp4l process
-
-	clockID, err := p.getPTPClockID()
-	if err != nil {
-		glog.Error(err)
-		clockID = "" // Set to empty string if error occurs
-	}
-	_ = clockID // Ensure linter sees the variable as used
-	select {
-	case p.eventCh <- event.Event{
-		Source:    event.PTP4l,
-		CfgName:   p.configName,
-		IFace:     p.tBCAttributes.activeTRPort(),
-		ClockType: p.clockType,
-		Time:      time.Now().UnixMilli(),
-		Reset:     false,
-		Data: &event.StateData{
-			State:      p.tBCAttributes.lastReportedState,
-			SourceLost: p.tBCAttributes.lastReportedState != event.PTP_LOCKED,
-			ClockID:    clockID,
-		},
-	}:
-	default:
-	}
-}
-
 type tBCProcessAttributes struct {
 	trPortsConfigFile string
 	trIfaceNames      []string
-	perPortState      map[string]event.PTPState
 	activePort        string
 	lastReportedState event.PTPState
-	lastAppliedState  event.PTPState
-	offsetFilter      *utils.Window
-	offsetThreshold   float64
 	// offsetEventWindow averages ptp4l offsets and sends them to the T-BC state machine once per second
 	offsetEventWindow  *utils.Window
 	lastOffsetEventSec int64
@@ -874,15 +676,6 @@ func (t *tBCProcessAttributes) activeTRPort() string {
 		return t.trIfaceNames[0]
 	}
 	return ""
-}
-
-func (t *tBCProcessAttributes) allPortsLost() bool {
-	for _, state := range t.perPortState {
-		if state == event.PTP_LOCKED {
-			return false
-		}
-	}
-	return true
 }
 
 func buildPtpCmdLine(name, configPath string, opts *string, nodeProfile *ptpv1.PtpProfile) string {
@@ -1094,23 +887,9 @@ func NewPtp4lProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	p.tBCAttributes = tBCProcessAttributes{
 		trPortsConfigFile: configFile,
 		lastReportedState: event.PTP_NOTSET,
-		lastAppliedState:  event.PTP_NOTSET,
 	}
 	if len(env.upstreamPorts) > 0 && env.clockType == event.TBC {
 		p.tBCAttributes.trIfaceNames = env.upstreamPorts
-		p.tBCAttributes.perPortState = make(map[string]event.PTPState, len(env.upstreamPorts))
-		for _, port := range env.upstreamPorts {
-			p.tBCAttributes.perPortState[port] = event.PTP_NOTSET
-		}
-		sInSyncConditionTh, thresholdConfigured := env.nodeProfile.PtpSettings["inSyncConditionThreshold"]
-		if thresholdConfigured {
-			p.tBCAttributes.offsetThreshold, err = strconv.ParseFloat(sInSyncConditionTh, 64)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse inSyncConditionThreshold: %s", err)
-			}
-		} else {
-			p.tBCAttributes.offsetThreshold = float64(getPTPThreshold(env.nodeProfile).MaxOffsetThreshold)
-		}
 		offsetEventWindowSize := defaultPtp4lOffsetEventWindowSize
 		if sWindowSize, ok := env.nodeProfile.PtpSettings["ptp4lOffsetEventWindowSize"]; ok {
 			if ws, parseErr := strconv.Atoi(sWindowSize); parseErr == nil && ws > 0 {
@@ -1120,7 +899,6 @@ func NewPtp4lProcess(env ptpProcessEnv) (*ptpProcess, error) {
 			}
 		}
 		p.tBCAttributes.offsetEventWindow = utils.NewWindow(offsetEventWindowSize)
-		p.prepareTBCResources()
 	}
 	if policy.applicable {
 		if err = p.configureSourceQualification(policy); err != nil {

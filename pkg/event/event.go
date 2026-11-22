@@ -191,30 +191,50 @@ func (d *OffsetData) String() string {
 // after clock evaluation, without running hardware I/O under the manager lock.
 type PTPSourceObservation struct {
 	Generation uint64
+	Selection  parserconstants.BMCASelection
 	PortRole   *parserconstants.PTPPortRole
 	Offset     float64
 	ServoState string
 	SourceLost bool
+	ClockID    string
 	Reply      chan SourceQualification
 }
 
 func (*PTPSourceObservation) eventData() {}
 
 func (d *PTPSourceObservation) String() string {
-	return fmt.Sprintf("PTP source generation=%d role=%v servo=%s offset=%v lost=%t", d.Generation, d.PortRole, d.ServoState, d.Offset, d.SourceLost)
+	return fmt.Sprintf("PTP source generation=%d selection=%s role=%v servo=%s offset=%v lost=%t", d.Generation, d.Selection, d.PortRole, d.ServoState, d.Offset, d.SourceLost)
 }
 
 // SourceQualification identifies the active upstream PTP input of one profile's
 // ptp4l instance, not aggregate clock lock or the remote GM's time reference.
 // SourceType identifies the local contributor; the embedded Source identifies
-// the evaluated/reset input. IFace labels the last selected PTP port for control.
+// the evaluated/reset timing stream. IFace labels the last selected physical port.
+// Qualified describes quality; Ready additionally requires an external BMCA
+// reference. Neither means that the aggregate T-BC or its DPLL is locked.
 // An empty SourceType means the observation was rejected or unrelated. Generation
 // prevents an old scanner from affecting a replacement profile or reset clock.
 type SourceQualification struct {
 	SourceType EventSource
 	IFace      string
 	Generation uint64
+	Revision   uint64
+	Ready      bool // External BMCA reference selected and its timing stream qualified.
 	utils.QualificationResult
+}
+
+// PTPSourceApplied acknowledges a successful input action, not a BMCA decision
+// or a quality measurement. Revision rejects an action superseded by source loss.
+type PTPSourceApplied struct {
+	Generation uint64
+	Revision   uint64
+	Enabled    bool
+}
+
+func (*PTPSourceApplied) eventData() {}
+
+func (d *PTPSourceApplied) String() string {
+	return fmt.Sprintf("PTP source input generation=%d revision=%d enabled=%t", d.Generation, d.Revision, d.Enabled)
 }
 
 // DPLLData is a DPLL status sample. Offset/PhaseStatus/FrequencyStatus are nil when FlagNo* is set.
@@ -292,7 +312,8 @@ func (d *SyncEData) String() string {
 	return strings.Join(parts, " ")
 }
 
-// StateData is a lock/holdover transition. ClockID set on T-BC transitions.
+// StateData is a process lock/holdover transition. T-BC source selection and
+// readiness use PTPSourceObservation instead of inferring them from this state.
 type StateData struct {
 	State      PTPState
 	SourceLost bool

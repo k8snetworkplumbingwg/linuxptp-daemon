@@ -383,6 +383,17 @@ func TestDetectStateChange(t *testing.T) {
 		}
 	})
 
+	t.Run("BMCA is not a hardware port transition", func(t *testing.T) {
+		for _, line := range []string{
+			"ptp4l[1]: [ptp4l.1.config:5] selected local clock arbitrary-id as best master",
+			"ptp4l[1]: [ptp4l.1.config] selected best master clock arbitrary-id",
+		} {
+			port, condition := psd.DetectStateChange(line)
+			assert.Empty(t, port)
+			assert.Empty(t, condition)
+		}
+	})
+
 	t.Run("real_log_file_processing", func(t *testing.T) {
 		// Read the real log file
 		logData, readErr := os.ReadFile("testdata/log2.txt")

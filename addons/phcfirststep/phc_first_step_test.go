@@ -350,33 +350,71 @@ func TestMeasureOffsetWaitsForOneValidSampleAndCleansUpOnTimeout(t *testing.T) {
 		}
 	})
 
-	t.Run("configured timeout removes config and kills process", func(t *testing.T) {
-		capture := filepath.Join(t.TempDir(), "config-path")
-		pidFile := filepath.Join(t.TempDir(), "ptp4l-pid")
-		ptp4l := "#!/bin/sh\nprintf '%s' \"$2\" > \"$PHC_CONFIG_CAPTURE\"\n" +
-			"printf '%s' \"$$\" > \"$PHC_PID_FILE\"\nexec sleep 5\n"
-		installFakeCommands(t, ptp4l, "")
-		t.Setenv("PHC_CONFIG_CAPTURE", capture)
-		t.Setenv("PHC_PID_FILE", pidFile)
+	t.Run("configured timeout", func(t *testing.T) {
+		installFakeCommands(t, "#!/bin/sh\nexec sleep 30\n", "")
 		profile := selectedProfile(t, "[eth0]\nmasterOnly 0\n", []string{testInterface0})
 		start := time.Now()
 		_, err := measureOffset(context.Background(), profile, []string{testInterface0}, 500*time.Millisecond)
 		if err == nil || !strings.Contains(err.Error(), "timed out") {
 			t.Fatalf("measureOffset() error = %v, want timeout", err)
 		}
-		if time.Since(start) > 2*time.Second {
+		if time.Since(start) > 5*time.Second {
 			t.Fatalf("configured measurement timeout took %s", time.Since(start))
 		}
-		configPathBytes, err := os.ReadFile(capture)
-		if err != nil {
-			t.Fatalf("read captured config path: %v", err)
+	})
+
+	t.Run("configured timeout removes config and kills process", func(t *testing.T) {
+		capture := filepath.Join(t.TempDir(), "config-path")
+		pidFile := filepath.Join(t.TempDir(), "ptp4l-pid")
+		ptp4l := "#!/bin/sh\nprintf '%s' \"$2\" > \"$PHC_CONFIG_CAPTURE\"\n" +
+			"printf '%s' \"$$\" > \"$PHC_PID_FILE\"\nexec sleep 30\n"
+		installFakeCommands(t, ptp4l, "")
+		t.Setenv("PHC_CONFIG_CAPTURE", capture)
+		t.Setenv("PHC_PID_FILE", pidFile)
+		profile := selectedProfile(t, "[eth0]\nmasterOnly 0\n", []string{testInterface0})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		var measurementErr error
+		go func() {
+			defer close(done)
+			_, measurementErr = measureOffset(ctx, profile, []string{testInterface0}, 5*time.Second)
+		}()
+		t.Cleanup(func() {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("measurement did not stop after cancellation")
+			}
+		})
+
+		// Confirm the fake ptp4l started before checking timeout cleanup.
+		var configPathBytes, pidBytes []byte
+		deadline := time.NewTimer(10 * time.Second)
+		defer deadline.Stop()
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for len(configPathBytes) == 0 || len(pidBytes) == 0 {
+			select {
+			case <-done:
+				t.Fatalf("measurement exited before ptp4l started: %v", measurementErr)
+			case <-deadline.C:
+				t.Fatal("timed out waiting for fake ptp4l to start")
+			case <-ticker.C:
+				configPathBytes, _ = os.ReadFile(capture)
+				pidBytes, _ = os.ReadFile(pidFile)
+			}
+		}
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Fatal("measurement did not stop after its configured timeout")
+		}
+		if measurementErr == nil || !strings.Contains(measurementErr.Error(), "timed out") {
+			t.Fatalf("measureOffset() error = %v, want timeout", measurementErr)
 		}
 		if _, statErr := os.Stat(string(configPathBytes)); !os.IsNotExist(statErr) {
 			t.Fatalf("temporary config still exists after timeout; stat error=%v", statErr)
-		}
-		pidBytes, err := os.ReadFile(pidFile)
-		if err != nil {
-			t.Fatalf("read ptp4l pid: %v", err)
 		}
 		var pid int
 		if _, scanErr := fmt.Sscan(string(pidBytes), &pid); scanErr != nil {

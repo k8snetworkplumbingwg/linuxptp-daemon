@@ -3,37 +3,43 @@ package clock
 import (
 	"sync/atomic"
 
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 )
 
 var sourceGeneration atomic.Uint64
 
-// PTPPortSource identifies a physical upstream PTP port. Other input kinds can
-// implement utils.QualificationSource without depending on PTP port names.
-type PTPPortSource struct {
-	Port string
+// PTPInstanceSource identifies a TR instance's timing stream across hitless
+// upstream reselection. The selected physical port is metadata, not its identity.
+type PTPInstanceSource struct {
+	ConfigName string
+	Generation uint64
 }
 
-// Equal reports whether other identifies the same PTP port.
-func (s PTPPortSource) Equal(other utils.QualificationSource) bool {
-	port, ok := other.(PTPPortSource)
-	return ok && s.Port == port.Port
+// Equal reports whether other identifies the same TR instance and lifecycle.
+func (s PTPInstanceSource) Equal(other utils.QualificationSource) bool {
+	instance, ok := other.(PTPInstanceSource)
+	return ok && s == instance
 }
 
-// String returns the PTP port's interface name.
-func (s PTPPortSource) String() string { return s.Port }
+// String returns the TR configuration name.
+func (s PTPInstanceSource) String() string { return s.ConfigName }
 
 type ptpSourceQualification struct {
 	state                   *utils.QualificationState
 	configuredUpstreamPorts []string
 	lastSelectedPort        string
-	available               bool
+	selection               parserconstants.BMCASelection
+	configName              string
 	generation              uint64
+	revision                uint64
+	inputEnabled            bool
 }
 
 func (q *ptpSourceQualification) source() utils.QualificationSource {
-	if q.lastSelectedPort == "" {
-		return nil
-	}
-	return PTPPortSource{Port: q.lastSelectedPort}
+	return PTPInstanceSource{ConfigName: q.configName, Generation: q.generation}
+}
+
+func (q *ptpSourceQualification) ready() bool {
+	return q.selection == parserconstants.BMCAExternal && q.state.Qualified()
 }

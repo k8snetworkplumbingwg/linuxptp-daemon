@@ -35,16 +35,13 @@ func NewPTPStateDetector(hcm *HardwareConfigManager) *PTPStateDetector {
 	return psd
 }
 
-// DetectStateChange processes a PTP4L log line and returns port-aware state change information.
-// Returns the port name and condition type ("locked", "lost") for the port that changed state.
-// Returns ("", "") when the log line contains no relevant state change or the port is not monitored.
-// TODO: replace by pmc state monitor
+// DetectStateChange classifies port-role diagnostics. T-BC source control does
+// not use this detector: it combines BMCA selection and qualification on the clock.
 func (psd *PTPStateDetector) DetectStateChange(logLine string) (portName string, conditionType string) {
 	_, event, err := psd.ptp4lExtractor.Extract(logLine)
 	if err != nil || event == nil {
 		return "", ""
 	}
-
 	portName = psd.extractPortName(logLine)
 	if portName == "" {
 		return "", ""

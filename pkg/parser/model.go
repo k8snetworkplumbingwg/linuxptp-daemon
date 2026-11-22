@@ -10,12 +10,14 @@ type StatusMetric struct {
 
 // PTPEvent represents an event extracted from a log line.
 type PTPEvent struct {
-	PortID     int                   `json:"portid"`
-	Iface      string                `json:"iface"`
-	Role       constants.PTPPortRole `json:"role"`       // e.g. SLAVE, MASTER, FAULTY
-	ClockState constants.ClockState  `json:"clockstate"` // Clock class value for clock class change events
-	Raw        string                `json:"raw"`        // original line
-	Ts2Phc     *Ts2PhcEvent          `json:"ts2phc,omitempty"`
+	PortID        int                     `json:"portid"`
+	Iface         string                  `json:"iface"`
+	Role          constants.PTPPortRole   `json:"role"`                 // e.g. SLAVE, MASTER, FAULTY
+	ClockState    constants.ClockState    `json:"clockstate"`           // Clock class value for clock class change events
+	ConfigName    string                  `json:"configName,omitempty"` // ptp4l config name on BMCA outcomes
+	BMCASelection constants.BMCASelection `json:"bmcaSelection,omitempty"`
+	Raw           string                  `json:"raw"` // original line
+	Ts2Phc        *Ts2PhcEvent            `json:"ts2phc,omitempty"`
 }
 
 // TS2PHCRole describes a PHC's role in ts2phc synchronization.

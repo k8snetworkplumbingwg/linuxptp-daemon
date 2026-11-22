@@ -66,14 +66,32 @@ then `maxOffsetThreshold`, then the daemon's default (100 ns, or 1000 ns with
 NTP failover). `ptpSourceUseS3: false` selects offset mode. Controlled TT-only
 profiles and HA system-clock profiles have no independent TR qualification policy.
 
-When the new TR port is qualified, DPLL input is enabled.
+Qualification belongs to the TR instance's timing stream, not to an individual
+upstream port. Port-role changes update interface labels and role metrics only;
+they do not reset qualification, enable/disable the input, or enter holdover.
+The leading TR instance's BMCA result determines source availability:
+
+- Selecting the local clock immediately invalidates source readiness and its
+  qualification history, even if an old port still reports LOCKED.
+- Selecting an external clock permits qualification, but does not itself prove
+  lock. After actual source loss, fresh samples must satisfy the policy again.
+- External-to-external reselection preserves history. Offset degradation can
+  still disqualify the stream independently of BMCA selection.
+
+The PTP input is enabled only when an external reference is selected and the
+stream is qualified. HardwareConfig conditions and plugin holdover hooks share
+this single decision/application path. Failed actions are retried; hardware
+failure does not hide source loss, and failed enabling cannot release recovery.
+
 After DPLL locks and all offsets in the system are qualified, backup state is reached.
 
 ![Backup operation — T-GM 1 down, T-GM 2 active as SLAVE](tbc-dual-upstream-backup.png)
 
 ### Recovery (Active Upstream Link Restored)
 
-Recovery starts when the original TR ports regains the adjacency to its reference. The operation order is the same: A-BMCA selects the new TR port and a brief holdover while the system stabilizes.
+Recovery starts when the original TR port regains adjacency to its reference.
+A-BMCA may reselect it without a holdover transition. Holdover is entered only
+when source readiness is actually lost, not simply because port roles change.
 ---
 
 ## Configuration

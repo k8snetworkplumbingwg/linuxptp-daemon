@@ -89,6 +89,25 @@ func TestQualificationSourceAndConfigurationReset(t *testing.T) {
 	}
 }
 
+func TestQualificationSameStreamPreservesHistory(t *testing.T) {
+	t.Parallel()
+	s, err := NewQualificationState(QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 2, DisqualifiedSamples: 2})
+	require.NoError(t, err)
+	sample := QualificationSample{Source: testReceiverSource{path: []string{"ptp4l.0.config"}}, SourceAvailable: true, Offset: 10}
+	require.False(t, s.Evaluate(sample).Qualified)
+
+	sample.Source = testReceiverSource{path: []string{"ptp4l.0.config"}}
+	result := s.Evaluate(sample)
+	require.True(t, result.Qualified, "equal stream identities retain qualification history")
+	require.Equal(t, 2, result.Samples)
+
+	sample.Offset = 201
+	require.True(t, s.Evaluate(sample).Qualified)
+	result = s.Evaluate(sample)
+	require.False(t, result.Qualified, "equal stream identities retain disqualification history")
+	require.Equal(t, 2, result.Samples)
+}
+
 func TestQualificationS3(t *testing.T) {
 	t.Parallel()
 	s, err := NewQualificationState(QualificationConfig{UseS3: true, QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 5, DisqualifiedSamples: 5})

@@ -283,6 +283,8 @@ func (c *ConditionsTester) SendSourceSamples(cfgName, port string, offset float6
 	}
 	c.sendEvent(event.Event{Source: event.PTP4l, CfgName: cfgName, IFace: port, Data: &event.PTPSourceObservation{
 		Generation: result.Generation, PortRole: utils.ToPtr(parserconstants.PortRoleSlave)}})
+	c.sendEvent(event.Event{Source: event.PTP4l, CfgName: cfgName, Data: &event.PTPSourceObservation{
+		Generation: result.Generation, Selection: parserconstants.BMCAExternal}})
 	for i := 0; i < count; i++ {
 		c.sendEvent(event.Event{Source: event.PTP4l, CfgName: cfgName, IFace: port, Data: &event.PTPSourceObservation{
 			Generation: result.Generation, ServoState: "s2", Offset: offset}})

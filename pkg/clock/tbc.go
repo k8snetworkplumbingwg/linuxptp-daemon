@@ -127,6 +127,7 @@ func (c *TBC) ConfigureSourceQualification(configuredUpstreamPorts []string, pol
 	}
 	c.ptpSource = &ptpSourceQualification{
 		state: state, configuredUpstreamPorts: slices.Clone(configuredUpstreamPorts), generation: sourceGeneration.Add(1),
+		configName: c.cfgName,
 	}
 	return c.ptpSource.generation, nil
 }
@@ -164,6 +165,9 @@ func (c *TBC) ClockClass() fbprotocol.ClockClass { return c.syncState.ClockClass
 // GetState returns the current PTP synchronization state.
 func (c *TBC) GetState() event.PTPState { return c.syncState.State }
 
+// GetSyncState returns the current verdict on the serialized clock loop.
+func (c *TBC) GetSyncState() SyncState { return c.syncState }
+
 // SourceQualification returns clock-owned upstream readiness, independently of
 // aggregate InSync. Config aliases do not identify additional upstream inputs.
 func (c *TBC) SourceQualification(cfg string) (event.SourceQualification, bool) {
@@ -171,12 +175,21 @@ func (c *TBC) SourceQualification(cfg string) (event.SourceQualification, bool) 
 	if q == nil || cfg != c.cfgName {
 		return event.SourceQualification{}, false
 	}
-	return event.SourceQualification{SourceType: event.PTP4l, IFace: q.lastSelectedPort, Generation: q.generation,
+	return event.SourceQualification{SourceType: event.PTP4l, IFace: q.lastSelectedPort, Generation: q.generation, Revision: q.revision, Ready: q.ready(),
 		QualificationResult: utils.QualificationResult{Source: q.source(), Qualified: q.state.Qualified()}}, true
 }
 
 // AddEvent processes an event and updates clock state.
 func (c *TBC) AddEvent(ev event.Event) SyncState {
+	if applied, ok := ev.Data.(*event.PTPSourceApplied); ok {
+		q := c.ptpSource
+		if q != nil && ev.Source == event.PTP4l && ev.CfgName == c.cfgName &&
+			applied.Generation == q.generation && applied.Revision == q.revision && applied.Enabled == q.ready() {
+			q.inputEnabled = applied.Enabled
+			c.evaluateState()
+		}
+		return c.syncState
+	}
 	switch ev.Source {
 	case event.SYNCE:
 		c.processSyncE(ev)
@@ -207,38 +220,57 @@ func (c *TBC) ObserveSource(ev event.Event, observation *event.PTPSourceObservat
 	if q == nil || ev.Source != event.PTP4l || ev.CfgName != c.cfgName || observation.Generation != q.generation {
 		return event.SourceQualification{}
 	}
+	wasReady, previousSelection := q.ready(), q.selection
 	var result utils.QualificationResult
 	switch {
 	case observation.SourceLost:
-		q.available = false
+		q.selection = parserconstants.BMCAUnknown
 		result = q.state.Reset()
-	case observation.PortRole != nil:
-		role := *observation.PortRole
-		if !slices.Contains(q.configuredUpstreamPorts, ev.IFace) || role == parserconstants.PortRoleUnknown {
+	case observation.Selection != parserconstants.BMCAUnknown:
+		switch observation.Selection {
+		case parserconstants.BMCALocal:
+			q.selection = observation.Selection
+			result = q.state.Reset()
+			result.Reason = "BMCA selected local clock"
+		case parserconstants.BMCAExternal:
+			q.selection = observation.Selection
+			result = utils.QualificationResult{Source: q.source(), Qualified: q.state.Qualified(), Reason: "BMCA selected external clock"}
+		default:
 			return event.SourceQualification{}
 		}
-		if role == parserconstants.PortRoleSlave {
-			if q.lastSelectedPort == ev.IFace && q.available {
+		if observation.ClockID != "" {
+			c.leadingClockData.clockID = observation.ClockID
+		}
+	case observation.PortRole != nil:
+		// Port roles label the timing stream; they never establish availability
+		// or reset the qualification filter during hitless A-BMCA reselection.
+		if !slices.Contains(q.configuredUpstreamPorts, ev.IFace) || *observation.PortRole != parserconstants.PortRoleSlave {
+			return event.SourceQualification{}
+		}
+		q.lastSelectedPort = ev.IFace
+		return event.SourceQualification{}
+	default:
+		if observation.ServoState == "" {
+			return event.SourceQualification{}
+		}
+		if ev.IFace != "" && ev.IFace != "master" {
+			if !slices.Contains(q.configuredUpstreamPorts, ev.IFace) || (q.lastSelectedPort != "" && ev.IFace != q.lastSelectedPort) {
 				return event.SourceQualification{}
 			}
-			q.lastSelectedPort, q.available = ev.IFace, true
-			// Old upstream details must not masquerade as a still-locked source.
-			d := c.GetData(event.PTP4l)
-			d.Details, d.Window = nil, utils.NewWindow(event.WindowSize)
-		} else if q.lastSelectedPort == ev.IFace && q.available {
-			q.available = false
-		} else {
-			return event.SourceQualification{}
-		}
-		result = q.state.Reset()
-	default:
-		if observation.ServoState == "" || (ev.IFace != "" && ev.IFace != "master" && ev.IFace != q.lastSelectedPort) {
-			return event.SourceQualification{}
+			q.lastSelectedPort = ev.IFace
 		}
 		result = q.state.Evaluate(utils.QualificationSample{Source: q.source(), Offset: observation.Offset, ServoState: observation.ServoState,
-			SourceAvailable: q.available && (observation.ServoState == "s2" || observation.ServoState == "s3")})
+			SourceAvailable: q.selection == parserconstants.BMCAExternal && (observation.ServoState == "s2" || observation.ServoState == "s3")})
 	}
-	return event.SourceQualification{SourceType: event.PTP4l, IFace: q.lastSelectedPort, Generation: q.generation, QualificationResult: result}
+	if q.ready() != wasReady || observation.SourceLost {
+		q.revision++
+		q.inputEnabled = false // Recovery must be acknowledged by the input-action owner.
+	}
+	if q.ready() != wasReady || q.selection != previousSelection || observation.SourceLost {
+		c.evaluateState()
+	}
+	return event.SourceQualification{SourceType: event.PTP4l, IFace: q.lastSelectedPort, Generation: q.generation,
+		Revision: q.revision, Ready: q.ready(), QualificationResult: result}
 }
 
 func (c *TBC) evaluateState() {
@@ -433,7 +465,9 @@ func (c *TBC) ResetSource(source event.EventSource) {
 	c.resetAggregate()
 	if q := c.ptpSource; q != nil && (source == "" || source == event.PTP4l) {
 		q.state.Reset()
-		q.lastSelectedPort, q.available, q.generation = "", false, sourceGeneration.Add(1)
+		q.lastSelectedPort, q.selection, q.generation = "", parserconstants.BMCAUnknown, sourceGeneration.Add(1)
+		q.inputEnabled = false
+		q.revision++
 	}
 }
 
@@ -474,7 +508,7 @@ func (c *TBC) updateDownstreamData(cfgName string) {
 // Implements Rec. ITU-T G.8275 (2024) Amd. 1 (08/2024)
 // Table VIII.3 − T-BC-/ T-BC-P/ T-BC-A Announce message contents
 // for free-run (acquiring), holdover within / out of the specification
-func (c *TBC) announceLocalData(cfgName string) {
+func (c *TBC) announceLocalData(_ string) {
 	clockID := c.leadingClockData.clockID
 	controlledPortsConfig := c.controlledPortsConfig
 	downstreamTimeProperties := c.leadingClockData.downstreamTimeProperties
@@ -530,11 +564,6 @@ func (c *TBC) announceLocalData(cfgName string) {
 	}
 	go func() {
 		if err := c.pmcClient.SetGMSettings(controlledPortsConfig, gs); err != nil {
-			glog.Errorf("Failed to set GM settings: %v", err)
-		}
-	}()
-	go func() {
-		if err := c.pmcClient.SetGMSettings(cfgName, gs); err != nil {
 			glog.Errorf("Failed to set GM settings: %v", err)
 		}
 	}()
@@ -665,17 +694,12 @@ func (c *TBC) inSyncCondition() bool {
 }
 
 func (c *TBC) isSourceLostBC() bool {
-	ptpLost := true
+	// Source readiness belongs to the TR instance, not to retained per-port
+	// LOCKED details. A successful input action is required before recovery.
+	ptpLost := c.ptpSource == nil || !c.ptpSource.ready() || !c.ptpSource.inputEnabled
 	dpllLost := false
 	dpllLostIface := ""
 	for _, d := range c.data {
-		if d.ProcessName == event.PTP4l {
-			for _, dd := range d.Details {
-				if dd.State == event.PTP_LOCKED {
-					ptpLost = false
-				}
-			}
-		}
 		if d.ProcessName == event.DPLL {
 			glog.V(14).Infof("isSourceLostBC[%s]", c.cfgName)
 			for _, dd := range d.Details {

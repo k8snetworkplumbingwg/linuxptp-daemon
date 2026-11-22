@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -28,10 +29,17 @@ type sourceQualificationRuntime struct {
 	closed       bool
 	generation   uint64
 	ctx          context.Context
+	done         chan struct{}
 	apply        func(bool) error
+	pending      bool // Do not retry an old action while a new fact is being evaluated.
+	desired      event.SourceQualification
+	desiredKnown bool
 	applied      bool
 	appliedKnown bool
+	retry        *time.Timer
 }
+
+const sourceQualificationRetryInterval = time.Second
 
 func (p *ptpProcess) configureSourceQualification(policy sourceQualificationPolicy) error {
 	if len(p.tBCAttributes.trIfaceNames) == 0 {
@@ -50,22 +58,26 @@ func (p *ptpProcess) configureSourceQualification(policy sourceQualificationPoli
 	}
 	p.sourceQualification = &sourceQualificationRuntime{
 		generation: generation,
-		apply: func(qualified bool) error {
+		done:       make(chan struct{}),
+		apply: func(ready bool) error {
 			condition := hardwareconfig.ConditionTypeLost
-			if qualified {
+			if ready {
 				condition = hardwareconfig.ConditionTypeLocked
 			}
 			if hasHardware {
 				return p.dn.hardwareConfigManager.ApplyConditionForProfile(p.nodeProfile, condition)
 			}
 			hook := "tbc-ho-entry"
-			if qualified {
+			if ready {
 				hook = "tbc-ho-exit"
 			}
 			// The legacy manager dispatcher discards hook errors. Source pin
 			// application must retain them so failed actions are retried rather
 			// than recorded as successfully applied. Still invoke every plugin.
 			var failures []error
+			if p.pm == nil {
+				return nil
+			}
 			for name, handler := range p.pm.Plugins {
 				if handler.AfterRunPTPCommand != nil {
 					if hookErr := handler.AfterRunPTPCommand(p.pm.Data[name], p.nodeProfile, hook); hookErr != nil {
@@ -86,17 +98,31 @@ func (p *ptpProcess) configureSourceQualification(policy sourceQualificationPoli
 	return nil
 }
 
-// forwardSourceData forwards fresh parser facts before metrics mutate
-// them. The clock evaluates readiness; the scanner retains hardware application.
+// forwardSourceData forwards fresh parser facts before metrics mutate them. The
+// clock evaluates readiness; input actions and their retries are serialized here.
 func (p *ptpProcess) forwardSourceData(metrics *parser.Metrics, portEvent *parser.PTPEvent) {
 	q := p.sourceQualification
 	if q == nil || p.name != event.Ptp4lProcessName {
+		return
+	}
+	if portEvent != nil && portEvent.BMCASelection != parserconstants.BMCAUnknown {
+		if portEvent.ConfigName != p.configName {
+			return // Only the TR instance's own BMCA result controls its source.
+		}
+		clockID, err := p.getPTPClockID()
+		if err != nil {
+			glog.Error(err)
+		}
+		p.observeSource("", &event.PTPSourceObservation{Selection: portEvent.BMCASelection, ClockID: clockID})
 		return
 	}
 	if portEvent != nil && portEvent.Role != parserconstants.PortRoleUnknown {
 		port := portEvent.Iface
 		if port == "" && portEvent.PortID > 0 && portEvent.PortID <= len(p.ifaces) {
 			port = p.ifaces[portEvent.PortID-1].Name
+		}
+		if portEvent.Role == parserconstants.PortRoleSlave && slices.Contains(p.tBCAttributes.trIfaceNames, port) {
+			p.tBCAttributes.activePort = port
 		}
 		p.observeSource(port, &event.PTPSourceObservation{PortRole: utils.ToPtr(portEvent.Role)})
 	}
@@ -110,30 +136,36 @@ func (p *ptpProcess) forwardSourceData(metrics *parser.Metrics, portEvent *parse
 func (p *ptpProcess) observeSource(port string, observation *event.PTPSourceObservation) {
 	q := p.sourceQualification
 	q.mu.Lock()
-	observation.Generation = q.generation
-	ctx := q.ctx
-	closed := q.closed
-	q.mu.Unlock()
-	if closed {
+	if q.closed {
+		q.mu.Unlock()
 		return
 	}
+	observation.Generation = q.generation
+	ctx := q.ctx
+	q.pending = true
+	q.mu.Unlock()
+	defer func() { q.mu.Lock(); q.pending = false; q.mu.Unlock() }()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	observation.Reply = make(chan event.SourceQualification, 1)
 	ev := event.Event{Source: event.PTP4l, CfgName: p.configName, IFace: port, ClockType: p.clockType, Time: time.Now().UnixMilli(), Data: observation}
-	if observation.PortRole != nil || observation.SourceLost {
+	if observation.Selection != parserconstants.BMCAUnknown || observation.PortRole != nil || observation.SourceLost {
 		// These transitions may not repeat. Wait for delivery, but allow daemon
 		// shutdown to release a sender whose consumer has stopped.
 		select {
 		case p.eventCh <- ev:
 		case <-ctx.Done():
 			return
+		case <-q.done:
+			return
 		}
 	} else {
 		select {
 		case p.eventCh <- ev:
 		case <-ctx.Done():
+			return
+		case <-q.done:
 			return
 		default:
 			glog.Errorf("source qualification event channel full for %s[%s]; dropping observation", p.name, p.configName)
@@ -146,44 +178,100 @@ func (p *ptpProcess) observeSource(port string, observation *event.PTPSourceObse
 			p.applySourceQualification(result)
 		}
 	case <-ctx.Done():
+	case <-q.done:
 	}
 }
 
 func (p *ptpProcess) applySourceQualification(result event.SourceQualification) {
 	q := p.sourceQualification
 	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.closed || result.Generation != q.generation {
+	if q.closed || result.Generation != q.generation || (q.desiredKnown && result.Revision < q.desired.Revision) {
+		q.mu.Unlock()
 		return
 	}
+	q.pending = false
+	q.desired, q.desiredKnown = result, true
 	p.tBCAttributes.activePort = result.IFace // label existing state/averaged-offset events
-	previousState := p.tBCAttributes.lastReportedState
 	if result.Changed {
 		glog.Infof("PTPSourceQualified profile=%s config=%s source=%s port=%s qualified=%t reason=%q samples=%d",
 			getProfileName(p.nodeProfile), p.configName, result.SourceType, result.IFace, result.Qualified, result.Reason, result.Samples)
 	}
-	if result.Qualified {
+	if result.Ready {
 		p.tBCAttributes.lastReportedState = event.PTP_LOCKED
 	} else {
 		p.tBCAttributes.lastReportedState = event.PTP_FREERUN
 	}
-	// Source loss is a fact even if a pin update fails. Report it independently
-	// of successful hardware application, without fabricating aggregate lock.
-	if previousState != p.tBCAttributes.lastReportedState {
-		p.sendPtp4lStateEvent()
+	ack := p.applySourceInputLocked(q)
+	ctx := q.ctx
+	q.mu.Unlock()
+	p.sendSourceInputApplied(ctx, ack)
+}
+
+// applySourceInputLocked is the only owner of TR input actions for both backends.
+// Facts have already been evaluated on the clock loop; hardware failure cannot
+// hide loss or manufacture successful recovery. Call with q.mu held, never with
+// the clock-manager lock held.
+func (p *ptpProcess) applySourceInputLocked(q *sourceQualificationRuntime) *event.PTPSourceApplied {
+	if q.closed || !q.desiredKnown || (q.ctx != nil && q.ctx.Err() != nil) {
+		return nil
 	}
-	if q.appliedKnown && q.applied == result.Qualified {
+	if q.pending {
+		p.scheduleSourceInputRetryLocked(q)
+		return nil
+	}
+	if q.appliedKnown && q.applied == q.desired.Ready {
+		return nil
+	}
+	if err := q.apply(q.desired.Ready); err != nil {
+		q.appliedKnown = false // A failed write may have partially programmed pins.
+		glog.Errorf("PTPSourceQualified hardware apply profile=%s ready=%t: %v", getProfileName(p.nodeProfile), q.desired.Ready, err)
+		p.scheduleSourceInputRetryLocked(q)
+		return nil
+	}
+	q.applied, q.appliedKnown = q.desired.Ready, true
+	if q.retry != nil {
+		q.retry.Stop()
+		q.retry = nil
+	}
+	if !q.applied {
+		return nil // Loss was already published independently of the hardware action.
+	}
+	return &event.PTPSourceApplied{Generation: q.generation, Revision: q.desired.Revision, Enabled: q.applied}
+}
+
+func (p *ptpProcess) scheduleSourceInputRetryLocked(q *sourceQualificationRuntime) {
+	if q.retry != nil {
 		return
 	}
-	if err := q.apply(result.Qualified); err != nil {
-		q.appliedKnown = false // failed actions may have partially programmed pins
-		glog.Errorf("PTPSourceQualified hardware apply profile=%s qualified=%t: %v", getProfileName(p.nodeProfile), result.Qualified, err)
+	var retry *time.Timer
+	retry = time.AfterFunc(sourceQualificationRetryInterval, func() {
+		q.mu.Lock()
+		if q.retry != retry {
+			q.mu.Unlock()
+			return // An already-fired callback may have been superseded or closed.
+		}
+		q.retry = nil
+		ack := p.applySourceInputLocked(q)
+		ctx := q.ctx
+		q.mu.Unlock()
+		p.sendSourceInputApplied(ctx, ack)
+	})
+	q.retry = retry
+}
+
+func (p *ptpProcess) sendSourceInputApplied(ctx context.Context, ack *event.PTPSourceApplied) {
+	if ack == nil {
 		return
 	}
-	q.applied, q.appliedKnown = result.Qualified, true
-	p.tBCAttributes.lastAppliedState = event.PTP_HOLDOVER
-	if result.Qualified {
-		p.tBCAttributes.lastAppliedState = event.PTP_LOCKED
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Action acknowledgements, like BMCA decisions, are state-bearing facts.
+	// Never drop them or hold q.mu while waiting for the event forwarder.
+	select {
+	case p.eventCh <- event.Event{Source: event.PTP4l, CfgName: p.configName, ClockType: p.clockType, Time: time.Now().UnixMilli(), Data: ack}:
+	case <-ctx.Done():
+	case <-p.sourceQualification.done:
 	}
 }
 
@@ -197,7 +285,17 @@ func (p *ptpProcess) invalidateSourceQualification() {
 func (q *sourceQualificationRuntime) close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.closed {
+		return
+	}
 	q.closed = true
+	if q.done != nil {
+		close(q.done)
+	}
+	if q.retry != nil {
+		q.retry.Stop()
+		q.retry = nil
+	}
 }
 
 func sourceQualifiedStartCondition(env ptpProcessEnv) process.Condition {

@@ -104,6 +104,8 @@ func TestFindGNSSDevice(t *testing.T) {
 	})
 
 	t.Run("serialDevice matcher delegates to ACPI device detection", func(t *testing.T) {
+		restoreDir := setupReadDirMock(map[string][]os.DirEntry{"/sys/class/tty": {}}, nil)
+		defer restoreDir()
 		_, err := findGNSSDevice(&ptpv2alpha1.GNSSMatcher{
 			SerialDevice: &ptpv2alpha1.SerialDevice{
 				ACPI: &ptpv2alpha1.ACPIDevice{HID: "INTC10EE", UID: "00"},

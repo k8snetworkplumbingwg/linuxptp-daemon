@@ -68,9 +68,6 @@ const (
 	TGM                             = "T-GM"
 	PtpSecretMountDir               = "/etc/ptp-secret-mount/"
 	ChronydSocketPath               = "/tmp/chrony/chronyd.sock"
-	// Offset filter size is hardcoded to 64 for now. It covers 4 seconds with reporting rate 16x/second.
-	// TODO: consider making it configurable
-	offsetFilterSize = 64
 	// defaultPtp4lOffsetEventWindowSize is the sliding window size for averaging ptp4l offsets
 	// before sending them to the T-BC state machine. The window should cover ~1 second of
 	// offset data. Set via PtpSettings["ptp4lOffsetEventWindowSize"]. Tune according to
@@ -115,8 +112,6 @@ var ptpTmpFiles = []string{
 	event.ChronydProcessName,
 	pmcSocketName,
 }
-
-var vTbcHasHardwareConfig = false
 
 // Daemon is the main structure for linuxptp instance.
 // It contains all the necessary data to run linuxptp instance.

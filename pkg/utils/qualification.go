@@ -27,7 +27,8 @@ func (c QualificationConfig) Validate() error {
 }
 
 // QualificationSource identifies the timing input whose readiness is being
-// evaluated. For PTP, this is the selected local upstream receive port.
+// evaluated. For PTP, this is the TR instance's timing stream, not whichever
+// physical upstream port BMCA currently selects.
 // Other source types may identify a GNSS receiver or an external PPS input.
 // It is not the process reporting measurements, the local clock being
 // synchronized, or the upstream grandmaster's ultimate time reference.

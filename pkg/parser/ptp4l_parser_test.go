@@ -103,6 +103,35 @@ func TestPTP4LParser(t *testing.T) {
 	}
 }
 
+func TestPTP4LBMCAEvent(t *testing.T) {
+	for _, tc := range []struct {
+		name, line, config string
+		selection          constants.BMCASelection
+	}{
+		{"local with severity", "ptp4l[1115798.529]: [ptp4l.1.config:5] selected local clock b4e9b8.fffe.5ec390 as best master", "ptp4l.1.config", constants.BMCALocal},
+		{"local without severity", "ptp4l[1]: [ptp4l.12.config] selected local clock aabbcc.fffe.ddeeff as best master", "ptp4l.12.config", constants.BMCALocal},
+		{"external master", "ptp4l[1]: [ptp4l.1.config] selected best master clock aabbcc.fffe.ddeeff", "ptp4l.1.config", constants.BMCAExternal},
+		{"external with severity", "ptp4l[1.1]: [ptp4l.1.config:5] selected best master clock arbitrary-id", "ptp4l.1.config", constants.BMCAExternal},
+		{"other process", "phc2sys[1]: [ptp4l.1.config] selected local clock b4e9b8.fffe.5ec390 as best master", "", constants.BMCAUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metrics, ev, err := parser.NewPTP4LExtractor().Extract(tc.line)
+			assert.NoError(t, err)
+			assert.Nil(t, metrics)
+			if tc.config == "" {
+				assert.Nil(t, ev)
+				return
+			}
+			if assert.NotNil(t, ev) {
+				assert.Equal(t, tc.selection, ev.BMCASelection)
+				assert.Equal(t, constants.PortRoleUnknown, ev.Role)
+				assert.Equal(t, tc.config, ev.ConfigName)
+				assert.Equal(t, tc.line, ev.Raw)
+			}
+		})
+	}
+}
+
 func TestPTP4LEventParser(t *testing.T) {
 	tests := []struct {
 		name          string

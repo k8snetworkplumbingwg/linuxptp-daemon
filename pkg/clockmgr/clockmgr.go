@@ -229,7 +229,7 @@ func (m *ClockManager) snapshotStats(requests []process.StatsRequest) process.Ev
 		if clk := m.GetClock(req.ClockID); clk != nil {
 			if tbc, ok := clk.(*clock.TBC); ok {
 				if result, exists := tbc.SourceQualification(req.ClockID); exists && (req.Source == "" || req.Source == result.SourceType) {
-					stats.SourceQualified[req.ClockID] = result.Qualified && !m.IsApplying()
+					stats.SourceQualified[req.ClockID] = result.Ready && !m.IsApplying()
 				}
 			}
 			// HA member config names resolve to the HA composite in m.clocks.
@@ -392,7 +392,12 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 	if observation, ok := ev.Data.(*event.PTPSourceObservation); ok {
 		result := event.SourceQualification{}
 		if clk, exists := m.clocks[ev.CfgName].(*clock.TBC); exists && !m.IsApplying() {
+			previous := clk.GetState()
 			result = clk.ObserveSource(ev, observation)
+			if result.SourceType != "" {
+				ev.IFace = result.IFace
+				m.recordClockState(clk, ev.CfgName, ev, previous, clk.GetSyncState())
+			}
 		}
 		m.publishStats()
 		// Rejected observations also get a reply; a removed/replaced clock must
@@ -439,6 +444,13 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 	}
 	prevState := clk.GetState()
 	clockState := clk.AddEvent(ev)
+	m.recordClockState(clk, lookupName, ev, prevState, clockState)
+	m.publishStats()
+}
+
+// recordClockState publishes the evaluated clock verdict for both ordinary
+// events and raw source observations. It never performs input hardware actions.
+func (m *ClockManager) recordClockState(clk clock.Clock, cfgName string, ev event.Event, prevState event.PTPState, clockState clock.SyncState) {
 	m.updateProcessClockStateMetrics(clk, ev)
 	if prevState != event.PTP_NOTSET && prevState != clockState.State {
 		m.signalSyncStatus()
@@ -456,15 +468,14 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 	}
 	// Use the clock class from the event's returned state, not clk.ClockClass().
 	// For a composite HA clock, clk.ClockClass() is the active member's class,
-	// but the metric is keyed per member config (lookupName), so each member
+	// but the metric is keyed per member config (cfgName), so each member
 	// must report its own class. For GM/TBC/BC the returned state carries the
 	// same class clk.ClockClass() would, so this is equivalent for them.
-	m.updateClockClassMetrics(lookupName, clockState.ClockClass)
+	m.updateClockClassMetrics(cfgName, clockState.ClockClass)
 	m.updateHAProfileMetrics(clockState.HAProfileStatus)
 	m.updateMetrics(ev)
 	// A clock (E1) transition may move the derived E3 os_clock_state.
 	m.emitOSClockState()
-	m.publishStats()
 }
 
 // clockStateMetricProcess selects the process label for a clock-state metric.
@@ -514,6 +525,15 @@ func (m *ClockManager) updateProcessClockStateMetrics(clk clock.Clock, ev event.
 	}
 	var state event.PTPState
 	switch payload := ev.Data.(type) {
+	case *event.PTPSourceObservation:
+		if tbc, ok := clk.(*clock.TBC); ok {
+			if source, exists := tbc.SourceQualification(ev.CfgName); exists {
+				state = event.PTP_FREERUN
+				if source.Ready {
+					state = event.PTP_LOCKED
+				}
+			}
+		}
 	case *event.SyncEData:
 		state = payload.State
 	case *event.GNSSData, *event.DPLLData:

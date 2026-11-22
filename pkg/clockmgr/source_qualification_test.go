@@ -24,7 +24,7 @@ func TestSourceQualificationSnapshots(t *testing.T) {
 	source, ok := m.SourceQualification("ptp4l.0.config")
 	require.True(t, ok)
 	require.Equal(t, event.PTP4l, source.SourceType)
-	require.Equal(t, clock.PTPPortSource{Port: "tr0"}, source.Source)
+	require.Equal(t, clock.PTPInstanceSource{ConfigName: "ptp4l.0.config", Generation: source.Generation}, source.Source)
 	require.Equal(t, "tr0", source.IFace)
 	require.Empty(t, clockmgr.SnapshotStatsForTest(m, []process.StatsRequest{{ClockID: "ptp4l.0.config", Source: event.TS2PHC}}).SourceQualified)
 	set(false)
@@ -58,6 +58,8 @@ func qualificationPublisher(t *testing.T, m *clockmgr.ClockManager) func(bool) {
 	require.NoError(t, err)
 	return func(qualified bool) {
 		if qualified {
+			m.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: "ptp4l.0.config", Data: &event.PTPSourceObservation{
+				Generation: generation, Selection: parserconstants.BMCAExternal}})
 			m.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: "ptp4l.0.config", IFace: "tr0", Data: &event.PTPSourceObservation{
 				Generation: generation, PortRole: utils.ToPtr(parserconstants.PortRoleSlave)}})
 		}
@@ -82,11 +84,16 @@ func TestSourceQualificationEventRoundTrip(t *testing.T) {
 	events <- wrap(sample)
 	require.False(t, clockmgr.SnapshotStatsForTest(m, []process.StatsRequest{{ClockID: "ptp4l.0.config"}}).SourceQualified["ptp4l.0.config"], "queued observations are not evaluated readiness")
 	m.ProcessEvent(<-events)
-	require.Equal(t, event.PTP4l, (<-role.Reply).SourceType)
+	require.Empty(t, (<-role.Reply).SourceType, "role changes do not evaluate qualification")
+	selected, exists := m.SourceQualification("ptp4l.0.config")
+	require.True(t, exists)
+	require.Equal(t, "tr0", selected.IFace)
+	require.False(t, selected.Qualified)
+	m.ProcessEvent(wrap(&event.PTPSourceObservation{Generation: generation, Selection: parserconstants.BMCAExternal}))
 	m.ProcessEvent(<-events)
 	result := <-sample.Reply
 	require.False(t, result.Qualified)
-	require.Equal(t, clock.PTPPortSource{Port: "tr0"}, result.Source)
+	require.Equal(t, clock.PTPInstanceSource{ConfigName: "ptp4l.0.config", Generation: generation}, result.Source)
 	m.ProcessEvent(wrap(&event.OffsetData{State: event.PTP_LOCKED, Offset: 10}))
 	require.False(t, clockmgr.SnapshotStatsForTest(m, []process.StatsRequest{{ClockID: "ptp4l.0.config"}}).SourceQualified["ptp4l.0.config"], "averaged offsets must not count as fresh qualification samples")
 	m.ProcessEvent(wrap(sample))

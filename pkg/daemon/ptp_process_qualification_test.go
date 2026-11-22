@@ -92,7 +92,7 @@ func TestSourceQualificationFreshSamplesAndHardware(t *testing.T) {
 			p := &ptpProcess{
 				ExecProcess:   ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 20)},
 				nodeProfile:   &ptpv1.PtpProfile{},
-				tBCAttributes: tBCProcessAttributes{trIfaceNames: []string{"tr0", "tr1"}, perPortState: map[string]event.PTPState{}},
+				tBCAttributes: tBCProcessAttributes{trIfaceNames: []string{"tr0", "tr1"}},
 				sourceQualification: &sourceQualificationRuntime{
 					apply: func(v bool) error { actions = append(actions, v); return nil },
 				},
@@ -106,6 +106,9 @@ func TestSourceQualificationFreshSamplesAndHardware(t *testing.T) {
 			p.forwardSourceData(metric, nil)
 			require.False(t, qualified(), "no active valid source yet")
 			p.forwardSourceData(nil, &parser.PTPEvent{Iface: "tr0", Role: parserconstants.PortRoleSlave})
+			p.forwardSourceData(metric, nil)
+			require.False(t, qualified(), "a SLAVE role is not an external BMCA selection")
+			p.observeSource("", &event.PTPSourceObservation{Selection: parserconstants.BMCAExternal})
 			p.forwardSourceData(metric, nil)
 			p.forwardSourceData(nil, nil) // unrelated line is not another sample
 			if !useS3 {
@@ -128,13 +131,20 @@ func TestSourceQualificationFreshSamplesAndHardware(t *testing.T) {
 			p.forwardSourceData(metric, nil)
 			require.True(t, qualified(), "servo degradation is not port loss; no extra aggregate InSync prerequisite")
 			p.forwardSourceData(nil, &parser.PTPEvent{Iface: "tr1", Role: parserconstants.PortRoleSlave})
-			require.False(t, qualified(), "new active port must requalify")
+			require.True(t, qualified(), "switching ports preserves qualification history")
+			selected, exists := cm.SourceQualification(p.configName)
+			require.True(t, exists)
+			require.Equal(t, "tr1", selected.IFace)
+			require.Equal(t, clock.PTPInstanceSource{ConfigName: p.configName, Generation: selected.Generation}, selected.Source)
 			wrongPort := *metric
 			wrongPort.Iface = "tr0"
 			p.forwardSourceData(&wrongPort, nil)
-			require.False(t, qualified())
+			require.True(t, qualified(), "samples from the old port are ignored")
 			p.forwardSourceData(nil, &parser.PTPEvent{Iface: "tr1", Role: parserconstants.PortRoleMaster})
-			require.False(t, qualified())
+			require.True(t, qualified(), "a port role change does not disqualify the source")
+			metric.ServoState, metric.Offset = "s2", 201
+			p.forwardSourceData(metric, nil)
+			require.False(t, qualified(), "fresh samples still govern disqualification")
 		})
 	}
 }
@@ -143,7 +153,7 @@ func TestSourceQualificationHardwareFailure(t *testing.T) {
 	t.Parallel()
 	fail := true
 	p := &ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 10)}, nodeProfile: &ptpv1.PtpProfile{},
-		tBCAttributes: tBCProcessAttributes{activePort: "tr0", trIfaceNames: []string{"tr0"}, perPortState: map[string]event.PTPState{"tr0": event.PTP_LOCKED}},
+		tBCAttributes: tBCProcessAttributes{activePort: "tr0", trIfaceNames: []string{"tr0"}},
 		sourceQualification: &sourceQualificationRuntime{apply: func(bool) error {
 			if fail {
 				return errors.New("pin update failed")
@@ -153,13 +163,14 @@ func TestSourceQualificationHardwareFailure(t *testing.T) {
 	}
 	cm := attachQualificationClock(t, p, utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 1, DisqualifiedSamples: 1})
 	p.forwardSourceData(nil, &parser.PTPEvent{Iface: "tr0", Role: parserconstants.PortRoleSlave})
+	p.observeSource("", &event.PTPSourceObservation{Selection: parserconstants.BMCAExternal})
 	p.forwardSourceData(&parser.Metrics{Iface: "tr0", Offset: 10, ServoState: "s2"}, nil)
-	require.NotEqual(t, event.PTP_LOCKED, p.tBCAttributes.lastAppliedState)
+	require.False(t, p.sourceQualification.appliedKnown)
 	result, exists := cm.SourceQualification(p.configName)
 	require.True(t, exists && result.Qualified, "hardware failure must not hide source facts")
 	fail = false
 	p.forwardSourceData(&parser.Metrics{Iface: "tr0", Offset: 10, ServoState: "s2"}, nil)
-	require.Equal(t, event.PTP_LOCKED, p.tBCAttributes.lastAppliedState, "next fresh sample retries failed hardware action")
+	require.True(t, p.sourceQualification.appliedKnown && p.sourceQualification.applied, "next fresh sample retries failed hardware action")
 }
 
 func TestSourceQualificationRejectsInvalidProfileWithoutPanic(t *testing.T) {
@@ -303,7 +314,7 @@ func TestSourceQualificationParsedPipeline(t *testing.T) {
 		nodeProfile: profile, clockType: event.TBC, logParser: parser.NewPTP4LExtractor(), ptpClockThreshold: getPTPThreshold(profile),
 		ifaces: config.IFaces{{Name: "tr0"}}, pm: plugins,
 		dn:            &Daemon{processManager: &ProcessManager{clockMgr: cm}},
-		tBCAttributes: tBCProcessAttributes{trPortsConfigFile: "ptp4l.0.config", trIfaceNames: []string{"tr0"}, perPortState: map[string]event.PTPState{}, offsetThreshold: 1},
+		tBCAttributes: tBCProcessAttributes{trPortsConfigFile: "ptp4l.0.config", trIfaceNames: []string{"tr0"}},
 	}
 	policy, err := resolveSourceQualificationPolicy(profile)
 	require.NoError(t, err)
@@ -324,17 +335,18 @@ func TestSourceQualificationParsedPipeline(t *testing.T) {
 		}
 	}
 	p.processOutput("ptp4l[4268779.809]: [ptp4l.0.config] port 1: UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED")
+	p.processOutput("ptp4l[4268779.810]: [ptp4l.0.config] selected best master clock arbitrary-id")
 	line := "ptp4l[365195.391]: [ptp4l.0.config] master offset -10 s2 freq -3972 path delay 89"
 	require.Equal(t, line, p.processOutput(line))
 	require.False(t, readiness())
 	p.processOutput("unrelated diagnostic")
 	require.False(t, readiness(), "unrelated logs cannot count cached offsets")
 	p.processOutput(line)
-	require.True(t, readiness(), "fresh samples qualify independently of the legacy threshold/filter")
+	require.True(t, readiness(), "fresh samples satisfy the source qualification policy")
 	p.processOutput("another unrelated diagnostic")
 	require.True(t, readiness(), "without a new snapshot, retain the last evaluated readiness")
 	p.processOutput("ptp4l[4268780.809]: [ptp4l.0.config] port 1: SLAVE to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES")
-	require.False(t, readiness())
+	require.True(t, readiness(), "port-role changes do not disqualify the source")
 	p.invalidateSourceQualification()
 	require.False(t, readiness())
 	require.Equal(t, []string{"tbc-ho-entry", "tbc-ho-exit", "tbc-ho-entry"}, hooks)
@@ -352,6 +364,7 @@ func attachQualificationClock(t *testing.T, p *ptpProcess, policy utils.Qualific
 	require.NoError(t, err)
 	p.sourceQualification.generation = generation
 	p.sourceQualification.ctx = startQualificationClock(t, cm)
+	t.Cleanup(p.sourceQualification.close)
 	return cm
 }
 
@@ -393,6 +406,7 @@ func TestSourceQualificationHardwareDoesNotBlockEventPipeline(t *testing.T) {
 	go func() {
 		defer close(scanDone)
 		p.forwardSourceData(nil, &parser.PTPEvent{Iface: "tr0", Role: parserconstants.PortRoleSlave})
+		p.observeSource("", &event.PTPSourceObservation{Selection: parserconstants.BMCAExternal})
 		p.forwardSourceData(&parser.Metrics{Iface: "master", Offset: 10, ServoState: "s2"}, nil)
 	}()
 	select {
@@ -401,7 +415,7 @@ func TestSourceQualificationHardwareDoesNotBlockEventPipeline(t *testing.T) {
 		t.Fatal("hardware action did not start")
 	}
 	// The scanner is held in hardware I/O. Other events and clock snapshots
-	// must still flow through both managers, without a second hardware worker.
+	// must still flow through both managers while input actions are serialized.
 	reply := make(chan event.SourceQualification, 1)
 	in <- event.Event{Source: event.PTP4l, CfgName: p.configName, IFace: "tr0", Data: &event.PTPSourceObservation{
 		Generation: generation, ServoState: "s2", Offset: 9, Reply: reply}}
@@ -470,6 +484,8 @@ func TestSourceQualificationTransitionsWaitForDeliveryOrShutdown(t *testing.T) {
 	}{
 		{"port selected", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleSlave)}},
 		{"port lost", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleMaster)}},
+		{"BMCA local", event.PTPSourceObservation{Selection: parserconstants.BMCALocal}},
+		{"BMCA external", event.PTPSourceObservation{Selection: parserconstants.BMCAExternal}},
 		{"source lost", event.PTPSourceObservation{SourceLost: true}},
 	} {
 		for _, outcome := range []string{"delivery", "shutdown"} {
@@ -505,6 +521,7 @@ func TestSourceQualificationTransitionsWaitForDeliveryOrShutdown(t *testing.T) {
 					case ev := <-p.eventCh:
 						data := ev.Data.(*event.PTPSourceObservation)
 						require.Equal(t, observation.PortRole, data.PortRole)
+						require.Equal(t, observation.Selection, data.Selection)
 						require.Equal(t, observation.SourceLost, data.SourceLost)
 						require.Equal(t, uint64(7), data.Generation)
 						data.Reply <- event.SourceQualification{SourceType: event.PTP4l, IFace: "tr0", Generation: data.Generation}
