@@ -282,8 +282,8 @@ func updateProfileThresholdMetrics(gauge *prometheus.GaugeVec, node string, node
 	}
 }
 
-// updateSourceQualificationMetrics reads back only an active policy. Clearing a
-// profile or selecting legacy policy must not leave unused source sample counts.
+// updateSourceQualificationMetrics reads back the resolved TR policy, including
+// defaults. Profiles without a TR input must not retain source sample counts.
 func updateSourceQualificationMetrics(gauge *prometheus.GaugeVec, node, profile string, policy sourceQualificationPolicy) {
 	var useS3 int64
 	if policy.config.UseS3 {
@@ -297,7 +297,7 @@ func updateSourceQualificationMetrics(gauge *prometheus.GaugeVec, node, profile 
 		thresholdSourceUseS3:               useS3,
 	} {
 		labels := prometheus.Labels{thresholdMetric: name, "node": node, "profile": profile}
-		if policy.enabled {
+		if policy.applicable {
 			gauge.With(labels).Set(float64(value))
 		} else {
 			gauge.Delete(labels)

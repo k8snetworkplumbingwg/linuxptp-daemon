@@ -19,8 +19,8 @@ import (
 )
 
 type sourceQualificationPolicy struct {
-	enabled bool
-	config  utils.QualificationConfig
+	applicable bool // Only the T-BC TR profile owns an upstream qualification policy.
+	config     utils.QualificationConfig
 }
 
 type sourceQualificationRuntime struct {
@@ -76,12 +76,13 @@ func (p *ptpProcess) configureSourceQualification(policy sourceQualificationPoli
 			return errors.Join(failures...)
 		},
 	}
+	th := getPTPThreshold(p.nodeProfile)
 	glog.Infof("Source qualification profile=%s config=%s S3=%t thresholds=%d/%d samples=%d/%d thresholdFallbacks=%t/%t",
 		getProfileName(p.nodeProfile), p.configName, policy.config.UseS3,
 		policy.config.QualifiedThreshold, policy.config.DisqualifiedThreshold,
 		policy.config.QualifiedSamples, policy.config.DisqualifiedSamples,
-		p.nodeProfile.PtpClockThreshold.PtpSourceQualifiedThreshold == nil,
-		p.nodeProfile.PtpClockThreshold.PtpSourceDisqualifiedThreshold == nil)
+		th.PtpSourceQualifiedThreshold == nil,
+		th.PtpSourceDisqualifiedThreshold == nil)
 	return nil
 }
 
@@ -212,17 +213,15 @@ func sourceQualifiedStartCondition(env ptpProcessEnv) process.Condition {
 	return process.Any{Conditions: conditions}
 }
 
-// resolveSourceQualificationPolicy preserves the explicit opt-in boundary. Resolve
-// the migration fallback once, never from the aggregate InSync state at runtime.
+// resolveSourceQualificationPolicy always resolves a policy for a T-BC TR profile.
+// Optional source settings override defaults; their presence never enables or
+// disables qualification. TT-only and HA system-clock profiles have no TR input.
+// Resolve threshold fallbacks once, independently of aggregate InSync at runtime.
 func resolveSourceQualificationPolicy(profile *ptpv1.PtpProfile) (sourceQualificationPolicy, error) {
-	if profileClockType(profile) != TBC || profile.PtpClockThreshold == nil {
+	if profileClockType(profile) != TBC || profile.PtpSettings["controllingProfile"] != "" || len(listHAMemberProfiles(profile)) > 0 {
 		return sourceQualificationPolicy{}, nil
 	}
-	th := profile.PtpClockThreshold
-	if th.PtpSourceQualifiedThreshold == nil && th.PtpSourceDisqualifiedThreshold == nil &&
-		th.PtpSourceQualifiedSamples == nil && th.PtpSourceDisqualifiedSamples == nil && !th.PtpSourceUseS3 {
-		return sourceQualificationPolicy{}, nil
-	}
+	th := getPTPThreshold(profile)
 	fallback := th.MaxOffsetThreshold
 	if th.PtpSourceQualifiedThreshold == nil || th.PtpSourceDisqualifiedThreshold == nil {
 		if fallback <= 0 {
@@ -266,5 +265,5 @@ func resolveSourceQualificationPolicy(profile *ptpv1.PtpProfile) (sourceQualific
 	if err := cfg.Validate(); err != nil {
 		return sourceQualificationPolicy{}, fmt.Errorf("invalid source qualification policy: %w", err)
 	}
-	return sourceQualificationPolicy{enabled: true, config: cfg}, nil
+	return sourceQualificationPolicy{applicable: true, config: cfg}, nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clockmgr"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/ipc"
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
@@ -267,6 +268,27 @@ func (c *ConditionsTester) SendOffsetSamples(source event.EventSource, cfgName s
 	}
 }
 
+// SendSourceSamples supplies raw TR observations, not averaged offset telemetry.
+// Bare process-condition tests install the same default policy as a TR profile.
+func (c *ConditionsTester) SendSourceSamples(cfgName, port string, offset float64, count int) {
+	c.t.Helper()
+	result, exists := c.cm.SourceQualification(cfgName)
+	if !exists {
+		policy, err := resolveSourceQualificationPolicy(&ptpv1.PtpProfile{PtpSettings: map[string]string{clockTypeSetting: TBC}})
+		require.NoError(c.t, err)
+		_, err = c.cm.ConfigureSourceQualification(cfgName, []string{port}, policy.config)
+		require.NoError(c.t, err)
+		result, exists = c.cm.SourceQualification(cfgName)
+		require.True(c.t, exists)
+	}
+	c.sendEvent(event.Event{Source: event.PTP4l, CfgName: cfgName, IFace: port, Data: &event.PTPSourceObservation{
+		Generation: result.Generation, PortRole: utils.ToPtr(parserconstants.PortRoleSlave)}})
+	for i := 0; i < count; i++ {
+		c.sendEvent(event.Event{Source: event.PTP4l, CfgName: cfgName, IFace: port, Data: &event.PTPSourceObservation{
+			Generation: result.Generation, ServoState: "s2", Offset: offset}})
+	}
+}
+
 func (c *ConditionsTester) SendOffsetClockSamples(source event.EventSource, clockID, cfgName string, state event.PTPState, offset int64, count int) {
 	for i := 0; i < count; i++ {
 		c.SendOffsetClock(source, clockID, cfgName, state, offset)
@@ -416,7 +438,7 @@ func TestApplyNodePtpProfileStartupConditions(t *testing.T) {
 		}
 
 		assertRejectedStartupOffsets(t, ct, phc2sys, event.PTP4l, ptp4l.ConfigName())
-		ct.SendOffsetSamples(event.PTP4l, ptp4l.ConfigName(), event.PTP_LOCKED, 0, 5)
+		ct.SendSourceSamples(ptp4l.ConfigName(), "ens4f0", 0, 5)
 		assert.Eventually(t, func() bool { return phc2sys.State() == process.Running }, 2*time.Second, 10*time.Millisecond)
 
 		assertRejectedStartupOffsets(t, ct, ts2phc, event.PHC2SYS, ptp4l.ConfigName())
@@ -1008,14 +1030,7 @@ func TestPhc2sysOffsetStartCondition_TBC(t *testing.T) {
 	topology, err := NewProfileTopology([]ptpv1.PtpProfile{profile})
 	require.NoError(t, err)
 	c := phc2sysOffsetStartCondition(ptpProcessEnv{runID: 0, clockType: event.TBC, nodeProfile: &profile, topology: &topology})
-	assert.Equal(t, process.OnStateAndOffsetForCount{
-		ClockID:    "ptp4l.0.config",
-		ConfigName: "ptp4l.0.config",
-		Source:     event.PTP4l,
-		State:      event.PTP_LOCKED,
-		MaxOffset:  1e9,
-		Count:      3,
-	}, c)
+	assert.Equal(t, process.OnSourceQualified{ConfigName: "ptp4l.0.config"}, c)
 }
 
 func TestPhc2sysOffsetStartCondition_HA(t *testing.T) {
@@ -1050,7 +1065,7 @@ func TestPhc2sysOffsetStartCondition_HA(t *testing.T) {
 }
 
 func TestTBC_Ts2phcUnlocksThroughProcessManager(t *testing.T) {
-	ct := NewCondiitonsTester(t, event.OC, ptp4lConfig, "ts2phc.0.config")
+	ct := NewCondiitonsTester(t, event.TBC, ptp4lConfig)
 
 	profileName := "test-tbc"
 	profile := &ptpv1.PtpProfile{
@@ -1082,14 +1097,12 @@ func TestTBC_Ts2phcUnlocksThroughProcessManager(t *testing.T) {
 	ct.SendOffset(event.PTP4l, ptp4lConfig, event.PTP_LOCKED, 2000000000)
 	assert.Equal(t, 0, ts2phcStub.Starts(), "must not start on super-second offset")
 
-	// 3 in-spec samples (need > 3 samples)
-	ct.SendOffsetSamples(event.PTP4l, ptp4lConfig, event.PTP_LOCKED, 10000, 3)
-	assert.Equal(t, 0, ts2phcStub.Starts(), "must not start yet, need > 3 samples in window")
-
-	// 4th in-spec sample -> ts2phc unlocks and starts!
-	ct.SendOffset(event.PTP4l, ptp4lConfig, event.PTP_LOCKED, 10000)
+	// Omitted source settings still require five fresh qualifying samples.
+	ct.SendSourceSamples(ptp4lConfig, testETH0, 10, 4)
+	assert.Equal(t, 0, ts2phcStub.Starts(), "must wait for the default sample count")
+	ct.SendSourceSamples(ptp4lConfig, testETH0, 10, 1)
 	assert.Eventually(t, func() bool { return ts2phcStub.Starts() == 1 }, 2*time.Second, 10*time.Millisecond,
-		"T-BC ts2phc must unlock and start once ptp4l lock and offset threshold are satisfied")
+		"T-BC ts2phc must start once the default source qualification policy is satisfied")
 
 	assert.Equal(t,
 		[]process.StatsRequest{
@@ -1113,7 +1126,7 @@ func TestTBC_Ts2phcWithPhc2sysUnlocksThroughProcessManager(t *testing.T) {
 		{"configured threshold replaces the one-second check", 1, 1500000000, 2000000000},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			ct := NewCondiitonsTester(t, event.OC, ptp4lConfig, "ts2phc.0.config")
+			ct := NewCondiitonsTester(t, event.TBC, ptp4lConfig)
 			profileName := "test-tbc-phc2sys"
 			profile := &ptpv1.PtpProfile{
 				Name:        &profileName,
@@ -1137,8 +1150,8 @@ func TestTBC_Ts2phcWithPhc2sysUnlocksThroughProcessManager(t *testing.T) {
 			ct.StartCM()
 			assert.Zero(t, ts2phcStub.Starts())
 
-			// The independent ptp4l offset-window condition remains in place.
-			ct.SendOffsetSamples(event.PTP4l, ptp4lConfig, event.PTP_LOCKED, 10000, 5)
+			// Source qualification is independent of the OS-clock filter.
+			ct.SendSourceSamples(ptp4lConfig, testETH0, 10, 5)
 			assert.Zero(t, ts2phcStub.Starts(), "still waiting for phc2sys")
 			ct.SendOffset(event.PHC2SYS, ptp4lConfig, event.PTP_HOLDOVER, tt.offset)
 			assert.Zero(t, ts2phcStub.Starts(), "HOLDOVER is not ready")
@@ -1194,10 +1207,10 @@ func TestUnlock_TBC_Phc2sys(t *testing.T) {
 	ct.SendOffset(event.PTP4l, ptp4lConfig, event.PTP_LOCKED, 2000000000)
 	assert.Equal(t, 0, stub.Starts())
 
-	// 5 in-spec samples (> 3) -> unlocks!
-	ct.SendOffsetSamples(event.PTP4l, ptp4lConfig, event.PTP_LOCKED, 10000, 5)
+	// The default source policy, not averaged offsets, releases startup.
+	ct.SendSourceSamples(ptp4lConfig, testETH0, 10, 5)
 	assert.Eventually(t, func() bool { return stub.Starts() == 1 }, 2*time.Second, 10*time.Millisecond,
-		"T-BC phc2sys must unlock and start once ptp4l lock is confirmed")
+		"T-BC phc2sys must start once source qualification is confirmed")
 }
 
 func TestUnlock_TGM_Phc2sys(t *testing.T) {

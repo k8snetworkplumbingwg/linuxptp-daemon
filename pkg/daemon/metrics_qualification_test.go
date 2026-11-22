@@ -18,7 +18,7 @@ import (
 func TestSourceQualificationThresholdMetrics(t *testing.T) {
 	t.Parallel()
 	gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_source_threshold"}, []string{thresholdMetric, "node", "profile"})
-	policy := sourceQualificationPolicy{enabled: true, config: utils.QualificationConfig{
+	policy := sourceQualificationPolicy{applicable: true, config: utils.QualificationConfig{
 		QualifiedThreshold: 100, DisqualifiedThreshold: 500, QualifiedSamples: 5, DisqualifiedSamples: 7,
 	}}
 	updateSourceQualificationMetrics(gauge, "node", "profile0", policy)
@@ -32,7 +32,7 @@ func TestSourceQualificationThresholdMetrics(t *testing.T) {
 	require.Equal(t, 5, testutil.CollectAndCount(gauge))
 	updateSourceQualificationMetrics(gauge, "node", "profile1", policy)
 	updateSourceQualificationMetrics(gauge, "node", "profile0", sourceQualificationPolicy{})
-	require.Equal(t, 5, testutil.CollectAndCount(gauge), "switching to legacy removes only that profile's source series")
+	require.Equal(t, 5, testutil.CollectAndCount(gauge), "removing a TR input removes only that profile's source series")
 	updateSourceQualificationMetrics(gauge, "node", "profile1", sourceQualificationPolicy{})
 	require.Zero(t, testutil.CollectAndCount(gauge))
 }
@@ -127,11 +127,14 @@ func TestTBCThresholdProfileCleanupAndLegacyCompatibility(t *testing.T) {
 	require.Equal(t, wantLegacy, thresholdSamples(t, gauge, "node", *profile.Name))
 	require.Equal(t, wantLegacy, thresholdSamples(t, gauge, "node", *other.Name))
 	require.Contains(t, thresholdSamples(t, gauge, "other-node", *profile.Name), thresholdSourceUseS3)
-	// Removing phc2sys/source policy on reapply also removes their old series.
+	// Removing explicit settings retains the default TR policy, but not stale OS settings.
 	profile.PtpSettings = map[string]string{"clockType": TBC}
 	updateOSClockThresholdMetrics(gauge, "node", *profile.Name, clock.OSClockFilterConfig{InSyncThreshold: 10, OutOfSyncThreshold: 20, Samples: 5})
 	updateProfileThresholdMetrics(gauge, "node", profile, legacy)
-	require.Empty(t, thresholdSamples(t, gauge, "node", *profile.Name), "unset TBC policy must not advertise unused defaults")
+	require.Equal(t, map[string]float64{
+		thresholdSourceQualified: 100, thresholdSourceDisqualified: 100,
+		thresholdSourceQualifiedSamples: 5, thresholdSourceDisqualifiedSamples: 5, thresholdSourceUseS3: 0,
+	}, thresholdSamples(t, gauge, "node", *profile.Name), "default qualification is active for every TR profile")
 }
 
 func TestOSClockThresholdMetricsUseResolvedDefaults(t *testing.T) {

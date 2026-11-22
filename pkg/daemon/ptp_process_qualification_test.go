@@ -25,28 +25,38 @@ import (
 func TestSourceQualificationPolicy(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name    string
-		profile string
-		enabled bool
-		want    utils.QualificationConfig
-		wantErr bool
+		name       string
+		profile    string
+		applicable bool
+		want       utils.QualificationConfig
+		wantErr    bool
 	}{
-		{name: "legacy", profile: `{"ptpSettings":{"clockType":"T-BC"}}`},
-		{name: "explicit false remains legacy", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceUseS3":false}}`},
+		{name: "omitted thresholds use defaults", profile: `{"ptpSettings":{"clockType":"T-BC"}}`, applicable: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 100, QualifiedSamples: 5, DisqualifiedSamples: 5}},
+		{name: "explicit false selects offset mode", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceUseS3":false}}`, applicable: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 100, QualifiedSamples: 5, DisqualifiedSamples: 5}},
 		{name: "non TBC", profile: `{"ptpClockThreshold":{"ptpSourceQualifiedSamples":1}}`},
-		{name: "defaults", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceQualifiedSamples":2}}`, enabled: true,
+		{name: "controlled TT", profile: `{"ptpSettings":{"clockType":"T-BC","controllingProfile":"tr"},"ptpClockThreshold":{"ptpSourceQualifiedSamples":0}}`},
+		{name: "HA system clock", profile: `{"ptpSettings":{"clockType":"T-BC","haProfiles":"member0,member1"}}`},
+		{name: "max offset fallback without source settings", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"maxOffsetThreshold":250}}`, applicable: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 250, DisqualifiedThreshold: 250, QualifiedSamples: 5, DisqualifiedSamples: 5}},
+		{name: "in sync fallback without thresholds", profile: `{"ptpSettings":{"clockType":"T-BC","inSyncConditionThreshold":"500"}}`, applicable: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 500, DisqualifiedThreshold: 500, QualifiedSamples: 5, DisqualifiedSamples: 5}},
+		{name: "defaults", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceQualifiedSamples":2}}`, applicable: true,
 			want: utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 100, QualifiedSamples: 2, DisqualifiedSamples: 5}},
-		{name: "in sync migration fallback", profile: `{"ptpSettings":{"clockType":"T-BC","inSyncConditionThreshold":"500"},"ptpClockThreshold":{"ptpSourceQualifiedSamples":1}}`, enabled: true,
+		{name: "in sync migration fallback", profile: `{"ptpSettings":{"clockType":"T-BC","inSyncConditionThreshold":"500"},"ptpClockThreshold":{"ptpSourceQualifiedSamples":1}}`, applicable: true,
 			want: utils.QualificationConfig{QualifiedThreshold: 500, DisqualifiedThreshold: 500, QualifiedSamples: 1, DisqualifiedSamples: 5}},
-		{name: "partial pair", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"maxOffsetThreshold":200,"ptpSourceQualifiedThreshold":50}}`, enabled: true,
+		{name: "partial pair", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"maxOffsetThreshold":200,"ptpSourceQualifiedThreshold":50}}`, applicable: true,
 			want: utils.QualificationConfig{QualifiedThreshold: 50, DisqualifiedThreshold: 200, QualifiedSamples: 5, DisqualifiedSamples: 5}},
 		{name: "invalid resolved pair", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceQualifiedThreshold":500}}`, wantErr: true},
-		{name: "explicit source values independent of invalid InSync", profile: `{"ptpSettings":{"clockType":"T-BC","inSyncConditionThreshold":"invalid"},"ptpClockThreshold":{"ptpSourceQualifiedThreshold":20,"ptpSourceDisqualifiedThreshold":40,"ptpSourceQualifiedSamples":2,"ptpSourceDisqualifiedSamples":3}}`, enabled: true,
+		{name: "explicit source values independent of invalid InSync", profile: `{"ptpSettings":{"clockType":"T-BC","inSyncConditionThreshold":"invalid"},"ptpClockThreshold":{"ptpSourceQualifiedThreshold":20,"ptpSourceDisqualifiedThreshold":40,"ptpSourceQualifiedSamples":2,"ptpSourceDisqualifiedSamples":3}}`, applicable: true,
 			want: utils.QualificationConfig{QualifiedThreshold: 20, DisqualifiedThreshold: 40, QualifiedSamples: 2, DisqualifiedSamples: 3}},
-		{name: "S3 opt in", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceUseS3":true}}`, enabled: true,
+		{name: "S3 mode", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceUseS3":true}}`, applicable: true,
 			want: utils.QualificationConfig{UseS3: true, QualifiedThreshold: 100, DisqualifiedThreshold: 100, QualifiedSamples: 5, DisqualifiedSamples: 5}},
-		{name: "NTP fallback", profile: `{"ptpSettings":{"clockType":"T-BC"},"plugins":{"ntpfailover":{"gnssFailover":true}},"ptpClockThreshold":{"ptpSourceUseS3":true}}`, enabled: true,
+		{name: "NTP fallback", profile: `{"ptpSettings":{"clockType":"T-BC"},"plugins":{"ntpfailover":{"gnssFailover":true}},"ptpClockThreshold":{"ptpSourceUseS3":true}}`, applicable: true,
 			want: utils.QualificationConfig{UseS3: true, QualifiedThreshold: 1000, DisqualifiedThreshold: 1000, QualifiedSamples: 5, DisqualifiedSamples: 5}},
+		{name: "NTP fallback without thresholds", profile: `{"ptpSettings":{"clockType":"T-BC"},"plugins":{"ntpfailover":{"gnssFailover":true}}}`, applicable: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 1000, DisqualifiedThreshold: 1000, QualifiedSamples: 5, DisqualifiedSamples: 5}},
 		{name: "zero threshold", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceQualifiedThreshold":0}}`, wantErr: true},
 		{name: "negative count", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceDisqualifiedSamples":-1}}`, wantErr: true},
 		{name: "invalid fallback", profile: `{"ptpSettings":{"clockType":"T-BC","inSyncConditionThreshold":"NaN"},"ptpClockThreshold":{"ptpSourceQualifiedSamples":1}}`, wantErr: true},
@@ -61,8 +71,8 @@ func TestSourceQualificationPolicy(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, tc.enabled, policy.enabled)
-			if tc.enabled {
+			require.Equal(t, tc.applicable, policy.applicable)
+			if tc.applicable {
 				require.Equal(t, tc.want, policy.config)
 			}
 		})
@@ -200,11 +210,11 @@ func TestQualifiedStartupRetainsPhc2sysLock(t *testing.T) {
 	require.True(t, phc.MetByCurrentState(p, nil, stats), "aggregate InSync is not a startup condition")
 }
 
-func TestSourceQualificationCompatibilityConditions(t *testing.T) {
+func TestSourceQualificationDefaultConditions(t *testing.T) {
 	t.Parallel()
 	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("test"), PtpSettings: map[string]string{"clockType": TBC}}
 	env := ptpProcessEnv{nodeProfile: profile, clockType: event.TBC, topology: &ProfileTopology{}}
-	require.IsType(t, process.OnStateAndOffsetForCount{}, phc2sysOffsetStartCondition(env), "fully unset profiles keep legacy startup")
+	require.Equal(t, process.OnSourceQualified{ConfigName: "ptp4l.0.config"}, phc2sysOffsetStartCondition(env), "omitted source settings still gate startup on qualification")
 	profile.PtpClockThreshold = &ptpv1.PtpClockThreshold{PtpSourceQualifiedSamples: utils.ToPtr(int64(1))}
 	cond := ts2phcConditionsForTBC(&ptpProcess{}, env)[process.ActionStart].(process.StateAwareCondition)
 	stats := process.EventStats{SourceQualified: map[string]bool{"ptp4l.0.config": true}}
@@ -212,6 +222,27 @@ func TestSourceQualificationCompatibilityConditions(t *testing.T) {
 	profile.PtpClockThreshold.PtpSourceQualifiedSamples = utils.ToPtr(int64(0))
 	require.IsType(t, process.Never{}, phc2sysOffsetStartCondition(env), "invalid policy fails closed")
 	require.IsType(t, process.Never{}, ts2phcConditionsForTBC(&ptpProcess{}, env)[process.ActionStart])
+}
+
+func TestSourceQualificationDefaultConfiguration(t *testing.T) {
+	t.Parallel()
+	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("default-policy"), PtpSettings: map[string]string{"clockType": TBC}}
+	cm := clockmgr.Init("test", make(chan event.Event), nil, nil, nil, nil)
+	clk, err := clock.NewTBC("ptp4l.0.config", cm.GetUtcOffset, &pmc.MockClient{}, "ptp4l.1.config")
+	require.NoError(t, err)
+	require.NoError(t, cm.AddClock(clk))
+	p := &ptpProcess{
+		ExecProcess: ExecProcess{configName: "ptp4l.0.config"}, nodeProfile: profile,
+		tBCAttributes: tBCProcessAttributes{trIfaceNames: []string{"tr0"}},
+		dn:            &Daemon{processManager: &ProcessManager{clockMgr: cm}},
+	}
+	policy, err := resolveSourceQualificationPolicy(profile)
+	require.NoError(t, err)
+	require.True(t, policy.applicable)
+	require.NotPanics(t, func() { err = p.configureSourceQualification(policy) })
+	require.NoError(t, err)
+	require.NotNil(t, p.sourceQualification, "qualification does not require source settings or HardwareConfig")
+	require.Nil(t, profile.PtpClockThreshold, "default resolution must not mutate the profile")
 }
 
 func TestSourceQualificationPropagatesPluginFailure(t *testing.T) {
