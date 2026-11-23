@@ -28,6 +28,7 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/daemon"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/features"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/profiling"
 
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 	ptpv2alpha1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1"
@@ -196,6 +197,8 @@ func main() {
 
 	daemon.StartMetricsServer("0.0.0.0:9091")
 	daemon.StartReadyServer("0.0.0.0:8081", tracker)
+	// No-op unless built with `-tags pprof`.
+	profiling.Start("127.0.0.1:6060")
 
 	// Wait for one ticker interval before loading the profile
 	// This allows linuxptp-daemon connection to the cloud-event-proxy container to

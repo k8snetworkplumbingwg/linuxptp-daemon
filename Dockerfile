@@ -15,7 +15,10 @@ COPY Makefile Makefile
 COPY pkg pkg
 ARG GIT_COMMIT=unknown
 ENV GIT_COMMIT=${GIT_COMMIT}
-RUN --mount=type=cache,target=/root/.cache/go-build make
+# Optional Go build tags. Empty by default; set --build-arg GO_BUILD_TAGS=pprof
+# to build a profiling-enabled image (adds the pprof endpoints, see pkg/profiling).
+ARG GO_BUILD_TAGS=
+RUN --mount=type=cache,target=/root/.cache/go-build make GO_BUILD_TAGS="${GO_BUILD_TAGS}"
 
 FROM quay.io/centos/centos:stream9
 
