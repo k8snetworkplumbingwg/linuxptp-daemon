@@ -42,6 +42,9 @@ func rejectInsecureRedirect(req *http.Request, _ []*http.Request) error {
 
 func rejectUnsafeRedirect(config *Config) func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
 		if err := rejectInsecureRedirect(req, via); err != nil {
 			return err
 		}
