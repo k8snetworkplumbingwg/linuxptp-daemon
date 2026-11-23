@@ -168,7 +168,7 @@ github.com/jaypipes/pcidb
 # github.com/json-iterator/go v1.1.12
 ## explicit; go 1.12
 github.com/json-iterator/go
-# github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20261020135448-b50437799d8f
+# github.com/k8snetworkplumbingwg/ptp-operator v0.0.0-20261020135448-b50437799d8f => github.com/nocturnalastro/np-ptp-operator v0.0.0-20261111164456-7c065de79bfa
 ## explicit; go 1.26.0
 github.com/k8snetworkplumbingwg/ptp-operator/api/v1
 github.com/k8snetworkplumbingwg/ptp-operator/api/v2alpha1
@@ -965,3 +965,4 @@ sigs.k8s.io/structured-merge-diff/v6/value
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22
 sigs.k8s.io/yaml
+# github.com/k8snetworkplumbingwg/ptp-operator => github.com/nocturnalastro/np-ptp-operator v0.0.0-20261111164456-7c065de79bfa
