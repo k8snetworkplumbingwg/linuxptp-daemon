@@ -28,14 +28,34 @@ fails to resolve, profile setup aborts rather than starting GPSD with the defaul
 
 ## Quick Start
 
-### Create namespace and ServiceAccount
+### Build the linuxptp-daemon image
+
+Build the image and push it to a registry that the cluster nodes can access:
+```
+$ make image push IMAGE_TAG_BASE=<registry>/linuxptp-daemon-image VERSION=<tag>
+```
+
+The image in `deploy/linuxptp-daemon.yaml` is a placeholder for CI. Set it to the image that you pushed:
+```
+$ (cd deploy && kustomize edit set image localhost:5000/ghaction-linuxptp-daemon=<registry>/linuxptp-daemon-image:<tag>)
+```
+
+### Deploy linuxptp-daemon
 
 All ptp related resources reside within the `openshift-ptp` namespace, including `linuxptp-daemon` and `linuxptp-configmap`.
+
+To use a different namespace, change it in `deploy/kustomization.yaml` before you apply:
 ```
-$ kubectl create -f deploy/00-ns.yaml
-$ kubectl create -f deploy/01-sa.yaml
-$ kubectl create -f deploy/02-rbac.yaml
+$ (cd deploy && kustomize edit set namespace <my-namespace>)
 ```
+The daemon reads its namespace from the `NAME_SPACE` environment variable. The DaemonSet sets this value from the pod namespace.
+If you use a different namespace, replace `openshift-ptp` with your namespace in the commands below.
+
+Apply the namespace, ServiceAccount, RBAC, leap ConfigMap, and DaemonSet:
+```
+$ kubectl apply -k deploy/
+```
+The linuxptp-daemon pods start after you create `linuxptp-configmap` in the next steps.
 
 ### Generate linuxptp-configmap data sources
 
@@ -70,7 +90,7 @@ $ sed -i 's/eth0/ens786f1/' linuxptp-configmap/node.example.com
 ### Create ptp-configmap
 
 ```
-$ kubectl create configmap linuxptp-configmap --from-file ./linuxptp-configmap
+$ kubectl create configmap linuxptp-configmap -n openshift-ptp --from-file ./linuxptp-configmap
 $ kubectl get configmap linuxptp-configmap -o yaml -n openshift-ptp
 apiVersion: v1
 data:
@@ -86,20 +106,12 @@ metadata:
   uid: 40c031f4-e09d-40a8-b081-92c3b8c0accb
 ```
 
-### Create linuxptp-daemon
+### Verify linuxptp-daemon
 
-1. Build linuxptp daemon image `openshift.io/linuxptp-daemon` used by linuxptp-daemon.yaml
-
-```
-$ make image
-```
-
-2. This deploys a linuxptp-daemon pod on each node, the daemon mounts linuxptp-configmap and configures the linuxptp
+The DaemonSet runs a linuxptp-daemon pod on each node. The daemon mounts linuxptp-configmap and configures the linuxptp
 processes(ptp4l, phc2sys) according to data sources as specified for the specific node in the ConfigMap.
 
 ```
-$ kubectl create -f deploy/linuxptp-daemon.yaml
-
 $ kubectl get pods -n openshift-ptp
 NAME                    READY   STATUS    RESTARTS   AGE
 linuxptp-daemon-txmpn   1/1     Running   0          105m
