@@ -251,6 +251,7 @@ func TestDpllHoldoverOutOfSpecUsesConfiguredBound(t *testing.T) {
 		frequencyStatus:        DPLL_LOCKED,
 		phaseOffset:            2000, // > package const 1500, < configured 5000
 		LocalMaxHoldoverOffSet: 5000,
+		LocalHoldoverTimeout:   100,
 		dependsOn:              []event.EventSource{event.PTP4l},
 		holdoverCloseCh:        make(chan bool, 1),
 		inSpec:                 true,

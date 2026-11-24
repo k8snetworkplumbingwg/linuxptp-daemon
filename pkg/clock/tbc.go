@@ -45,6 +45,7 @@ type LeadingClockParams struct {
 	toFreeRunThreshold       int
 	MaxInSpecOffset          uint64
 	holdoverDisabled         bool
+	holdoverLimitsReceived   bool
 	lastInSpec               bool
 	inSyncFilter             utils.HysteresisFilter
 	clockID                  string
@@ -338,6 +339,10 @@ func (c *TBC) updateState() bool {
 				c.syncState.ClockClass = fbprotocol.ClockClass(135)
 				glog.Info("BC FSM: LOCKED to HOLDOVER")
 				c.leadingClockData.lastInSpec = true
+				if !c.inSpecCondition() {
+					c.syncState.ClockClass = fbprotocol.ClockClass(165)
+					c.leadingClockData.lastInSpec = false
+				}
 			}
 			updateDownstreamData = true
 		} else {
@@ -755,7 +760,7 @@ func (c *TBC) getCalculatedHoldoverOffset() int64 {
 }
 
 func (c *TBC) freeRunCondition() bool {
-	if c.leadingClockData.toFreeRunThreshold == 0 {
+	if c.leadingClockData.toFreeRunThreshold == 0 && !c.leadingClockData.holdoverLimitsReceived {
 		glog.Info("Leading clock free-run condition is pending initialization")
 		return true
 	}
@@ -795,7 +800,7 @@ func (c *TBC) freeRunCondition() bool {
 }
 
 func (c *TBC) inSpecCondition() bool {
-	if c.leadingClockData.MaxInSpecOffset == 0 {
+	if c.leadingClockData.MaxInSpecOffset == 0 && !c.leadingClockData.holdoverLimitsReceived {
 		glog.Info("Leading clock in-spec condition is pending initialization")
 		return false
 	}
@@ -803,7 +808,7 @@ func (c *TBC) inSpecCondition() bool {
 		if d.ProcessName == event.DPLL {
 			for _, dd := range d.Details {
 				if dd.IFace == c.syncState.LeadingIFace {
-					if math.Abs(float64(dd.Offset)) > float64(c.leadingClockData.MaxInSpecOffset) {
+					if (dd.HasOffset && dd.OutOfSpec) || math.Abs(float64(dd.Offset)) > float64(c.leadingClockData.MaxInSpecOffset) {
 						glog.Infof("out-of-spec condition on DPLL ", dd.IFace)
 						return false
 					}
@@ -894,10 +899,11 @@ func (c *TBC) updateLeadingClockData(ev event.Event) {
 		if data.InSyncConditionTimes != 0 {
 			c.leadingClockData.inSyncConditionTimes = int(data.InSyncConditionTimes)
 		}
-		if data.ToFreeRunThreshold != 0 {
+		if data.ToFreeRunThreshold != 0 || (data.LeadingSource && data.Offset != nil) {
 			c.leadingClockData.toFreeRunThreshold = int(data.ToFreeRunThreshold)
+			c.leadingClockData.holdoverLimitsReceived = true
 		}
-		if data.MaxInSpecOffset != 0 {
+		if data.MaxInSpecOffset != 0 || (data.LeadingSource && data.Offset != nil) {
 			c.leadingClockData.MaxInSpecOffset = data.MaxInSpecOffset
 		}
 		c.leadingClockData.initInSyncFilter()
