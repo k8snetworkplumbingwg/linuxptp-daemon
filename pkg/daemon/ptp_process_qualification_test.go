@@ -218,22 +218,28 @@ func TestSourceQualificationPropagatesPluginFailure(t *testing.T) {
 	t.Parallel()
 	profile := &ptpv1.PtpProfile{Name: utils.ToPtr("plugin-failure"), PtpSettings: map[string]string{"clockType": string(event.TBC)},
 		PtpClockThreshold: &ptpv1.PtpClockThreshold{PtpSourceQualifiedSamples: utils.ToPtr(int64(1))}}
+	cm := clockmgr.Init("test", make(chan event.Event), nil, nil, nil, nil)
 	p := &ptpProcess{nodeProfile: profile, tBCAttributes: tBCProcessAttributes{trIfaceNames: []string{"tr0"}},
-		dn: &Daemon{processManager: &ProcessManager{clockMgr: clockmgr.Init("test", make(chan event.Event), nil, nil, nil, nil)}},
+		deps: processDependencies{qualification: cm},
 		pm: &plugin.PluginManager{Plugins: map[string]*plugin.Plugin{
 			"failing": {AfterRunPTPCommand: func(_ *interface{}, _ *ptpv1.PtpProfile, _ string) error {
 				return errors.New("pin command failed")
 			}},
 		}},
 	}
-	clk, err := clock.NewTBC(p.configName, p.dn.processManager.clockMgr.GetUtcOffset, &pmc.MockClient{}, "ptp4.1.config")
+	clk, err := clock.NewTBC(p.configName, cm.GetUtcOffset, &pmc.MockClient{}, "ptp4.1.config")
 	require.NoError(t, err)
-	require.NoError(t, p.dn.processManager.clockMgr.AddClock(clk))
+	require.NoError(t, cm.AddClock(clk))
 	policy, err := resolveSourceQualificationPolicy(profile)
 	require.NoError(t, err)
 	require.NoError(t, p.configureSourceQualification(policy))
 	require.ErrorContains(t, p.sourceQualification.apply(true), "pin command failed")
 	require.ErrorContains(t, p.sourceQualification.apply(false), "pin command failed")
+}
+
+func TestDependenciesForNilClockManager(t *testing.T) {
+	deps := dependenciesFor(&Daemon{processManager: &ProcessManager{}})
+	require.Nil(t, deps.qualification)
 }
 
 func TestSourceThresholdPassthrough(t *testing.T) {
@@ -271,7 +277,7 @@ func TestSourceQualificationParsedPipeline(t *testing.T) {
 		ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", messageTag: "[ptp4l.0.config:{level}]", eventCh: events},
 		nodeProfile: profile, clockType: event.TBC, logParser: parser.NewPTP4LExtractor(), ptpClockThreshold: getPTPThreshold(profile),
 		ifaces: config.IFaces{{Name: "tr0"}}, pm: plugins,
-		dn:            &Daemon{processManager: &ProcessManager{clockMgr: cm}},
+		deps:          processDependencies{qualification: cm},
 		tBCAttributes: tBCProcessAttributes{trPortsConfigFile: "ptp4l.0.config", trIfaceNames: []string{"tr0"}, perPortState: map[string]event.PTPState{}, offsetThreshold: 1},
 	}
 	policy, err := resolveSourceQualificationPolicy(profile)

@@ -1,4 +1,4 @@
-package daemon
+package process
 
 import (
 	expect "github.com/google/goexpect"

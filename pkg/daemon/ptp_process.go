@@ -95,8 +95,8 @@ type ptpProcess struct {
 	nodeProfile         *ptpv1.PtpProfile
 	hasCollectedMetrics bool
 
-	dn *Daemon
-	pm *plugin.PluginManager
+	deps processDependencies
+	pm   *plugin.PluginManager
 
 	clockType  event.ClockType
 	logParser  parser.MetricsExtractor
@@ -113,6 +113,35 @@ type ptpProcess struct {
 	sourceQualification   *sourceQualificationRuntime
 }
 
+// processDependencies is the daemon state used by a running PTP process.
+// Keeping these inputs explicit lets process implementations move packages later.
+type processDependencies struct {
+	hardware      *hardwareconfig.HardwareConfigManager
+	resolver      *ptpnetwork.InterfaceResolver
+	events        chan event.Event
+	plugins       *plugin.PluginManager
+	qualification interface {
+		ConfigureSourceQualification(string, []string, utils.QualificationConfig) (uint64, error)
+		SourceQualification(string) (event.SourceQualification, bool)
+	}
+}
+
+func dependenciesFor(dn *Daemon) processDependencies {
+	var deps processDependencies
+	if dn != nil {
+		deps.hardware = dn.hardwareConfigManager
+		deps.resolver = dn.interfaceResolver
+		deps.plugins = &dn.pluginManager
+		if dn.processManager != nil {
+			deps.events = dn.processManager.eventsIn
+			if dn.processManager.clockMgr != nil {
+				deps.qualification = dn.processManager.clockMgr
+			}
+		}
+	}
+	return deps
+}
+
 func (p *ptpProcess) Profile() *ptpv1.PtpProfile {
 	return p.nodeProfile
 }
@@ -127,13 +156,13 @@ func (p *ptpProcess) prepareTBCResources() {
 	// TODO: I thinks belongs on a clock object.
 
 	// Cache hardwareconfig availability (expensive lookup)
-	if p.dn != nil {
-		vTbcHasHardwareConfig = p.dn.hardwareConfigManager.HasHardwareConfigForProfile(p.nodeProfile)
+	if p.deps.hardware != nil {
+		vTbcHasHardwareConfig = p.deps.hardware.HasHardwareConfigForProfile(p.nodeProfile)
 	}
 
 	// Cache PTP state detector instance (expensive creation)
 	if vTbcHasHardwareConfig {
-		p.tbcStateDetector = p.dn.hardwareConfigManager.GetPTPStateDetector()
+		p.tbcStateDetector = p.deps.hardware.GetPTPStateDetector()
 	}
 }
 
@@ -247,7 +276,7 @@ func (p *ptpProcess) processTBCTransitionHardwareConfig(output string) {
 		glog.Infof("T-BC port %s lost SLAVE", portName)
 
 		if p.tBCAttributes.allPortsLost() {
-			if err := p.dn.hardwareConfigManager.ApplyConditionForProfile(p.nodeProfile, hardwareconfig.ConditionTypeLost); err != nil {
+			if err := p.deps.hardware.ApplyConditionForProfile(p.nodeProfile, hardwareconfig.ConditionTypeLost); err != nil {
 				glog.Errorf("Failed to apply hardware config for '%s' condition: %v", hardwareconfig.ConditionTypeLost, err)
 			} else {
 				glog.Infof("Successfully applied hardware config for '%s' condition", hardwareconfig.ConditionTypeLost)
@@ -263,7 +292,7 @@ func (p *ptpProcess) processTBCTransitionHardwareConfig(output string) {
 	}
 
 	p.checkOffsetFilterAndTransition(func() {
-		if err := p.dn.hardwareConfigManager.ApplyConditionForProfile(p.nodeProfile, hardwareconfig.ConditionTypeLocked); err != nil {
+		if err := p.deps.hardware.ApplyConditionForProfile(p.nodeProfile, hardwareconfig.ConditionTypeLocked); err != nil {
 			glog.Errorf("Failed to apply hardware config for '%s' condition: %v", hardwareconfig.ConditionTypeLocked, err)
 		} else {
 			glog.Infof("Successfully applied hardware config for '%s' condition", hardwareconfig.ConditionTypeLocked)
@@ -372,7 +401,7 @@ func (p *ptpProcess) Start(ctx context.Context) error {
 	p.execMutex.Unlock()
 
 	if q := p.sourceQualification; q != nil {
-		result, exists := p.dn.processManager.clockMgr.SourceQualification(p.configName)
+		result, exists := p.deps.qualification.SourceQualification(p.configName)
 		if !exists {
 			p.setState(st)
 			return fmt.Errorf("source qualification is not configured for %s", p.configName)
@@ -914,28 +943,14 @@ func buildCmd(cmdLine string) ProcessCmd {
 
 // Add fifo scheduling if specified in nodeProfile
 func addScheduling(nodeProfile *ptpv1.PtpProfile, cmdLine string) string {
-	if nodeProfile.PtpSchedulingPolicy != nil && *nodeProfile.PtpSchedulingPolicy == "SCHED_FIFO" {
-		if nodeProfile.PtpSchedulingPriority == nil {
-			glog.Errorf("Priority must be set for SCHED_FIFO; using default scheduling.")
-			return cmdLine
-		}
-		priority := *nodeProfile.PtpSchedulingPriority
-		if priority < 1 || priority > 65 {
-			glog.Errorf("Invalid priority %d; using default scheduling.", priority)
-			return cmdLine
-		}
-		cmdLine = fmt.Sprintf("/bin/chrt -f %d %s", priority, cmdLine)
-		glog.Infof(cmdLine)
-		return cmdLine
-	}
-	return cmdLine
+	return process.AddScheduling(nodeProfile, cmdLine)
 }
 
 type ptpProcessEnv struct {
 	runID         int
 	nodeProfile   *ptpv1.PtpProfile
 	clockType     event.ClockType
-	dn            *Daemon
+	deps          processDependencies
 	leadingNic    string
 	upstreamPorts []string
 	hasFailover   bool
@@ -992,7 +1007,7 @@ func confFor(name string, profile *ptpv1.PtpProfile) *string {
 	}
 }
 
-func newPtpProcess(name, configFile, configPath, socketPath, messageTag string, nodeProfile *ptpv1.PtpProfile, clockType event.ClockType, dn *Daemon) *ptpProcess {
+func newPtpProcess(name, configFile, configPath, socketPath, messageTag string, nodeProfile *ptpv1.PtpProfile, clockType event.ClockType, deps processDependencies) *ptpProcess {
 	return &ptpProcess{
 		ExecProcess: ExecProcess{
 			name:       name,
@@ -1000,15 +1015,15 @@ func newPtpProcess(name, configFile, configPath, socketPath, messageTag string, 
 			configPath: configPath,
 			messageTag: messageTag,
 			logFilters: logfilter.GetLogFilters(name, messageTag, nodeProfile.PtpSettings),
-			eventCh:    dn.processManager.eventsIn,
+			eventCh:    deps.events,
 		},
 		socketPath:        socketPath,
 		nodeProfile:       nodeProfile,
 		clockType:         clockType,
 		ptpClockThreshold: getPTPThreshold(nodeProfile),
 		logParser:         getParser(name),
-		dn:                dn,
-		pm:                &dn.pluginManager,
+		deps:              deps,
+		pm:                deps.plugins,
 	}
 }
 
@@ -1022,13 +1037,13 @@ func (p *ptpProcess) loadProcessConf(env ptpProcessEnv) (*ptpconfig.Ptp4lConf, *
 		printNodeProfile(env.nodeProfile)
 		return nil, nil, err
 	}
-	if env.dn != nil && env.dn.interfaceResolver != nil {
-		output.ResolveInterfaceNames(env.dn.interfaceResolver)
+	if p.deps.resolver != nil {
+		output.ResolveInterfaceNames(p.deps.resolver)
 		switch p.name {
 		case event.ChronydProcessName:
-			output.ResolveChronydInterfaceNames(env.dn.interfaceResolver)
+			output.ResolveChronydInterfaceNames(p.deps.resolver)
 		case event.Ts2PhcProcessName:
-			output.ResolveTs2PhcInterfaceNames(env.dn.interfaceResolver)
+			output.ResolveTs2PhcInterfaceNames(p.deps.resolver)
 		}
 	}
 
@@ -1089,7 +1104,7 @@ func NewPtp4lProcess(env ptpProcessEnv) (*ptpProcess, error) {
 		fmt.Sprintf("[ptp4l.%d.config:{level}]", env.runID),
 		env.nodeProfile,
 		env.clockType,
-		env.dn,
+		env.deps,
 	)
 	output, opts, err := p.loadProcessConf(env)
 	if err != nil {
@@ -1165,7 +1180,7 @@ func NewPhc2sysProcess(env ptpProcessEnv) (*ptpProcess, error) {
 		messageTag,
 		env.nodeProfile,
 		env.clockType,
-		env.dn,
+		env.deps,
 	)
 	p.haProfile = make(map[string][]string)
 	output, opts, err := p.loadProcessConf(env)
@@ -1288,7 +1303,7 @@ func NewTs2phcProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	configPath := fmt.Sprintf("%s/%s", configPrefix, configFile)
 	socketPath := fmt.Sprintf("%s/ptp4l.%d.socket", configPrefix, env.runID)
 	messageTag := fmt.Sprintf("[ts2phc.%d.config:{level}]", env.runID)
-	p := newPtpProcess(event.Ts2PhcProcessName, configFile, configPath, socketPath, messageTag, env.nodeProfile, env.clockType, env.dn)
+	p := newPtpProcess(event.Ts2PhcProcessName, configFile, configPath, socketPath, messageTag, env.nodeProfile, env.clockType, env.deps)
 	// DPLL is considered to be running along with ts2phc
 	maxInSpecOffset, maxHoldoverOffSet, maxHoldoverTimeout, inSpecTimer, frequencyTraceable := dpll.CalculateTimer(env.nodeProfile)
 	if env.clockType == event.TGM {
@@ -1323,7 +1338,7 @@ func NewTs2phcProcess(env ptpProcessEnv) (*ptpProcess, error) {
 		return nil, err
 	}
 	p.cmd = buildCmd(buildPtpCmdLine(event.Ts2PhcProcessName, configPath, opts, env.nodeProfile))
-	if profileClockType(env.nodeProfile) == string(event.TBC) && env.dn != nil && p.conditions == nil {
+	if profileClockType(env.nodeProfile) == string(event.TBC) && env.deps.plugins != nil && p.conditions == nil {
 		p.conditions = ts2phcConditionsForTBC(p, env)
 	}
 	return p, nil
@@ -1386,7 +1401,7 @@ func NewSyncEProcess(env ptpProcessEnv) (*ptpProcess, error) {
 	configFile := fmt.Sprintf("synce4l.%d.config", env.runID)
 	configPath := fmt.Sprintf("%s/%s", configPrefix, configFile)
 	messageTag := fmt.Sprintf("[synce4l.%d.config]", env.runID)
-	p := newPtpProcess(event.Synce4lProcessName, configFile, configPath, "", messageTag, env.nodeProfile, env.clockType, env.dn)
+	p := newPtpProcess(event.Synce4lProcessName, configFile, configPath, "", messageTag, env.nodeProfile, env.clockType, env.deps)
 	output, opts, err := p.loadProcessConf(env)
 	if err != nil {
 		return nil, err
@@ -1403,16 +1418,11 @@ func NewSyncEProcess(env ptpProcessEnv) (*ptpProcess, error) {
 }
 
 func processStatus(processName, messageTag string, status int64) {
-	cfgName := cfgNameFromMessageTag(messageTag)
-	glog.V(14).Infof("processStatus: process=%s config=%s status=%d", processName, cfgName, status)
+	process.ProcessStatus(processName, messageTag, status)
 }
 
 func cfgNameFromMessageTag(messageTag string) string {
-	cfgName := strings.Replace(strings.Replace(messageTag, "]", "", 1), "[", "", 1)
-	if cfgName != "" {
-		cfgName = strings.Split(cfgName, MessageTagSuffixSeperator)[0]
-	}
-	return cfgName
+	return process.ConfigNameFromMessageTag(messageTag)
 }
 
 func getPTPThreshold(nodeProfile *ptpv1.PtpProfile) *ptpv1.PtpClockThreshold {

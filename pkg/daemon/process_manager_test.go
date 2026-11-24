@@ -189,7 +189,7 @@ func (c *ConditionsTester) Env(runID int, profile *ptpv1.PtpProfile, clockType e
 		runID:       runID,
 		nodeProfile: profile,
 		clockType:   clockType,
-		dn:          c.dn,
+		deps:        dependenciesFor(c.dn),
 		hasFailover: profile.Plugins != nil && profile.Plugins[ntpfailover] != nil,
 		topology:    oSClockConfigs,
 	}

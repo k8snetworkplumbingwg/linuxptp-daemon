@@ -548,7 +548,7 @@ func Test_applyProfile_TGM(t *testing.T) {
 	for _, p := range dn.processManager.process {
 		processNames = append(processNames, p.Name())
 		if gpsd, ok := p.(*GPSD); ok {
-			assert.Equal(t, "ens7f0", gpsd.gmInterface,
+			assert.Equal(t, "ens7f0", gpsd.GMInterface(),
 				"GPSD gmInterface should match the first interface in ts2phcConf (leading GNSS-sourced interface)")
 		}
 	}
@@ -1021,7 +1021,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 			clockType:        event.BC,
 			offset:           5.0,
 			tbcStateDetector: detector,
-			dn:               mockDaemon,
+			deps:             dependenciesFor(mockDaemon),
 		}
 
 		// First call: Trigger ConditionTypeLocked (no event sent yet)
@@ -1102,7 +1102,7 @@ func TestTBCTransitionCheck_HardwareConfigPath(t *testing.T) {
 			},
 			clockType:        event.BC,
 			tbcStateDetector: detector,
-			dn:               mockDaemon,
+			deps:             dependenciesFor(mockDaemon),
 		}
 
 		// Call with lost transition log - parser detects lost when event contains "SLAVE to"
@@ -1515,7 +1515,7 @@ func TestProcessTBCTransitionHardwareConfig_ProcessLogFile(t *testing.T) {
 		},
 		clockType:        event.BC,
 		tbcStateDetector: detector, // Use real detector with real config
-		dn:               mockDaemon,
+		deps:             dependenciesFor(mockDaemon),
 	}
 
 	// Read the log file line by line
@@ -1829,7 +1829,7 @@ func TestTBCDualUpstream_PortALost_PortBTakesOver(t *testing.T) {
 		clockType:        event.BC,
 		offset:           5.0,
 		tbcStateDetector: detector,
-		dn:               mockDaemon,
+		deps:             dependenciesFor(mockDaemon),
 	}
 
 	pmStruct, _ := registerPlugins([]string{})
@@ -1897,7 +1897,7 @@ func TestTBCDualUpstream_BothPortsLost(t *testing.T) {
 		},
 		clockType:        event.BC,
 		tbcStateDetector: detector,
-		dn:               mockDaemon,
+		deps:             dependenciesFor(mockDaemon),
 	}
 
 	pmStruct, _ := registerPlugins([]string{})
@@ -1950,7 +1950,7 @@ func TestTBCDualUpstream_RecoveryAfterBothLost(t *testing.T) {
 		clockType:        event.BC,
 		offset:           5.0,
 		tbcStateDetector: detector,
-		dn:               mockDaemon,
+		deps:             dependenciesFor(mockDaemon),
 	}
 
 	pmStruct, _ := registerPlugins([]string{})
@@ -2411,10 +2411,9 @@ func TestChronydConf_ResolveInterfaceNames(t *testing.T) {
 	conf := "binddevice ens5f0\nbindacqdevice ens5f1\nhwtimestamp ens5f0 minpoll 0\nhwtimestamp *\nallow 10.0.0.0/8"
 	profile := &ptpv1.PtpProfile{ChronydConf: &conf}
 	resolver := network.NewInterfaceResolverWithInterfaces([]string{"ens5f0np0", "ens5f1np1", "*np0"})
-	p := &ptpProcess{ExecProcess: ExecProcess{name: event.ChronydProcessName}}
+	p := &ptpProcess{ExecProcess: ExecProcess{name: event.ChronydProcessName}, deps: processDependencies{resolver: resolver}}
 	output, _, err := p.loadProcessConf(ptpProcessEnv{
 		nodeProfile: profile,
-		dn:          &Daemon{interfaceResolver: resolver},
 	})
 	require.NoError(t, err)
 	got, _ := output.RenderPtp4lConf()
@@ -2441,10 +2440,9 @@ func TestTs2PhcConf_ResolveTodSource(t *testing.T) {
 			conf := "[global]\nts2phc.tod_source " + tt.source + "\n[nmea]\nts2phc.master 1"
 			profile := &ptpv1.PtpProfile{Ts2PhcConf: &conf}
 			resolver := network.NewInterfaceResolverWithInterfaces([]string{"ens5f0np0", "genericnp0", "nmeanp0"})
-			p := &ptpProcess{ExecProcess: ExecProcess{name: event.Ts2PhcProcessName}}
+			p := &ptpProcess{ExecProcess: ExecProcess{name: event.Ts2PhcProcessName}, deps: processDependencies{resolver: resolver}}
 			output, _, err := p.loadProcessConf(ptpProcessEnv{
 				nodeProfile: profile,
-				dn:          &Daemon{interfaceResolver: resolver},
 			})
 			require.NoError(t, err)
 			got, _ := output.RenderPtp4lConf()

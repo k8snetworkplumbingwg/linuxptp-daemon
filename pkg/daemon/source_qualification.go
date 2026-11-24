@@ -37,14 +37,14 @@ func (p *ptpProcess) configureSourceQualification(policy sourceQualificationPoli
 	if len(p.tBCAttributes.trIfaceNames) == 0 {
 		return fmt.Errorf("source qualification requires upstream TR ports")
 	}
-	hasHardware := p.dn != nil && p.dn.hardwareConfigManager != nil && p.dn.hardwareConfigManager.HasHardwareConfigForProfile(p.nodeProfile)
+	hasHardware := p.deps.hardware != nil && p.deps.hardware.HasHardwareConfigForProfile(p.nodeProfile)
 	if policy.config.UseS3 && !hasHardware {
 		return fmt.Errorf("S3 source qualification requires HardwareConfig")
 	}
-	if p.dn == nil || p.dn.processManager == nil || p.dn.processManager.clockMgr == nil {
+	if p.deps.qualification == nil {
 		return fmt.Errorf("source qualification requires a clock manager")
 	}
-	generation, err := p.dn.processManager.clockMgr.ConfigureSourceQualification(p.configName, p.tBCAttributes.trIfaceNames, policy.config)
+	generation, err := p.deps.qualification.ConfigureSourceQualification(p.configName, p.tBCAttributes.trIfaceNames, policy.config)
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,7 @@ func (p *ptpProcess) configureSourceQualification(policy sourceQualificationPoli
 				condition = hardwareconfig.ConditionTypeLocked
 			}
 			if hasHardware {
-				return p.dn.hardwareConfigManager.ApplyConditionForProfile(p.nodeProfile, condition)
+				return p.deps.hardware.ApplyConditionForProfile(p.nodeProfile, condition)
 			}
 			hook := "tbc-ho-entry"
 			if qualified {

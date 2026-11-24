@@ -385,10 +385,7 @@ func (pm *ProcessManager) findProcess(ev event.Event) process.Process {
 }
 
 func sendProcessStatusEvent(ch chan<- event.Event, source event.EventSource, cfgName string, clockType event.ClockType, iface string, status int64) {
-	if ch == nil {
-		return
-	}
-	ch <- event.ProcessStatusEvent(source, cfgName, clockType, iface, status)
+	process.SendProcessStatusEvent(ch, source, cfgName, clockType, iface, status)
 }
 
 func (pm *ProcessManager) stopAllProcesses() {

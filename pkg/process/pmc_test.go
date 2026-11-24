@@ -1,4 +1,4 @@
-package daemon_test
+package process_test
 
 import (
 	"context"
@@ -9,9 +9,9 @@ import (
 	"time"
 
 	expect "github.com/google/goexpect"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/daemon"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/protocol"
 )
 
@@ -27,7 +27,7 @@ type testPMCMonitor struct {
 	killCh    chan struct{}
 	pollCount atomic.Int32
 	calls     atomic.Int32
-	pmc       *daemon.PMCProcess
+	pmc       *process.PMCProcess
 	maxPolls  int32
 	mock      *pmc.MockClient
 }
@@ -124,7 +124,7 @@ func TestMonitorExitsViaCmdStop(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", event.TBC, make(chan event.Event, 100), mock.getMonitor)
+	proc := process.NewTestPMCProcess("test.config", event.TBC, make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
 	proc.Start(context.TODO())
@@ -144,7 +144,7 @@ func TestMonitorNoOrphanAfterProcessDeath(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", event.TBC, make(chan event.Event, 100), mock.getMonitor)
+	proc := process.NewTestPMCProcess("test.config", event.TBC, make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
 	proc.Start(context.TODO())
@@ -182,7 +182,7 @@ func TestCmdStopIdempotent(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", event.TBC, make(chan event.Event, 100), mock.getMonitor)
+	proc := process.NewTestPMCProcess("test.config", event.TBC, make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
 	proc.Start(context.TODO())
@@ -204,7 +204,7 @@ func TestCmdStopThenStartRuns(t *testing.T) {
 	mock := newTestPMCMonitor(t, 50)
 	pmc.SetMock(mock.client())
 	defer pmc.ResetMock()
-	proc := daemon.NewTestPMCProcess("test.config", event.TBC, make(chan event.Event, 100), mock.getMonitor)
+	proc := process.NewTestPMCProcess("test.config", event.TBC, make(chan event.Event, 100), mock.getMonitor)
 	mock.pmc = proc
 
 	proc.Stop()

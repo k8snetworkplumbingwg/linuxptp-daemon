@@ -1,4 +1,4 @@
-package daemon
+package process
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
-	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,14 +75,14 @@ func TestGpspipeProcessLifecycle(t *testing.T) {
 	gp := NewTestGpsPipeProcess("", ch, NewMockCmd(), filepath.Join(t.TempDir(), "data"), "ts2phc.0.config")
 
 	require.NoError(t, gp.Start(context.TODO()))
-	waitProcessState(t, gp, process.Running)
+	waitProcessState(t, gp, Running)
 	waitProcessStatus(t, ch, PtpProcessUp)
 
 	require.NoError(t, gp.Stop())
-	waitProcessState(t, gp, process.Stopped)
+	waitProcessState(t, gp, Stopped)
 	waitProcessStatus(t, ch, PtpProcessDown)
 
-	up, ok := gp.Conditions()[process.ActionStart].(process.OnProcessUp)
+	up, ok := gp.Conditions()[ActionStart].(OnProcessUp)
 	require.True(t, ok)
 	require.Equal(t, event.GPSD, up.Source)
 	require.Equal(t, "ts2phc.0.config", up.ConfigName)
@@ -192,14 +191,14 @@ func TestGpspipeStopBehavior(t *testing.T) {
 	gp := NewTestGpsPipeProcess("", ch, NewMockCmd(), filepath.Join(t.TempDir(), "data"), "")
 
 	require.NoError(t, gp.Start(context.TODO()))
-	waitProcessState(t, gp, process.Running)
+	waitProcessState(t, gp, Running)
 
 	require.NoError(t, gp.Stop())
-	waitProcessState(t, gp, process.Stopped)
+	waitProcessState(t, gp, Stopped)
 	waitProcessStatus(t, ch, PtpProcessDown)
 
 	require.NoError(t, gp.Stop())
-	if gp.State() != process.Stopped {
+	if gp.State() != Stopped {
 		t.Error("Stop should be a no-op once the process is already Stopped")
 	}
 }

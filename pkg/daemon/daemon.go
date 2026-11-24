@@ -926,7 +926,7 @@ func (dn *Daemon) createProcesses(runID int, nodeProfile *ptpv1.PtpProfile, topo
 		runID:         runID,
 		nodeProfile:   nodeProfile,
 		clockType:     clockType,
-		dn:            dn,
+		deps:          dependenciesFor(dn),
 		leadingNic:    leadingNic,
 		upstreamPorts: upstreamPorts,
 		topology:      topology,

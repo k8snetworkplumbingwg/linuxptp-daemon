@@ -21,7 +21,7 @@ func NewChronydProcess(env ptpProcessEnv) (*chronydProcess, error) {
 	configFile := fmt.Sprintf("chronyd.%d.config", env.runID)
 	configPath := fmt.Sprintf("%s/%s", configPrefix, configFile)
 	messageTag := fmt.Sprintf("[chronyd.%d.config]", env.runID)
-	p := newPtpProcess(event.ChronydProcessName, configFile, configPath, "", messageTag, env.nodeProfile, env.clockType, env.dn)
+	p := newPtpProcess(event.ChronydProcessName, configFile, configPath, "", messageTag, env.nodeProfile, env.clockType, env.deps)
 	output, opts, err := p.loadProcessConf(env)
 	if err != nil {
 		return nil, err
