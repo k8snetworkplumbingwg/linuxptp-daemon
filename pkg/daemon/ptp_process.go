@@ -334,21 +334,15 @@ func (p *ptpProcess) processOutput(output string) string {
 	return output
 }
 
-// runScanner reads process stdout without delay so the pipe never backs
-// up, processes each line, and pushes the result to lineCh for the
-// socket-writer. It closes lineCh when the scanner finishes.
-func (p *ptpProcess) runScanner(cmdReader io.Reader) {
-	p.wg.Add(1)
-	go func() {
-		defer p.wg.Done()
-		scanner := bufio.NewScanner(cmdReader)
-		for scanner.Scan() {
-			p.processOutput(scanner.Text())
-		}
-		if err := scanner.Err(); err != nil {
-			glog.Errorf("process %s[%s] scanner exited with an errror: %s", p.name, p.configName, err)
-		}
-	}()
+// scanOutput reads from cmdReader line by line and processes it
+func (p *ptpProcess) scanOutput(cmdReader io.Reader) {
+	scanner := bufio.NewScanner(cmdReader)
+	for scanner.Scan() {
+		p.processOutput(scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		glog.Errorf("process %s[%s] scanner exited with an error: %s", p.name, p.configName, err)
+	}
 }
 
 func (p *ptpProcess) Start(ctx context.Context) error {
@@ -380,79 +374,82 @@ func (p *ptpProcess) Start(ctx context.Context) error {
 		q.generation, q.ctx = result.Generation, ctx
 		q.mu.Unlock()
 	}
-	p.run()
+	go p.run()
 	return nil
 }
 
+// run starts the managed process, streams its output, and waits for it to exit
 func (p *ptpProcess) run() {
-	p.wg.Add(1)
-	go func() {
-		defer func() {
-			// Mark run as complete then wait for all the other go routines.
-			p.wg.Done()
-			p.wg.Wait()
-			p.invalidateSourceQualification()
+	defer p.runCleanup()
 
-			if p.State() == process.Stopping {
-				p.setState(process.Stopped)
-				glog.Infof("Process %s terminated", p.name)
-			} else {
-				p.setState(process.Dead)
-				glog.Infof("Process %s exited unexpectedly", p.name)
-			}
-			processStatus(p.name, p.messageTag, PtpProcessDown)
-			sendProcessStatusEvent(p.eventCh, event.EventSource(p.name), p.configName, p.clockType, "", PtpProcessDown)
-			p.updateGMStatusOnProcessDown(p.name)
-		}()
+	p.execMutex.RLock()
+	cmd := p.cmd
+	p.execMutex.RUnlock()
+	if cmd == nil {
+		glog.Errorf("CmdRun() nil cmd for %s", p.name)
+		return
+	}
 
-		p.execMutex.RLock()
-		cmd := p.cmd
-		p.execMutex.RUnlock()
-		if cmd == nil {
-			glog.Errorf("CmdRun() nil cmd for %s", p.name)
-			return
-		}
+	glog.Infof("Starting %s...", p.name)
+	glog.Infof("%s cmd: %s", p.name, p.cmd)
 
-		glog.Infof("Starting %s...", p.name)
-		glog.Infof("%s cmd: %s", p.name, p.cmd)
+	cmdReader, err := cmd.StdoutPipe()
+	if err != nil {
+		glog.Errorf("CmdRun() error creating StdoutPipe for %s: %v", p.name, err)
+		return
+	}
 
-		cmdReader, err := cmd.StdoutPipe()
-		if err != nil {
-			glog.Errorf("CmdRun() error creating StdoutPipe for %s: %v", p.name, err)
-			return
-		}
+	cmd.RedirectStderrToStdout()
 
-		cmd.RedirectStderrToStdout()
-
-		p.execMutex.Lock()
-		if p.state == process.Stopping {
-			p.execMutex.Unlock()
-			return
-		}
-		if err = cmd.Start(); err != nil {
-			p.state = process.Dead
-			p.execMutex.Unlock()
-			glog.Errorf("CmdRun() error starting %s: %v", p.name, err)
-			return
-		}
-		p.state = process.Running
+	p.execMutex.Lock()
+	if p.state == process.Stopping {
 		p.execMutex.Unlock()
-		processStatus(p.name, p.messageTag, PtpProcessUp)
-		sendProcessStatusEvent(p.eventCh, event.EventSource(p.name), p.configName, p.clockType, "", PtpProcessUp)
+		return
+	}
+	if err = cmd.Start(); err != nil {
+		p.state = process.Dead
+		p.execMutex.Unlock()
+		glog.Errorf("CmdRun() error starting %s: %v", p.name, err)
+		return
+	}
+	p.state = process.Running
+	p.execMutex.Unlock()
+	processStatus(p.name, p.messageTag, PtpProcessUp)
+	sendProcessStatusEvent(p.eventCh, event.EventSource(p.name), p.configName, p.clockType, "", PtpProcessUp)
 
-		if p.name == event.Ts2PhcProcessName {
-			p.resetPollCycle()
-		}
-		p.runScanner(cmdReader)
+	if p.name == event.Ts2PhcProcessName {
+		p.resetPollCycle()
+	}
+	p.wg.Go(func() {
+		p.scanOutput(cmdReader)
+	})
 
-		if waitErr := cmd.Wait(); waitErr != nil {
-			glog.Errorf("CmdRun() error waiting for %s: %v", p.name, waitErr)
-		}
+	if waitErr := cmd.Wait(); waitErr != nil {
+		glog.Errorf("CmdRun() error waiting for %s: %v", p.name, waitErr)
+	}
 
-		if p.profileClockType() == TBC && p.name == event.Ptp4lProcessName {
-			p.pm.AfterRunPTPCommand(p.nodeProfile, "reset-to-default")
-		}
-	}()
+	if p.profileClockType() == TBC && p.name == event.Ptp4lProcessName {
+		p.pm.AfterRunPTPCommand(p.nodeProfile, "reset-to-default")
+	}
+
+	// Wait for the scanner to complete
+	p.wg.Wait()
+}
+
+// runCleanup is the deferred teardown for run()
+func (p *ptpProcess) runCleanup() {
+	p.invalidateSourceQualification()
+
+	if p.State() == process.Stopping {
+		p.setState(process.Stopped)
+		glog.Infof("Process %s terminated", p.name)
+	} else {
+		p.setState(process.Dead)
+		glog.Infof("Process %s exited unexpectedly", p.name)
+	}
+	processStatus(p.name, p.messageTag, PtpProcessDown)
+	sendProcessStatusEvent(p.eventCh, event.EventSource(p.name), p.configName, p.clockType, "", PtpProcessDown)
+	p.updateGMStatusOnProcessDown(p.name)
 }
 
 // for ts2phc along with processing metrics need to identify event

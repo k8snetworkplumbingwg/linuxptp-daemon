@@ -10,9 +10,14 @@ VERSION ?=latest
 IMG ?= $(IMAGE_TAG_BASE):$(VERSION)
 CONTAINER_TOOL ?=docker
 
+# Optional Go build tags, forwarded to `go build -tags`. Empty by default so
+# normal/release builds are unaffected. Set GO_BUILD_TAGS=pprof to compile the
+# pprof profiling endpoints into both binaries (see pkg/profiling).
+GO_BUILD_TAGS ?=
+
 .PHONY: test
 default:
-	./hack/build.sh
+	./hack/build.sh $(if $(GO_BUILD_TAGS),-tags "$(GO_BUILD_TAGS)")
 image:
 	./hack/build-image.sh
 push:

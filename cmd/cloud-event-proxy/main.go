@@ -14,6 +14,7 @@ import (
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/cep"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/profiling"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -65,6 +66,10 @@ func main() {
 	baseURL := fmt.Sprintf("%s://%s:%d", scheme, apiHost, port)
 
 	glog.Infof("cloud-event-proxy starting, node=%s, socket=%s, baseURL=%s, commit=%s", nodeName, socket, baseURL, GitCommit)
+
+	// No-op unless built with `-tags pprof`. Distinct port from linuxptp-daemon,
+	// which shares this pod's network namespace.
+	profiling.Start("127.0.0.1:6061")
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
