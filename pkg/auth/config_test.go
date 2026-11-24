@@ -31,22 +31,67 @@ import (
 	"testing"
 	"time"
 
+	configv1 "github.com/openshift/api/config/v1"
+	libcrypto "github.com/openshift/library-go/pkg/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestApplyTLSProfileEnforcesTLS12Floor(t *testing.T) {
-	for _, version := range []string{"", "unknown", "VersionTLS10", "VersionTLS11"} {
+	for _, version := range []string{"", "VersionTLS10", "VersionTLS11"} {
 		t.Run(version, func(t *testing.T) {
 			cfg := &tls.Config{}
-			(&ServerConfig{TLSMinVersion: version}).ApplyTLSProfile(cfg)
+			require.NoError(t, (&ServerConfig{TLSMinVersion: version}).ApplyTLSProfile(cfg))
 			assert.Equal(t, uint16(tls.VersionTLS12), cfg.MinVersion)
 		})
 	}
 
+	assert.Error(t, (&ServerConfig{TLSMinVersion: "unknown"}).ApplyTLSProfile(&tls.Config{}))
 	cfg := &tls.Config{MinVersion: tls.VersionTLS13}
-	(&ServerConfig{TLSMinVersion: "VersionTLS11"}).ApplyTLSProfile(cfg)
+	require.NoError(t, (&ServerConfig{TLSMinVersion: "VersionTLS11"}).ApplyTLSProfile(cfg))
 	assert.Equal(t, uint16(tls.VersionTLS13), cfg.MinVersion)
+}
+
+func TestClusterProfileUsedInBothDirections(t *testing.T) {
+	cert, key, ca := writeTestCerts(t)
+	cfg := &Config{
+		ServerConfig: &ServerConfig{
+			EnableMTLS:      true,
+			ServerCertPath:  cert,
+			ServerKeyPath:   key,
+			CACertPath:      ca,
+			TLSMinVersion:   "VersionTLS12",
+			TLSGroups:       []configv1.TLSGroup{configv1.TLSGroupSecP256r1},
+			TLSCipherSuites: []string{"ECDHE-RSA-AES128-GCM-SHA256"},
+		},
+		ClientCertPath: cert,
+		ClientKeyPath:  key,
+	}
+	for _, build := range []func() (*tls.Config, error){cfg.CreateServerTLSConfig, cfg.CreateTLSConfig} {
+		profile, err := build()
+		require.NoError(t, err)
+		assert.Equal(t, []tls.CurveID{tls.CurveP256}, profile.CurvePreferences)
+		assert.Equal(t, []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256}, profile.CipherSuites)
+	}
+}
+
+func TestOperatorTLSProfiles(t *testing.T) {
+	for _, kind := range []configv1.TLSProfileType{configv1.TLSProfileIntermediateType, configv1.TLSProfileModernType} {
+		t.Run(string(kind), func(t *testing.T) {
+			profile := configv1.TLSProfiles[kind]
+			config := ServerConfig{
+				TLSMinVersion:   string(profile.MinTLSVersion),
+				TLSGroups:       profile.Groups,
+				TLSCipherSuites: libcrypto.OpenSSLToIANACipherSuites(profile.Ciphers),
+			}
+			got := &tls.Config{}
+			require.NoError(t, config.ApplyTLSProfile(got))
+			assert.Equal(t, libcrypto.TLSVersionOrDie(config.TLSMinVersion), got.MinVersion)
+			curves, unknown := libcrypto.TLSGroupsToCurveIDs(profile.Groups)
+			require.Empty(t, unknown)
+			assert.Equal(t, curves, got.CurvePreferences)
+		})
+	}
 }
 
 // writeTestCerts generates a self-signed certificate usable as both a leaf

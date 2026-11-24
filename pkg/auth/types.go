@@ -4,7 +4,11 @@ package auth
 import (
 	"context"
 	"crypto/tls"
-	"strings"
+	"fmt"
+
+	configv1 "github.com/openshift/api/config/v1"
+	openshifttls "github.com/openshift/controller-runtime-common/pkg/tls"
+	libcrypto "github.com/openshift/library-go/pkg/crypto"
 )
 
 const httpsScheme = "https"
@@ -38,8 +42,9 @@ type ServerConfig struct {
 
 	// TLS profile - centrally managed by the cluster's TLSSecurityProfile and
 	// propagated by the operator, subject to the TLS 1.2 security floor.
-	TLSMinVersion   string   `json:"tlsMinVersion"`   // e.g. "VersionTLS12", "VersionTLS13"
-	TLSCipherSuites []string `json:"tlsCipherSuites"` // IANA cipher suite names
+	TLSGroups       []configv1.TLSGroup `json:"tlsGroups,omitempty"`
+	TLSMinVersion   string              `json:"tlsMinVersion"`   // e.g. "VersionTLS12", "VersionTLS13"
+	TLSCipherSuites []string            `json:"tlsCipherSuites"` // IANA cipher suite names
 }
 
 // TokenInfo identifies a bearer token authenticated by the cluster.
@@ -61,58 +66,27 @@ type TokenValidator interface {
 	ValidateToken(ctx context.Context, token string, audiences []string) (*TokenInfo, error)
 }
 
-func tlsVersionFromString(v string) uint16 {
-	switch strings.TrimSpace(v) {
-	case "VersionTLS10":
-		return tls.VersionTLS10
-	case "VersionTLS11":
-		return tls.VersionTLS11
-	case "VersionTLS12":
-		return tls.VersionTLS12
-	case "VersionTLS13":
-		return tls.VersionTLS13
-	default:
-		return 0
-	}
-}
-
-// cipherSuitesFromNames maps IANA cipher suite names to their crypto/tls IDs.
-// Unknown names are ignored. TLS 1.3 cipher suites are not configurable in Go
-// and are silently dropped, which is expected.
-func cipherSuitesFromNames(names []string) []uint16 {
-	if len(names) == 0 {
+// ApplyTLSProfile uses the same OpenShift profile translator as the operator.
+func (c *ServerConfig) ApplyTLSProfile(cfg *tls.Config) error {
+	if c == nil {
 		return nil
 	}
-	lookup := make(map[string]uint16)
-	for _, cs := range tls.CipherSuites() {
-		lookup[cs.Name] = cs.ID
+	version, err := libcrypto.TLSVersion(c.TLSMinVersion)
+	if err != nil {
+		return err
 	}
-	for _, cs := range tls.InsecureCipherSuites() {
-		lookup[cs.Name] = cs.ID
+	minimum := max(version, tls.VersionTLS12)
+	previousMinimum := cfg.MinVersion
+	profile := configv1.TLSProfileSpec{
+		MinTLSVersion: configv1.TLSProtocolVersion(libcrypto.TLSVersionToNameOrDie(minimum)),
+		Ciphers:       c.TLSCipherSuites,
+		Groups:        c.TLSGroups,
 	}
-	var out []uint16
-	for _, n := range names {
-		if id, ok := lookup[strings.TrimSpace(n)]; ok {
-			out = append(out, id)
-		}
+	apply, unsupported := openshifttls.NewTLSConfigFromProfile(profile)
+	if len(unsupported) > 0 {
+		return fmt.Errorf("unsupported TLS profile entries: %v", unsupported)
 	}
-	return out
-}
-
-// ApplyTLSProfile applies the centrally-managed TLS profile (min version and
-// cipher suites, sourced from the cluster's TLSSecurityProfile via the
-// operator) onto a tls.Config. TLS 1.2 is the minimum supported protocol, even
-// if an older or unknown version is supplied.
-func (c *ServerConfig) ApplyTLSProfile(cfg *tls.Config) {
-	if c == nil {
-		return
-	}
-	if mv := tlsVersionFromString(c.TLSMinVersion); mv >= tls.VersionTLS12 {
-		cfg.MinVersion = mv
-	} else if cfg.MinVersion == 0 {
-		cfg.MinVersion = tls.VersionTLS12
-	}
-	if cs := cipherSuitesFromNames(c.TLSCipherSuites); len(cs) > 0 {
-		cfg.CipherSuites = cs
-	}
+	apply(cfg)
+	cfg.MinVersion = max(previousMinimum, cfg.MinVersion)
+	return nil
 }

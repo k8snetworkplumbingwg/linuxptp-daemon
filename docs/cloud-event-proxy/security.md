@@ -54,11 +54,17 @@ Serving and client certificates are separate: Service CA certificates have
 serverAuth usage, while outbound callbacks require a clientAuth certificate.
 Startup rejects incomplete configured credentials. Callback requests use HTTPS,
 verify the server hostname, present the client certificate and reread the token
-file on each request. Before any credential-bearing request, including one from
+file through client-go on each request. Before any credential-bearing request, including one from
 a restored subscription or an HTTPS redirect, the callback hostname must match
 `allowedCallbackHosts`. Exact names and leading `*.` subdomain patterns are
 supported; the operator uses the standard consumer Service name rather than a
-cluster-wide wildcard. Certificate/trust changes require a restart.
+cluster-wide wildcard.
+
+The operator supplies the effective cluster TLS minimum version, cipher suites,
+and named groups. Both the HTTPS listener and callback client use the same
+OpenShift profile translator. The publisher validates replacement trust and both
+keypairs before activating them together. New connections use that snapshot;
+a partial or invalid rotation leaves the previous snapshot active.
 
 TokenReview successes are cached for 30 seconds with a 4096-entry bound. Cache
 misses fail closed during API outages; cached successes can survive until their

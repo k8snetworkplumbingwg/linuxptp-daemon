@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	log "github.com/sirupsen/logrus"
+	"k8s.io/client-go/transport"
 )
 
 // Config contains the server and outbound-client authentication settings.
@@ -187,7 +188,9 @@ func (c *Config) CreateTLSConfig() (*tls.Config, error) {
 	// the TLS 1.2 floor. No hostname verification is skipped: FQDN / service-DNS
 	// connections must present a valid server certificate signed by the
 	// configured CA.
-	c.ApplyTLSProfile(tlsConfig)
+	if err := c.ApplyTLSProfile(tlsConfig); err != nil {
+		return nil, err
+	}
 
 	log.Info("Created TLS client configuration")
 	return tlsConfig, nil
@@ -240,7 +243,9 @@ func (c *Config) CreateServerTLSConfig() (*tls.Config, error) {
 		tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
 	}
 
-	c.ApplyTLSProfile(tlsConfig)
+	if err := c.ApplyTLSProfile(tlsConfig); err != nil {
+		return nil, err
+	}
 
 	log.Info("Created TLS configuration for callback server")
 	return tlsConfig, nil
@@ -285,16 +290,13 @@ func (c *Config) GetOAuthToken() (string, error) {
 		return "", nil
 	}
 
-	token, err := os.ReadFile(c.ServiceAccountToken)
+	// Acquire a fresh projected token for each request, including redirects.
+	// A long-lived client-go source may reuse the previous token on read errors.
+	token, err := transport.NewCachedFileTokenSource(c.ServiceAccountToken).Token()
 	if err != nil {
-		return "", fmt.Errorf("failed to read service account token: %v", err)
+		return "", err
 	}
-
-	value := strings.TrimSpace(string(token))
-	if value == "" {
-		return "", fmt.Errorf("service account token file is empty")
-	}
-	return value, nil
+	return token.AccessToken, nil
 }
 
 // IsAuthenticationEnabled returns true if either mTLS or OAuth is enabled
