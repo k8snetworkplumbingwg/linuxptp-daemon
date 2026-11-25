@@ -13,9 +13,14 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/auth"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-const tlsReloadInterval = 5 * time.Second
+const (
+	tlsReloadInterval = 5 * time.Second
+	callbackCertIndex = 3
+	callbackKeyIndex  = 4
+)
 
 type tlsSnapshot struct {
 	digests    [5][sha256.Size]byte
@@ -35,7 +40,7 @@ func (m *tlsMaterial) digests() ([5][sha256.Size]byte, error) {
 	cfg := m.config
 	paths := [5]string{cfg.CACertPath, cfg.ServerCertPath, cfg.ServerKeyPath}
 	if cfg.EnableMTLS {
-		paths[3], paths[4] = cfg.ClientCertPath, cfg.ClientKeyPath
+		paths[callbackCertIndex], paths[callbackKeyIndex] = cfg.ClientCertPath, cfg.ClientKeyPath
 	}
 	var result [5][sha256.Size]byte
 	for i, path := range paths {
@@ -44,6 +49,10 @@ func (m *tlsMaterial) digests() ([5][sha256.Size]byte, error) {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
+			// An unreadable callback keypair disables pushes only.
+			if i >= callbackCertIndex {
+				continue
+			}
 			return result, fmt.Errorf("read TLS material: %w", err)
 		}
 		result[i] = sha256.Sum256(data)
@@ -59,7 +68,10 @@ func (m *tlsMaterial) reload() error {
 		return err
 	}
 	old := m.current.Load()
-	if old != nil && old.digests == before {
+	var missing [sha256.Size]byte
+	callbackKeypairPresent := before[callbackCertIndex] != missing && before[callbackKeyIndex] != missing
+	// Retry a present keypair if the outbound client could not be initialized.
+	if old != nil && old.digests == before && (old.client != nil || !callbackKeypairPresent) {
 		return nil
 	}
 	server, err := m.config.CreateServerTLSConfig()
@@ -75,16 +87,23 @@ func (m *tlsMaterial) reload() error {
 	}
 	// A new handshake must use the current trust pool, including after a CA is removed.
 	server.SessionTicketsDisabled = true
-	client, err := auth.NewAuthenticatedClientWithTimeout(m.config, m.timeout)
-	if err != nil {
-		return err
-	}
+	var client *auth.AuthenticatedClient
 	var clientLeaf *x509.Certificate
-	if m.config.EnableMTLS {
-		transport := client.GetClient().Transport.(*http.Transport)
-		clientLeaf = transport.TLSClientConfig.Certificates[0].Leaf
-		if leafErr := checkLeaf(clientLeaf, x509.ExtKeyUsageClientAuth); leafErr != nil {
-			return fmt.Errorf("callback client certificate: %w", leafErr)
+	if !m.config.EnableMTLS || callbackKeypairPresent {
+		client, err = auth.NewAuthenticatedClientWithTimeout(m.config, m.timeout)
+		if err == nil && m.config.EnableMTLS {
+			transport := client.GetClient().Transport.(*http.Transport)
+			clientLeaf = transport.TLSClientConfig.Certificates[0].Leaf
+			err = checkLeaf(clientLeaf, x509.ExtKeyUsageClientAuth)
+		}
+		if err != nil {
+			if !m.config.EnableMTLS {
+				return err
+			}
+			if old == nil || old.digests != before {
+				glog.Warningf("Event callback client unavailable: %v", err)
+			}
+			client, clientLeaf = nil, nil
 		}
 	}
 	// Kubernetes may swap the projected volume symlinks during a read.
@@ -100,8 +119,12 @@ func (m *tlsMaterial) reload() error {
 		serverLeaf: serverLeaf, clientLeaf: clientLeaf,
 	})
 	if old != nil {
-		old.client.GetClient().CloseIdleConnections()
-		glog.Info("Event API TLS material reloaded")
+		if old.client != nil {
+			old.client.GetClient().CloseIdleConnections()
+		}
+		if old.digests != after || old.client != client {
+			glog.Info("Event API TLS material reloaded")
+		}
 	}
 	return nil
 }
@@ -143,22 +166,16 @@ func checkLeafTime(leaf *x509.Certificate) error {
 }
 
 func (m *tlsMaterial) watch(ctx context.Context) {
-	ticker := time.NewTicker(tlsReloadInterval)
-	defer ticker.Stop()
 	var lastError string
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := m.reload(); err != nil {
-				if err.Error() != lastError {
-					glog.Warningf("Event API TLS reload failed; retaining previous configuration: %v", err)
-				}
-				lastError = err.Error()
-			} else {
-				lastError = ""
+	_ = wait.PollUntilContextCancel(ctx, tlsReloadInterval, false, func(context.Context) (bool, error) {
+		if err := m.reload(); err != nil {
+			if err.Error() != lastError {
+				glog.Warningf("Event API TLS reload failed; retaining previous configuration: %v", err)
 			}
+			lastError = err.Error()
+		} else {
+			lastError = ""
 		}
-	}
+		return false, nil
+	})
 }

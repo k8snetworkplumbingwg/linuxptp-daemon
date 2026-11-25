@@ -132,6 +132,92 @@ func TestLiveTLSReload(t *testing.T) {
 	}
 }
 
+func TestSecurityStartsWithoutOutboundClientIdentity(t *testing.T) {
+	cfg := securityTestConfig(t)
+	cfg.RequiredAudiences = []string{"event-api"}
+	if err := os.WriteFile(cfg.ServiceAccountToken, []byte("test-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	cfg.ClientCertPath = filepath.Join(dir, "tls.crt")
+	cfg.ClientKeyPath = filepath.Join(dir, "tls.key")
+
+	security, writer, err := NewSecurity(cfg, testValidator{true}, time.Second)
+	if err != nil {
+		t.Fatalf("start inbound security without callback identity: %v", err)
+	}
+	snapshot := security.material.current.Load()
+	if snapshot == nil || snapshot.server == nil {
+		t.Fatal("inbound TLS configuration was not initialized")
+	}
+	if snapshot.client != nil {
+		t.Fatal("outbound client was initialized without its mTLS identity")
+	}
+	server := httptest.NewUnstartedServer(security.protect(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	server.TLS = security.TLS
+	server.StartTLS()
+	defer server.Close()
+	callback := writer(server.URL)
+	assertCallbackBlocked := func() {
+		t.Helper()
+		if _, writeErr := callback.Write([]byte("{}")); writeErr == nil ||
+			!strings.Contains(writeErr.Error(), "no usable outbound mTLS client identity") {
+			t.Fatalf("callback did not fail closed: %v", writeErr)
+		}
+	}
+	assertCallbackBlocked()
+	peerConfig := *cfg
+	peerConfig.ClientCertPath, peerConfig.ClientKeyPath = cfg.ServerCertPath, cfg.ServerKeyPath
+	peer, err := auth.NewAuthenticatedClient(&peerConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := peer.Post(server.URL, []byte("{}"))
+	if err != nil {
+		t.Fatalf("inbound request before provisioning: %v", err)
+	}
+	response.Body.Close()
+	peer.GetClient().CloseIdleConnections()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("authenticated inbound request returned HTTP %d", response.StatusCode)
+	}
+
+	for dst, src := range map[string]string{
+		cfg.ClientCertPath: cfg.ServerCertPath,
+		cfg.ClientKeyPath:  cfg.ServerKeyPath,
+	} {
+		data, readErr := os.ReadFile(src)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if writeErr := os.WriteFile(dst, data, 0600); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+	if err = security.material.reload(); err != nil {
+		t.Fatalf("load provisioned callback identity: %v", err)
+	}
+	if _, err = callback.Write([]byte("{}")); err != nil {
+		t.Fatalf("callback after identity provisioning: %v", err)
+	}
+	for _, keyContents := range [][]byte{[]byte("invalid"), nil} {
+		if keyContents == nil {
+			err = os.Remove(cfg.ClientKeyPath)
+		} else {
+			err = os.WriteFile(cfg.ClientKeyPath, keyContents, 0600)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = security.material.reload(); err != nil {
+			t.Fatalf("reload inbound TLS with unusable callback identity: %v", err)
+		}
+		assertCallbackBlocked()
+	}
+}
+
 func TestSecuredCallbackTLSAndTokenRotation(t *testing.T) {
 	cfg := securityTestConfig(t)
 	security, writer, err := NewSecurity(cfg, testValidator{true}, 2*time.Second)

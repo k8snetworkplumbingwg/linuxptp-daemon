@@ -65,6 +65,9 @@ func (w *authenticatedWriter) Write(data []byte) (int, error) {
 	client := w.client
 	if w.security.material != nil {
 		snapshot := w.security.material.current.Load()
+		if snapshot.client == nil {
+			return 0, fmt.Errorf("authenticated callback delivery is unavailable: no usable outbound mTLS client identity")
+		}
 		if err := checkLeafTime(snapshot.clientLeaf); err != nil {
 			return 0, err
 		}
