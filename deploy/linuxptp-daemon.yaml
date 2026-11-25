@@ -39,6 +39,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
+        - name: NAME_SPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         volumeMounts:
         - name: config-volume
           mountPath: /etc/linuxptp
