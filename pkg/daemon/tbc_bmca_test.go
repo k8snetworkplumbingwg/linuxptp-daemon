@@ -292,6 +292,61 @@ func TestTBCBMCASelectionDuringApply(t *testing.T) {
 	require.Equal(t, []bool{false, true}, actions(), "replayed evaluation must reach the normal input-action and acknowledgement path")
 }
 
+func TestTBCBMCAPortSelectionDuringApply(t *testing.T) {
+	p, cm, actions := newBMCATestProcess(t, nil)
+	cm.SetApplying(true)
+	bmcaSnapshot(t, p, cm)
+	roleDone, continueBMCA := make(chan struct{}), make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.processOutput(bmcaLine("port 2 (eno3): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED"))
+		close(roleDone)
+		select {
+		case <-continueBMCA:
+		case <-p.sourceQualification.done:
+			return
+		}
+		p.processOutput(bmcaLine("selected best master clock upstream-B"))
+		for i := 0; i < 5; i++ {
+			p.processOutput(bmcaLine("master offset 5 s2 freq 0 path delay 100"))
+		}
+	}()
+	t.Cleanup(func() { p.sourceQualification.close(); <-done })
+	select {
+	case <-roleDone:
+	case <-time.After(time.Second):
+		t.Fatal("selected port blocked the scanner during apply")
+	}
+	bmcaSnapshot(t, p, cm) // Drain the role's snapshot before sending BMCA.
+	close(continueBMCA)
+	select {
+	case stats := <-cm.StatsUpdatesCh():
+		require.False(t, stats.SourceQualified[bmcaTestConfig])
+	case <-time.After(time.Second):
+		t.Fatal("BMCA selection was not received during apply")
+	}
+	source, exists := cm.SourceQualification(bmcaTestConfig)
+	require.True(t, exists)
+	require.Empty(t, source.IFace, "port selection must not mutate the clock during apply")
+	require.Empty(t, actions(), "retained observations must not apply hardware during profile apply")
+	cm.SetApplying(false)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("apply completion did not release the BMCA observer")
+	}
+	stats := bmcaSnapshot(t, p, cm)
+	source, exists = cm.SourceQualification(bmcaTestConfig)
+	require.True(t, exists && stats.SourceQualified[bmcaTestConfig])
+	require.Equal(t, "eno3", source.IFace, "qualification must retain the selected port")
+	p.tBCAttributes.offsetEventWindow = utils.NewWindow(1)
+	p.eventCh = make(chan event.Event, 1)
+	p.sendPtp4lOffsetEvent()
+	require.Len(t, p.eventCh, 1)
+	require.Equal(t, "eno3", (<-p.eventCh).IFace, "offset events must use the selected port")
+}
+
 func TestTBCBMCAPendingApplyObservationCanStop(t *testing.T) {
 	for _, outcome := range []string{"cancel", "close"} {
 		t.Run(outcome, func(t *testing.T) {

@@ -48,9 +48,9 @@ type ClockManager struct {
 	// applyingProfiles is set while applyNodePTPProfiles is tearing down /
 	// restarting processes. When true, T-BC/T-TSC events are skipped so
 	// teardown races cannot emit spurious state transitions. One-shot BMCA
-	// selections are retained until apply finishes instead of being dropped.
-	applyingProfiles atomic.Bool
-	pendingBMCA      []event.Event // guarded by clockManagementMu; original replies are deferred
+	// selections and selected-port roles are retained until apply finishes.
+	applyingProfiles          atomic.Bool
+	pendingSourceObservations []event.Event // guarded by clockManagementMu
 	// syncStatusCh is signalled (non-blocking) whenever a clock state transitions.
 	syncStatusCh chan struct{}
 	// statsUpdates holds the latest complete snapshot for ProcessManager. All
@@ -71,7 +71,7 @@ func (m *ClockManager) ConfigureSourceQualification(cfg string, ports []string, 
 		return 0, fmt.Errorf("source qualification requires a T-BC clock for %s", cfg)
 	}
 	generation, err := clk.ConfigureSourceQualification(ports, policy)
-	m.rejectObsoleteBMCALocked()
+	m.rejectObsoleteSourceObservationsLocked()
 	m.publishStats()
 	return generation, err
 }
@@ -113,14 +113,14 @@ func (m *ClockManager) SetHAMetric(g *prometheus.GaugeVec) {
 }
 
 // SetApplying marks whether a PTP profile apply is in progress. Finishing an
-// apply evaluates retained BMCA selections before newer observations can pass.
+// apply evaluates retained source observations before newer observations can pass.
 func (m *ClockManager) SetApplying(v bool) {
 	m.clockManagementMu.Lock()
 	defer m.clockManagementMu.Unlock()
 	m.applyingProfiles.Store(v)
 	if !v {
-		pending := m.pendingBMCA
-		m.pendingBMCA = nil
+		pending := m.pendingSourceObservations
+		m.pendingSourceObservations = nil
 		for _, ev := range pending {
 			m.processSourceObservationLocked(ev, ev.Data.(*event.PTPSourceObservation))
 		}
@@ -228,7 +228,7 @@ func (m *ClockManager) AddClock(clk clock.Clock) error {
 		}
 		m.clocks[cfg] = clk
 	}
-	m.rejectObsoleteBMCALocked()
+	m.rejectObsoleteSourceObservationsLocked()
 	glog.Infof("AddClock: registered %s clock for config %s", clk.ClockType(), clk.ConfigName())
 	m.publishStats()
 	return nil
@@ -296,7 +296,7 @@ func (m *ClockManager) RemoveAllClocks() {
 	}
 	m.clocks = map[string]clock.Clock{}
 	m.osClockConfigs = make(map[string]struct{})
-	m.rejectObsoleteBMCALocked()
+	m.rejectObsoleteSourceObservationsLocked()
 	m.publishStats()
 	m.clockManagementMu.Unlock()
 
@@ -466,9 +466,32 @@ func (m *ClockManager) processSourceObservationLocked(ev event.Event, observatio
 			if !observation.SourceLost && (observation.Selection == parserconstants.BMCALocal || observation.Selection == parserconstants.BMCAExternal) {
 				// The scanner waits for this original reply (or shutdown). Replying
 				// with a rejection now would leave no receiver for replay's verdict.
-				m.pendingBMCA = append(m.pendingBMCA, ev)
+				m.pendingSourceObservations = append(m.pendingSourceObservations, ev)
 				m.publishStats()
 				return
+			}
+			if !observation.SourceLost && observation.Selection == parserconstants.BMCAUnknown && observation.PortRole != nil && *observation.PortRole == parserconstants.PortRoleSlave {
+				// The scanner continues immediately; retain a copy without a second reply.
+				retained := *observation
+				retained.PortRole = utils.ToPtr(*observation.PortRole)
+				retained.Reply = nil
+				ev.Data = &retained
+				// Only the latest role for a port is needed between BMCA decisions.
+				for i := len(m.pendingSourceObservations) - 1; i >= 0; i-- {
+					pending := m.pendingSourceObservations[i]
+					previous := pending.Data.(*event.PTPSourceObservation)
+					if pending.CfgName != ev.CfgName || previous.Generation != observation.Generation {
+						continue
+					}
+					if previous.Selection != parserconstants.BMCAUnknown {
+						break
+					}
+					if pending.IFace == ev.IFace {
+						m.pendingSourceObservations = slices.Delete(m.pendingSourceObservations, i, i+1)
+						break
+					}
+				}
+				m.pendingSourceObservations = append(m.pendingSourceObservations, ev)
 			}
 		} else {
 			previousSource, _ := clk.SourceQualification(ev.CfgName)
@@ -508,10 +531,10 @@ func (m *ClockManager) findCurrentTBCForSourceObservation(ev event.Event, observ
 	return clk
 }
 
-// rejectObsoleteBMCALocked releases invalidated publishers without waiting for
-// apply to finish. Aggregate-only resets preserve the PTP source generation.
-func (m *ClockManager) rejectObsoleteBMCALocked() {
-	m.pendingBMCA = slices.DeleteFunc(m.pendingBMCA, func(ev event.Event) bool {
+// rejectObsoleteSourceObservationsLocked releases invalidated publishers without
+// waiting for apply to finish. Aggregate-only resets preserve the PTP generation.
+func (m *ClockManager) rejectObsoleteSourceObservationsLocked() {
+	m.pendingSourceObservations = slices.DeleteFunc(m.pendingSourceObservations, func(ev event.Event) bool {
 		observation := ev.Data.(*event.PTPSourceObservation)
 		if m.findCurrentTBCForSourceObservation(ev, observation) != nil {
 			return false
@@ -589,7 +612,7 @@ func (m *ClockManager) reset(ev event.Event) {
 		}
 		m.deleteClockOffsetMetrics(clk.ConfigName(), string(clk.ClockType()))
 	}
-	m.rejectObsoleteBMCALocked()
+	m.rejectObsoleteSourceObservationsLocked()
 	m.osClock.E3State = event.PTP_NOTSET
 	if ev.Source == event.TS2PHC {
 		m.unregisterMetrics(ev.CfgName, "")

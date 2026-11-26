@@ -153,24 +153,22 @@ func TestPTPSourceClockStateMetricsFollowSelectedPort(t *testing.T) {
 			}
 			requireGaugeValue(t, gauge, oldLabels, tc.state)
 
-			// Ignored roles, stale publishers, and the apply gate must not move
-			// the metric away from the accepted selected port.
+			// Ignored roles and stale publishers must not move the metric away
+			// from the accepted selected port.
 			observe("tr1", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleMaster)})
 			observe("not-upstream", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleSlave)})
 			stale := &event.PTPSourceObservation{Generation: generation + 1, PortRole: utils.ToPtr(parserconstants.PortRoleSlave), Reply: make(chan event.SourceQualification, 1)}
 			cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: testClockmgrPtp4lConfig, IFace: "tr1", Data: stale})
 			require.Empty(t, (<-stale.Reply).SourceType)
-			cm.SetApplying(true)
-			observe("tr1", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleSlave)})
-			cm.SetApplying(false)
-			requireGaugeValue(t, gauge, oldLabels, tc.state)
-			require.False(t, gauge.Delete(newLabels))
-
 			beforeSource, ok := cm.SourceQualification(testClockmgrPtp4lConfig)
 			require.True(t, ok)
 			beforeState := cm.GetClock(testClockmgrPtp4lConfig).(*clock.TBC).GetSyncState()
+			cm.SetApplying(true)
 			result := observe("tr1", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleSlave)})
 			require.Empty(t, result.SourceType, "a label-only change must not trigger an input hardware action")
+			requireGaugeValue(t, gauge, oldLabels, tc.state)
+			require.False(t, gauge.Delete(newLabels))
+			cm.SetApplying(false)
 			require.False(t, gauge.Delete(oldLabels), "the old port's state series must be removed without waiting for another sample")
 			require.NotContains(t, cm.metricCache, metricKey{cfgName: testClockmgrPtp4lConfig, process: "ptp4l", iface: "tr0-alias", dataType: "clock_state"})
 			requireGaugeValue(t, gauge, newLabels, tc.state)
@@ -191,6 +189,42 @@ func TestPTPSourceClockStateMetricsFollowSelectedPort(t *testing.T) {
 			require.False(t, gauge.Delete(newLabels), "reselecting the original port must retire the backup port's series too")
 		})
 	}
+}
+
+func TestSourcePortRolesCoalesceBetweenBMCASelections(t *testing.T) {
+	cm, _ := newProcessMetricManager(t, event.TBC)
+	generation, err := cm.ConfigureSourceQualification(testClockmgrPtp4lConfig, []string{"tr0", "tr1"}, utils.QualificationConfig{
+		QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 1, DisqualifiedSamples: 1})
+	require.NoError(t, err)
+	role := func(iface string) {
+		observation := &event.PTPSourceObservation{Generation: generation, PortRole: utils.ToPtr(parserconstants.PortRoleSlave), Reply: make(chan event.SourceQualification, 1)}
+		cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: testClockmgrPtp4lConfig, IFace: iface, Data: observation})
+		require.Len(t, observation.Reply, 1)
+		require.Empty(t, (<-observation.Reply).SourceType)
+	}
+	cm.SetApplying(true)
+	for i := 0; i < 100; i++ {
+		role("tr0")
+		role("not-upstream")
+		role("tr1")
+	}
+	role("not-upstream")
+	require.Len(t, cm.pendingSourceObservations, 3, "repeated roles must not grow the apply queue")
+	selection := &event.PTPSourceObservation{Generation: generation, Selection: parserconstants.BMCAExternal, Reply: make(chan event.SourceQualification, 1)}
+	cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: testClockmgrPtp4lConfig, Data: selection})
+	for i := 0; i < 100; i++ {
+		role("tr1")
+		role("not-upstream")
+		role("tr0")
+	}
+	role("not-upstream")
+	require.Len(t, cm.pendingSourceObservations, 7, "roles on either side of BMCA must remain ordered")
+	cm.SetApplying(false)
+	require.Len(t, selection.Reply, 1)
+	require.Equal(t, "tr1", (<-selection.Reply).IFace)
+	source, exists := cm.SourceQualification(testClockmgrPtp4lConfig)
+	require.True(t, exists)
+	require.Equal(t, "tr0", source.IFace)
 }
 
 func TestSyncEClockStateMetrics(t *testing.T) {

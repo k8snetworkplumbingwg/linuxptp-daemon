@@ -152,6 +152,47 @@ func TestSourceQualificationBMCAWaitsForApply(t *testing.T) {
 	}
 }
 
+func TestSourceQualificationPortSelectionReplayedAfterApply(t *testing.T) {
+	m := clockmgr.Init("test", make(chan event.Event), nil, nil, nil, nil)
+	qualificationPublisher(t, m)
+	_, err := m.ConfigureSourceQualification("ptp4l.0.config", []string{"tr0", "tr1"}, utils.QualificationConfig{
+		QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 1, DisqualifiedSamples: 1})
+	require.NoError(t, err)
+	source, exists := m.SourceQualification("ptp4l.0.config")
+	require.True(t, exists)
+	role := &event.PTPSourceObservation{Generation: source.Generation, PortRole: utils.ToPtr(parserconstants.PortRoleSlave), Reply: make(chan event.SourceQualification, 1)}
+	selection := &event.PTPSourceObservation{Generation: source.Generation, Selection: parserconstants.BMCAExternal, Reply: make(chan event.SourceQualification, 1)}
+	m.SetApplying(true)
+	m.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: "ptp4l.0.config", IFace: "tr0", Data: role})
+	require.Empty(t, receiveQualificationReply(t, role.Reply).SourceType, "port metadata must not block the scanner")
+	*role.PortRole = parserconstants.PortRoleMaster // Reusing the acknowledged observation must not alter the replay.
+	before, _ := m.SourceQualification("ptp4l.0.config")
+	require.Empty(t, before.IFace, "the clock must not change during apply")
+	m.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: "ptp4l.0.config", Data: selection})
+	require.Empty(t, selection.Reply)
+	laterRole := &event.PTPSourceObservation{Generation: source.Generation, PortRole: utils.ToPtr(parserconstants.PortRoleSlave), Reply: make(chan event.SourceQualification, 1)}
+	m.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: "ptp4l.0.config", IFace: "tr1", Data: laterRole})
+	require.Empty(t, receiveQualificationReply(t, laterRole.Reply).SourceType)
+	m.SetApplying(false)
+	require.Equal(t, "tr0", receiveQualificationReply(t, selection.Reply).IFace, "port selection must be replayed before BMCA")
+	after, _ := m.SourceQualification("ptp4l.0.config")
+	require.Equal(t, "tr1", after.IFace, "later port selections must retain their order")
+	require.Empty(t, role.Reply, "replaying an acknowledged port role must not send another reply")
+	require.Empty(t, laterRole.Reply)
+
+	m.SetApplying(true)
+	obsolete := &event.PTPSourceObservation{Generation: source.Generation, PortRole: utils.ToPtr(parserconstants.PortRoleSlave), Reply: make(chan event.SourceQualification, 1)}
+	m.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: "ptp4l.0.config", IFace: "tr0", Data: obsolete})
+	require.Empty(t, receiveQualificationReply(t, obsolete.Reply).SourceType)
+	m.RemoveAllClocks()
+	qualificationPublisher(t, m)
+	m.SetApplying(false)
+	require.Empty(t, obsolete.Reply, "an obsolete port observation must not be replayed")
+	replacement, exists := m.SourceQualification("ptp4l.0.config")
+	require.True(t, exists)
+	require.Empty(t, replacement.IFace, "an obsolete port must not affect a replacement clock")
+}
+
 func TestSourceQualificationBMCAApplyOrder(t *testing.T) {
 	m := clockmgr.Init("test", make(chan event.Event), nil, nil, nil, nil)
 	set := qualificationPublisher(t, m)
@@ -265,7 +306,7 @@ func TestSourceQualificationApplyingRejectsUnrelatedObservations(t *testing.T) {
 		observation := ev.Data.(*event.PTPSourceObservation)
 		observation.Reply = make(chan event.SourceQualification, 1)
 		m.ProcessEvent(ev)
-		require.Empty(t, receiveQualificationReply(t, observation.Reply).SourceType, "only current-generation BMCA selections may be deferred")
+		require.Empty(t, receiveQualificationReply(t, observation.Reply).SourceType, "unrelated observations must not produce a qualification verdict")
 	}
 	m.SetApplying(false)
 }
