@@ -31,8 +31,8 @@ type ptpSourceQualification struct {
 	lastSelectedPort        string
 	selection               parserconstants.BMCASelection
 	configName              string
-	generation              uint64
-	revision                uint64
+	generation              uint64 // Qualification lifecycle; stable across port reselection.
+	revision                uint64 // Readiness version; rejects stale hardware acknowledgements.
 	inputEnabled            bool
 }
 

@@ -851,6 +851,16 @@ func TestNewProfileTopology(t *testing.T) {
 		assert.ElementsMatch(t, []string{"bc1"}, topology.ntpFailOverProfileNames,
 			"profile with ntpfailover plugin should be tracked")
 	})
+	t.Run("empty HA list is standalone", func(t *testing.T) {
+		for _, members := range []string{"", "  "} {
+			profile := ptpv1.PtpProfile{Name: stringPointer("tr"), Phc2sysOpts: &phc2sysOpts,
+				PtpSettings: map[string]string{PTP_HA_IDENTIFIER: members}}
+			topology, err := NewProfileTopology([]ptpv1.PtpProfile{profile})
+			require.NoError(t, err)
+			assert.False(t, topology.isHAProfile("tr"))
+			assert.Empty(t, topology.haMembers)
+		}
+	})
 
 	t.Run("valid HA profile with members", func(t *testing.T) {
 		profiles := []ptpv1.PtpProfile{
@@ -870,6 +880,24 @@ func TestNewProfileTopology(t *testing.T) {
 		assert.True(t, topology.isHAMember("bc1"))
 		assert.True(t, topology.isHAMember("bc2"))
 	})
+	t.Run("TBC cannot configure HA", func(t *testing.T) {
+		for _, opts := range []*string{nil, &phc2sysOpts} {
+			profile := ptpv1.PtpProfile{Name: stringPointer("tr"), Phc2sysOpts: opts,
+				PtpSettings: map[string]string{"clockType": TBC, PTP_HA_IDENTIFIER: "bc1"}}
+			_, err := NewProfileTopology([]ptpv1.PtpProfile{profile})
+			require.ErrorContains(t, err, "T-BC")
+			require.ErrorContains(t, err, "HA")
+		}
+	})
+	t.Run("TBC cannot be an HA member", func(t *testing.T) {
+		profiles := []ptpv1.PtpProfile{
+			{Name: stringPointer("tr"), PtpSettings: map[string]string{"clockType": TBC}},
+			{Name: stringPointer("ha"), Phc2sysOpts: &phc2sysOpts, PtpSettings: map[string]string{PTP_HA_IDENTIFIER: "tr"}},
+		}
+		_, err := NewProfileTopology(profiles)
+		require.ErrorContains(t, err, "T-BC")
+		require.ErrorContains(t, err, "HA")
+	})
 	t.Run("HA profile referencing a missing member fails", func(t *testing.T) {
 		profiles := []ptpv1.PtpProfile{
 			{Name: stringPointer("bc1")},
@@ -879,6 +907,17 @@ func TestNewProfileTopology(t *testing.T) {
 
 		_, err := NewProfileTopology(profiles)
 		require.Error(t, err)
+	})
+	t.Run("HA profile with empty member fails", func(t *testing.T) {
+		for _, members := range []string{"bc1,", " , , "} {
+			profiles := []ptpv1.PtpProfile{
+				{Name: stringPointer("bc1")},
+				{Name: stringPointer("ha"), Phc2sysOpts: &phc2sysOpts,
+					PtpSettings: map[string]string{PTP_HA_IDENTIFIER: members}},
+			}
+			_, err := NewProfileTopology(profiles)
+			require.ErrorContains(t, err, "missing the following referenced profiles")
+		}
 	})
 	t.Run("Multiple HA profiles fails", func(t *testing.T) {
 		profiles := []ptpv1.PtpProfile{

@@ -189,6 +189,8 @@ func (d *OffsetData) String() string {
 // Event identifies the local contributor, config and physical interface. Reply
 // must be buffered (capacity one); it lets the scanner apply hardware changes
 // after clock evaluation, without running hardware I/O under the manager lock.
+// BMCA replies may be deferred until profile apply finishes; callers must allow
+// shutdown to cancel their reply wait.
 type PTPSourceObservation struct {
 	Generation uint64
 	Selection  parserconstants.BMCASelection

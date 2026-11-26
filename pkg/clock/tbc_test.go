@@ -1582,8 +1582,14 @@ func newLockedTBCClock() (*TBC, *ipcRecorder) {
 
 func setTBCSourceReadyForTest(bc *TBC, ready bool) SyncState {
 	if bc.ptpSource == nil {
-		if _, err := bc.ConfigureSourceQualification([]string{testTBCIface}, utils.QualificationConfig{
-			QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 1, DisqualifiedSamples: 1}); err != nil {
+		_, err := bc.ConfigureSourceQualification(
+			[]string{testTBCIface},
+			utils.QualificationConfig{
+				QualifiedThreshold: 100, DisqualifiedThreshold: 200,
+				QualifiedSamples: 1, DisqualifiedSamples: 1,
+			},
+		)
+		if err != nil {
 			panic(err)
 		}
 	}

@@ -35,9 +35,20 @@ func TestSourceQualificationPolicy(t *testing.T) {
 			want: utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 100, QualifiedSamples: 5, DisqualifiedSamples: 5}},
 		{name: "explicit false selects offset mode", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"ptpSourceUseS3":false}}`, applicable: true,
 			want: utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 100, QualifiedSamples: 5, DisqualifiedSamples: 5}},
+		{name: "empty HA setting", profile: `{"ptpSettings":{"clockType":"T-BC","haProfiles":""}}`, applicable: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 100, QualifiedSamples: 5, DisqualifiedSamples: 5}},
+		{name: "empty HA setting with phc2sys", profile: `{"phc2sysOpts":"-a -r","ptpSettings":{"clockType":"T-BC","haProfiles":""}}`, applicable: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 100, QualifiedSamples: 5, DisqualifiedSamples: 5}},
+		{name: "whitespace HA setting", profile: `{"phc2sysOpts":"-a -r","ptpSettings":{"clockType":"T-BC","haProfiles":"  "}}`, applicable: true,
+			want: utils.QualificationConfig{QualifiedThreshold: 100, DisqualifiedThreshold: 100, QualifiedSamples: 5, DisqualifiedSamples: 5}},
+		{name: "blank HA members", profile: `{"phc2sysOpts":"-a -r","ptpSettings":{"clockType":"T-BC","haProfiles":" , , "}}`, wantErr: true},
+		{name: "TBC HA without phc2sys", profile: `{"ptpSettings":{"clockType":"T-BC","haProfiles":"member0,member1"}}`, wantErr: true},
+		{name: "TBC HA with phc2sys", profile: `{"phc2sysOpts":"-a -r","ptpSettings":{"clockType":"T-BC","haProfiles":"member0,member1"}}`, wantErr: true},
+		{name: "TBC HA with phc2sys config", profile: `{"phc2sysConf":"[global]","ptpSettings":{"clockType":"T-BC","haProfiles":"member0,member1"}}`, wantErr: true},
+		{name: "controlled TBC with HA", profile: `{"ptpSettings":{"clockType":"T-BC","controllingProfile":"tr","haProfiles":"member0"}}`, wantErr: true},
 		{name: "non TBC", profile: `{"ptpClockThreshold":{"ptpSourceQualifiedSamples":1}}`},
 		{name: "controlled TT", profile: `{"ptpSettings":{"clockType":"T-BC","controllingProfile":"tr"},"ptpClockThreshold":{"ptpSourceQualifiedSamples":0}}`},
-		{name: "HA system clock", profile: `{"ptpSettings":{"clockType":"T-BC","haProfiles":"member0,member1"}}`},
+		{name: "HA system clock", profile: `{"phc2sysOpts":"-a -r","ptpSettings":{"haProfiles":"member0,member1"}}`},
 		{name: "max offset fallback without source settings", profile: `{"ptpSettings":{"clockType":"T-BC"},"ptpClockThreshold":{"maxOffsetThreshold":250}}`, applicable: true,
 			want: utils.QualificationConfig{QualifiedThreshold: 250, DisqualifiedThreshold: 250, QualifiedSamples: 5, DisqualifiedSamples: 5}},
 		{name: "in sync fallback without thresholds", profile: `{"ptpSettings":{"clockType":"T-BC","inSyncConditionThreshold":"500"}}`, applicable: true,
@@ -137,7 +148,7 @@ func TestSourceQualificationFreshSamplesAndHardware(t *testing.T) {
 			require.Equal(t, "tr1", selected.IFace)
 			require.Equal(t, clock.PTPInstanceSource{ConfigName: p.configName, Generation: selected.Generation}, selected.Source)
 			wrongPort := *metric
-			wrongPort.Iface = "tr0"
+			wrongPort.Iface, wrongPort.ServoState, wrongPort.Offset = "tr0", "s2", 201
 			p.forwardSourceData(&wrongPort, nil)
 			require.True(t, qualified(), "samples from the old port are ignored")
 			p.forwardSourceData(nil, &parser.PTPEvent{Iface: "tr1", Role: parserconstants.PortRoleMaster})
@@ -151,11 +162,13 @@ func TestSourceQualificationFreshSamplesAndHardware(t *testing.T) {
 
 func TestSourceQualificationHardwareFailure(t *testing.T) {
 	t.Parallel()
-	fail := true
+	failEnable := true
+	var actions []bool
 	p := &ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 10)}, nodeProfile: &ptpv1.PtpProfile{},
 		tBCAttributes: tBCProcessAttributes{activePort: "tr0", trIfaceNames: []string{"tr0"}},
-		sourceQualification: &sourceQualificationRuntime{apply: func(bool) error {
-			if fail {
+		sourceQualification: &sourceQualificationRuntime{apply: func(ready bool) error {
+			actions = append(actions, ready)
+			if ready && failEnable {
 				return errors.New("pin update failed")
 			}
 			return nil
@@ -165,12 +178,47 @@ func TestSourceQualificationHardwareFailure(t *testing.T) {
 	p.forwardSourceData(nil, &parser.PTPEvent{Iface: "tr0", Role: parserconstants.PortRoleSlave})
 	p.observeSource("", &event.PTPSourceObservation{Selection: parserconstants.BMCAExternal})
 	p.forwardSourceData(&parser.Metrics{Iface: "tr0", Offset: 10, ServoState: "s2"}, nil)
-	require.False(t, p.sourceQualification.appliedKnown)
+	q := p.sourceQualification
+	q.mu.Lock()
+	appliedKnown := q.appliedKnown
+	attempts := append([]bool(nil), actions...)
+	q.mu.Unlock()
+	require.False(t, appliedKnown)
+	require.Equal(t, []bool{false, true}, attempts)
 	result, exists := cm.SourceQualification(p.configName)
 	require.True(t, exists && result.Qualified, "hardware failure must not hide source facts")
-	fail = false
+	q.mu.Lock()
+	failEnable = false
+	q.mu.Unlock()
 	p.forwardSourceData(&parser.Metrics{Iface: "tr0", Offset: 10, ServoState: "s2"}, nil)
-	require.True(t, p.sourceQualification.appliedKnown && p.sourceQualification.applied, "next fresh sample retries failed hardware action")
+	q.mu.Lock()
+	appliedKnown = q.appliedKnown
+	attempts = append([]bool(nil), actions...)
+	q.mu.Unlock()
+	require.False(t, appliedKnown, "a fresh sample must not retry a failed action")
+	require.Equal(t, []bool{false, true}, attempts)
+	p.observeSource("", &event.PTPSourceObservation{Selection: parserconstants.BMCALocal})
+	p.observeSource("", &event.PTPSourceObservation{Selection: parserconstants.BMCAExternal})
+	p.forwardSourceData(&parser.Metrics{Iface: "tr0", Offset: 10, ServoState: "s2"}, nil)
+	q.mu.Lock()
+	appliedKnown, applied := q.appliedKnown, q.applied
+	attempts = append([]bool(nil), actions...)
+	q.mu.Unlock()
+	require.True(t, appliedKnown && applied, "a new readiness transition must apply the input")
+	require.Equal(t, []bool{false, true, false, true}, attempts)
+}
+
+func TestSourceQualificationOffsetStateBeforeObservation(t *testing.T) {
+	for _, q := range []*sourceQualificationRuntime{nil, {}} {
+		p := &ptpProcess{
+			ExecProcess:         ExecProcess{configName: "ptp4l.0.config", eventCh: make(chan event.Event, 1)},
+			tBCAttributes:       tBCProcessAttributes{trPortsConfigFile: "ptp4l.0.config", offsetEventWindow: utils.NewWindow(1)},
+			sourceQualification: q,
+		}
+		p.sendPtp4lOffsetEvent()
+		require.Len(t, p.eventCh, 1)
+		require.Equal(t, event.PTP_NOTSET, (<-p.eventCh).Data.(*event.OffsetData).State)
+	}
 }
 
 func TestSourceQualificationRejectsInvalidProfileWithoutPanic(t *testing.T) {
@@ -183,6 +231,12 @@ func TestSourceQualificationRejectsInvalidProfileWithoutPanic(t *testing.T) {
 		err = dn.createProcesses(0, p, &ProfileTopology{}, event.TBC, "leading", []string{"tr0"})
 	})
 	require.Error(t, err)
+	p.PtpClockThreshold = nil
+	p.PtpSettings[PTP_HA_IDENTIFIER] = "member0"
+	require.NotPanics(t, func() {
+		err = dn.createProcesses(0, p, &ProfileTopology{}, event.TBC, "leading", []string{"tr0"})
+	})
+	require.ErrorContains(t, err, "cannot configure HA")
 }
 
 func TestSourceQualificationDoesNotUseUnrelatedHAGroup(t *testing.T) {
@@ -254,6 +308,55 @@ func TestSourceQualificationDefaultConfiguration(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, p.sourceQualification, "qualification does not require source settings or HardwareConfig")
 	require.Nil(t, profile.PtpClockThreshold, "default resolution must not mutate the profile")
+}
+
+func TestSourceQualificationEmptyHAProfile(t *testing.T) {
+	originalPrefix := configPrefix
+	configPrefix = t.TempDir()
+	t.Cleanup(func() { configPrefix = originalPrefix })
+	for _, tc := range []struct {
+		name    string
+		phc2sys bool
+	}{{"without phc2sys", false}, {"with phc2sys", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := &ptpv1.PtpProfile{Name: utils.ToPtr("tr"), Ptp4lOpts: utils.ToPtr("-m"),
+				Ptp4lConf: utils.ToPtr("[global]\n[tr0]\nmasterOnly 0\n"), PtpSettings: map[string]string{"clockType": TBC, PTP_HA_IDENTIFIER: ""}}
+			if tc.phc2sys {
+				profile.Phc2sysOpts = utils.ToPtr("-a -r")
+			}
+			topology, err := NewProfileTopology([]ptpv1.PtpProfile{*profile})
+			require.NoError(t, err)
+			require.False(t, topology.isHAProfile("tr"))
+			events := make(chan event.Event, 20)
+			cm := clockmgr.Init("test", events, nil, nil, nil, nil)
+			clk, err := clock.NewTBC("ptp4l.0.config", cm.GetUtcOffset, &pmc.MockClient{}, "")
+			require.NoError(t, err)
+			require.NoError(t, cm.AddClock(clk))
+			dn := &Daemon{processManager: &ProcessManager{eventsIn: events, clockMgr: cm}}
+			env := ptpProcessEnv{nodeProfile: profile, clockType: event.TBC, dn: dn, topology: &topology, upstreamPorts: []string{"tr0"}}
+			p, err := NewPtp4lProcess(env)
+			require.NoError(t, err)
+			require.NotNil(t, p.sourceQualification)
+			t.Cleanup(p.sourceQualification.close)
+			_, exists := cm.SourceQualification(p.configName)
+			require.True(t, exists)
+			require.Equal(t, process.OnSourceQualified{ConfigName: p.configName}, phc2sysOffsetStartCondition(env))
+			start := ts2phcConditionsForTBC(&ptpProcess{}, env)[process.ActionStart].(process.StateAwareCondition)
+			stats := process.EventStats{SourceQualified: map[string]bool{p.configName: false}, States: map[string]map[event.EventSource]event.PTPState{}}
+			require.False(t, start.MetByCurrentState(nil, nil, stats))
+			stats.SourceQualified[p.configName] = true
+			if tc.phc2sys {
+				phc, phcErr := NewPhc2sysProcess(env)
+				require.NoError(t, phcErr)
+				require.Equal(t, p.socketPath, phc.socketPath)
+				require.Equal(t, "[ptp4l.0.config:{level}]", phc.messageTag)
+				require.Equal(t, process.OnSourceQualified{ConfigName: p.configName}, phc.conditions[process.ActionStart])
+				require.False(t, start.MetByCurrentState(nil, nil, stats))
+				stats.States[p.configName] = map[event.EventSource]event.PTPState{event.PHC2SYS: event.PTP_LOCKED}
+			}
+			require.True(t, start.MetByCurrentState(nil, nil, stats))
+		})
+	}
 }
 
 func TestSourceQualificationPropagatesPluginFailure(t *testing.T) {
@@ -493,7 +596,6 @@ func TestSourceQualificationTransitionsWaitForDeliveryOrShutdown(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				applied := make(chan bool, 1)
 				p := &ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config", eventCh: make(chan event.Event, 1)},
-					tBCAttributes: tBCProcessAttributes{lastReportedState: event.PTP_FREERUN},
 					sourceQualification: &sourceQualificationRuntime{ctx: ctx, generation: 7,
 						apply: func(value bool) error { applied <- value; return nil }}}
 				p.eventCh <- event.Event{CfgName: "pending"}

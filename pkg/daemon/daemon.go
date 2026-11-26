@@ -536,13 +536,20 @@ func (t *ProfileTopology) controlling(nodeProfile *ptpv1.PtpProfile) string {
 // Returns an empty slice if this is not an HA profile
 func listHAMemberProfiles(nodeProfile *ptpv1.PtpProfile) []string {
 	var haProfiles []string
-	if profiles, ok := nodeProfile.PtpSettings[PTP_HA_IDENTIFIER]; ok {
+	if profiles, ok := nodeProfile.PtpSettings[PTP_HA_IDENTIFIER]; ok && strings.TrimSpace(profiles) != "" {
 		haProfiles = strings.Split(profiles, ",")
 		for index, profile := range haProfiles {
 			haProfiles[index] = strings.TrimSpace(profile)
 		}
 	}
 	return haProfiles
+}
+
+func validateTBCNoHAProfiles(profile *ptpv1.PtpProfile) error {
+	if profileClockType(profile) == TBC && len(listHAMemberProfiles(profile)) > 0 {
+		return fmt.Errorf("T-BC profile %q cannot configure HA profiles", getProfileName(profile))
+	}
+	return nil
 }
 
 // NewProfileTopology returns the ProfileTopology for a set of PTP profiles
@@ -554,6 +561,9 @@ func NewProfileTopology(nodeProfiles []ptpv1.PtpProfile) (ProfileTopology, error
 
 	for runID, profile := range nodeProfiles {
 		profileName := getProfileName(&profile)
+		if err := validateTBCNoHAProfiles(&profile); err != nil {
+			return ProfileTopology{}, err
+		}
 		result.profileRunID[profileName] = runID
 
 		if controller := profile.PtpSettings["controllingProfile"]; controller != "" {
@@ -588,6 +598,9 @@ func NewProfileTopology(nodeProfiles []ptpv1.PtpProfile) (ProfileTopology, error
 		}
 		if len(missing) > 0 {
 			return ProfileTopology{}, fmt.Errorf("HA Profile %s is missing the following referenced profiles: %s", result.haProfile, strings.Join(missing, ", "))
+		}
+		if profileClockType(&nodeProfiles[result.profileRunID[haMember]]) == TBC {
+			return ProfileTopology{}, fmt.Errorf("T-BC profile %q cannot be an HA member", haMember)
 		}
 	}
 

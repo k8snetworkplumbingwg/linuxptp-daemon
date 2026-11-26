@@ -88,6 +88,7 @@ type TBC struct {
 	// request, a Reset, or a replaced clock) is recognized as stale and dropped.
 	// It is only read and written on the serialized state loop.
 	announceToken         uint64
+	downstreamWrites      downstreamAnnounceWriter
 	ptpSource             *ptpSourceQualification
 	controlledPortsConfig string
 	isTTSC                bool
@@ -175,8 +176,13 @@ func (c *TBC) SourceQualification(cfg string) (event.SourceQualification, bool) 
 	if q == nil || cfg != c.cfgName {
 		return event.SourceQualification{}, false
 	}
-	return event.SourceQualification{SourceType: event.PTP4l, IFace: q.lastSelectedPort, Generation: q.generation, Revision: q.revision, Ready: q.ready(),
-		QualificationResult: utils.QualificationResult{Source: q.source(), Qualified: q.state.Qualified()}}, true
+	return event.SourceQualification{
+		SourceType: event.PTP4l, IFace: q.lastSelectedPort, Generation: q.generation,
+		Revision: q.revision, Ready: q.ready(),
+		QualificationResult: utils.QualificationResult{
+			Source: q.source(), Qualified: q.state.Qualified(),
+		},
+	}, true
 }
 
 // AddEvent processes an event and updates clock state.
@@ -460,18 +466,27 @@ func (c *TBC) Reset() {
 	c.ResetSource("")
 }
 
+// Close retires the downstream writer. Wait for an active PMC call so it cannot
+// finish after a replacement clock starts announcing to the same instance.
+func (c *TBC) Close() {
+	c.downstreamWrites.close()
+}
+
 // ResetSource invalidates the upstream publisher only for PTP/all-source resets.
 func (c *TBC) ResetSource(source event.EventSource) {
 	c.resetAggregate()
 	if q := c.ptpSource; q != nil && (source == "" || source == event.PTP4l) {
 		q.state.Reset()
-		q.lastSelectedPort, q.selection, q.generation = "", parserconstants.BMCAUnknown, sourceGeneration.Add(1)
+		q.lastSelectedPort = ""
+		q.selection = parserconstants.BMCAUnknown
+		q.generation = sourceGeneration.Add(1)
 		q.inputEnabled = false
 		q.revision++
 	}
 }
 
 func (c *TBC) resetAggregate() {
+	c.downstreamWrites.invalidate()
 	c.BaseClock.Reset()
 	c.leadingClockData = newLeadingClockParams()
 	c.syncState = SyncState{
@@ -497,6 +512,9 @@ func (c *TBC) updateDownstreamData(cfgName string) {
 		c.announceLocalData(cfgName)
 		return
 	}
+	// Supersede queued local settings immediately, even while recovery's
+	// upstream dataset fetch is still in flight.
+	c.downstreamWrites.invalidate()
 	// Advance the token so this request supersedes any downstream fetch already
 	// in flight: when an older fetch's result finally lands it will carry a stale
 	// token and be dropped before it touches the controlled ports. The token is
@@ -519,11 +537,6 @@ func (c *TBC) announceLocalData(_ string) {
 		StepsRemoved:        0,
 	}
 	glog.Infof("EGP %++v", egp)
-	go func() {
-		if err := c.pmcClient.SetExternalGMPropertiesNP(controlledPortsConfig, egp); err != nil {
-			glog.Errorf("Failed to set external GM properties: %v", err)
-		}
-	}()
 	gs := protocol.GrandmasterSettings{
 		ClockQuality: fbprotocol.ClockQuality{
 			ClockClass:              clockClass,
@@ -546,6 +559,7 @@ func (c *TBC) announceLocalData(_ string) {
 	case fbprotocol.ClockClass(165), fbprotocol.ClockClass(135):
 		if downstreamTimeProperties == nil {
 			glog.Info("Pending upstream clock data acquisition, skip updates")
+			c.downstreamWrites.enqueue(c.pmcClient, controlledPortsConfig, egp, nil)
 			return
 		}
 		gs.TimePropertiesDS.CurrentUtcOffsetValid = downstreamTimeProperties.CurrentUtcOffsetValid
@@ -562,11 +576,7 @@ func (c *TBC) announceLocalData(_ string) {
 
 	default:
 	}
-	go func() {
-		if err := c.pmcClient.SetGMSettings(controlledPortsConfig, gs); err != nil {
-			glog.Errorf("Failed to set GM settings: %v", err)
-		}
-	}()
+	c.downstreamWrites.enqueue(c.pmcClient, controlledPortsConfig, egp, &gs)
 }
 
 // downstreamAnnounceIWF fetches the upstream parent/time/current datasets via PMC and posts them back to the
@@ -626,15 +636,7 @@ func (c *TBC) handleDownstreamAnnounceIWF(msg *event.ParentTimeCurrentDS) {
 	controlledPortsConfig := c.controlledPortsConfig
 	glog.Infof("%++v", es)
 
-	// TODO: This is synchronous for now for simplicity, to be handled in a follow-up PR
-	//       Complications here revolve around out-of-order goroutine execution. May be best to use a channel (queue)
-	//       with a synchronous write and a dedicated goroutine to address any potential scheduling issues.
-	if err := c.pmcClient.SetExternalGMPropertiesNP(controlledPortsConfig, es); err != nil {
-		glog.Error(err)
-	}
-	if err := c.pmcClient.SetGMSettings(controlledPortsConfig, gs); err != nil {
-		glog.Error(err)
-	}
+	c.downstreamWrites.enqueue(c.pmcClient, controlledPortsConfig, es, &gs)
 
 	c.leadingClockData.downstreamParentDataSet = &upstreamData.ParentDataSet
 	c.leadingClockData.downstreamTimeProperties = &upstreamData.TimePropertiesDS

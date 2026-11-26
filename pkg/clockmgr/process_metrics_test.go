@@ -6,7 +6,9 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -108,6 +110,85 @@ func TestProcessClockStateMetrics(t *testing.T) {
 			require.False(t, gauge.Delete(otherLabels))
 			labels[processLabel] = "gnss"
 			requireGaugeValue(t, gauge, labels, event.ClockStateLocked)
+		})
+	}
+}
+
+func TestPTPSourceClockStateMetricsFollowSelectedPort(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		samples int
+		state   float64
+	}{
+		{"qualified", 2, event.ClockStateLocked},
+		{"qualifying", 1, event.ClockStateFreerun},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cm, gauge := newProcessMetricManager(t, event.TBC)
+			alias.SetAlias("tr0", "tr0-alias")
+			alias.SetAlias("tr1", "tr1-alias")
+			t.Cleanup(alias.ClearAliases)
+			generation, err := cm.ConfigureSourceQualification(testClockmgrPtp4lConfig, []string{"tr0", "tr1"}, utils.QualificationConfig{
+				QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 2, DisqualifiedSamples: 1})
+			require.NoError(t, err)
+			observe := func(iface string, observation event.PTPSourceObservation) event.SourceQualification {
+				observation.Generation = generation
+				observation.Reply = make(chan event.SourceQualification, 1)
+				cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: testClockmgrPtp4lConfig, IFace: iface, Data: &observation})
+				return <-observation.Reply
+			}
+			oldLabels := prometheus.Labels{processLabel: "ptp4l", nodeLabel: "testnode", ifaceLabel: "tr0-alias"}
+			newLabels := prometheus.Labels{processLabel: "ptp4l", nodeLabel: "testnode", ifaceLabel: "tr1-alias"}
+			// Reselection must retire only this source's clock-state series,
+			// not another process's state or the previous port's raw offset.
+			cm.ProcessEvent(event.Event{Source: event.DPLL, CfgName: testClockmgrPtp4lConfig, IFace: "tr0",
+				Data: &event.DPLLData{State: event.PTP_LOCKED}})
+			cm.offsetMetric = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_ptp_source_offset_ns"},
+				[]string{fromLabel, processLabel, nodeLabel, ifaceLabel})
+			cm.updateMetrics(event.Event{Source: event.PTP4l, CfgName: testClockmgrPtp4lConfig, IFace: "tr0", Data: &event.OffsetData{Offset: 17}})
+			observe("", event.PTPSourceObservation{Selection: parserconstants.BMCAExternal})
+			observe("tr0", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleSlave)})
+			for i := 0; i < tc.samples; i++ {
+				observe("tr0", event.PTPSourceObservation{ServoState: "s2", Offset: 10})
+			}
+			requireGaugeValue(t, gauge, oldLabels, tc.state)
+
+			// Ignored roles, stale publishers, and the apply gate must not move
+			// the metric away from the accepted selected port.
+			observe("tr1", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleMaster)})
+			observe("not-upstream", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleSlave)})
+			stale := &event.PTPSourceObservation{Generation: generation + 1, PortRole: utils.ToPtr(parserconstants.PortRoleSlave), Reply: make(chan event.SourceQualification, 1)}
+			cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: testClockmgrPtp4lConfig, IFace: "tr1", Data: stale})
+			require.Empty(t, (<-stale.Reply).SourceType)
+			cm.SetApplying(true)
+			observe("tr1", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleSlave)})
+			cm.SetApplying(false)
+			requireGaugeValue(t, gauge, oldLabels, tc.state)
+			require.False(t, gauge.Delete(newLabels))
+
+			beforeSource, ok := cm.SourceQualification(testClockmgrPtp4lConfig)
+			require.True(t, ok)
+			beforeState := cm.GetClock(testClockmgrPtp4lConfig).(*clock.TBC).GetSyncState()
+			result := observe("tr1", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleSlave)})
+			require.Empty(t, result.SourceType, "a label-only change must not trigger an input hardware action")
+			require.False(t, gauge.Delete(oldLabels), "the old port's state series must be removed without waiting for another sample")
+			require.NotContains(t, cm.metricCache, metricKey{cfgName: testClockmgrPtp4lConfig, process: "ptp4l", iface: "tr0-alias", dataType: "clock_state"})
+			requireGaugeValue(t, gauge, newLabels, tc.state)
+			afterSource, ok := cm.SourceQualification(testClockmgrPtp4lConfig)
+			require.True(t, ok)
+			beforeSource.IFace = "tr1"
+			require.Equal(t, beforeSource, afterSource, "port reselection must preserve qualification and its generation/revision")
+			require.Equal(t, beforeState, cm.GetClock(testClockmgrPtp4lConfig).(*clock.TBC).GetSyncState(), "a label-only change must not evaluate aggregate clock state")
+			observe("tr1", event.PTPSourceObservation{ServoState: "s2", Offset: 10})
+			requireGaugeValue(t, gauge, newLabels, event.ClockStateLocked)
+			observe("", event.PTPSourceObservation{Selection: parserconstants.BMCALocal})
+			requireGaugeValue(t, gauge, newLabels, event.ClockStateFreerun)
+			require.False(t, gauge.Delete(oldLabels), "later BMCA loss must not leave an old LOCKED series behind")
+			requireGaugeValue(t, gauge, prometheus.Labels{processLabel: "dpll", nodeLabel: "testnode", ifaceLabel: "tr0-alias"}, event.ClockStateLocked)
+			requireGaugeValue(t, cm.offsetMetric, prometheus.Labels{fromLabel: "ptp4l", processLabel: "ptp4l", nodeLabel: "testnode", ifaceLabel: "tr0-alias"}, 17)
+			observe("tr0", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleSlave)})
+			requireGaugeValue(t, gauge, oldLabels, event.ClockStateFreerun)
+			require.False(t, gauge.Delete(newLabels), "reselecting the original port must retire the backup port's series too")
 		})
 	}
 }

@@ -46,6 +46,21 @@ type stubProcess struct {
 	mu        sync.RWMutex
 }
 
+// reconcileBarrierProcess acknowledges a marker on the process-manager loop
+// only after the latest pushed snapshot has been reconciled, including starts.
+type reconcileBarrierProcess struct {
+	*stubProcess
+	manager *ProcessManager
+	done    chan struct{}
+}
+
+func (p *reconcileBarrierProcess) Start(ctx context.Context) error {
+	p.manager.reconcileWaiting(ctx)
+	err := p.stubProcess.Start(ctx)
+	close(p.done)
+	return err
+}
+
 func (s *stubProcess) Name() string {
 	return s.name
 }
@@ -281,13 +296,26 @@ func (c *ConditionsTester) SendSourceSamples(cfgName, port string, offset float6
 		result, exists = c.cm.SourceQualification(cfgName)
 		require.True(c.t, exists)
 	}
-	c.sendEvent(event.Event{Source: event.PTP4l, CfgName: cfgName, IFace: port, Data: &event.PTPSourceObservation{
-		Generation: result.Generation, PortRole: utils.ToPtr(parserconstants.PortRoleSlave)}})
-	c.sendEvent(event.Event{Source: event.PTP4l, CfgName: cfgName, Data: &event.PTPSourceObservation{
-		Generation: result.Generation, Selection: parserconstants.BMCAExternal}})
+	observe := func(iface string, observation event.PTPSourceObservation) {
+		c.t.Helper()
+		observation.Generation = result.Generation
+		observation.Reply = make(chan event.SourceQualification, 1)
+		select {
+		case c.pm.eventsIn <- event.Event{Source: event.PTP4l, CfgName: cfgName, IFace: iface, Data: &observation}:
+		case <-time.After(time.Second):
+			c.t.Fatal("source observation was not delivered")
+		}
+		// Receipt alone is not evaluation: wait for the clock's verdict.
+		select {
+		case <-observation.Reply:
+		case <-time.After(time.Second):
+			c.t.Fatal("source observation was not evaluated by the clock")
+		}
+	}
+	observe(port, event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleSlave)})
+	observe("", event.PTPSourceObservation{Selection: parserconstants.BMCAExternal})
 	for i := 0; i < count; i++ {
-		c.sendEvent(event.Event{Source: event.PTP4l, CfgName: cfgName, IFace: port, Data: &event.PTPSourceObservation{
-			Generation: result.Generation, ServoState: "s2", Offset: offset}})
+		observe(port, event.PTPSourceObservation{ServoState: "s2", Offset: offset})
 	}
 }
 
@@ -400,13 +428,17 @@ func TestApplyNodePtpProfileStartupConditions(t *testing.T) {
 		require.NotNil(t, ts2phc)
 		require.NotNil(t, phc2sys)
 
-		ct.StartProcesses()
-		ct.StartCM()
-		assert.Zero(t, ts2phc.Starts(), "T-GM ts2phc must wait for its constructed process-up condition")
 		gpsd := findStubProcess(processes, event.GpsdProcessName)
 		gpspipe := findStubProcess(processes, event.GpsPipeProcessName)
 		require.NotNil(t, gpsd)
 		require.NotNil(t, gpspipe)
+		// Stub starts immediately become Running, so reconciliation can satisfy
+		// this chain before StartProcesses returns. Check its dependencies first
+		// rather than racing a valid state-based startup with a zero-start assertion.
+		require.Equal(t, process.OnProcessUp{Source: event.GPSD, ConfigName: gpsd.ConfigName()}, gpspipe.Conditions()[process.ActionStart])
+		require.Equal(t, process.OnProcessUp{Source: event.GPSPIPE, ConfigName: gpspipe.ConfigName()}, ts2phc.Conditions()[process.ActionStart])
+		ct.StartProcesses()
+		ct.StartCM()
 		ct.SendProcessStatus(event.GPSD, gpsd.ConfigName(), PtpProcessUp)
 		ct.SendProcessStatus(event.GPSPIPE, gpspipe.ConfigName(), PtpProcessUp)
 		assert.Eventually(t, func() bool { return ts2phc.State() == process.Running }, 2*time.Second, 10*time.Millisecond)
@@ -1044,9 +1076,7 @@ func TestPhc2sysOffsetStartCondition_HA(t *testing.T) {
 	haProfile := ptpv1.PtpProfile{
 		Phc2sysConf: utils.ToPtr(" "),
 		Phc2sysOpts: utils.ToPtr(" "),
-		PtpSettings: map[string]string{PTP_HA_IDENTIFIER: master1 + "," + master2,
-			clockTypeSetting: TBC,
-		}}
+		PtpSettings: map[string]string{PTP_HA_IDENTIFIER: master1 + "," + master2}}
 
 	topology, err := NewProfileTopology([]ptpv1.PtpProfile{profile1, profile2, haProfile})
 	require.NoError(t, err)
@@ -1055,7 +1085,7 @@ func TestPhc2sysOffsetStartCondition_HA(t *testing.T) {
 	ct.AddProcess(&ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.0.config"}, nodeProfile: &profile1})
 	ct.AddProcess(&ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName, configName: "ptp4l.1.config"}, nodeProfile: &profile2})
 
-	c := phc2sysOffsetStartCondition(ct.Env(5, &haProfile, event.TBC, &topology))
+	c := phc2sysOffsetStartCondition(ct.Env(5, &haProfile, event.SysClock, &topology))
 	anyCond, ok := c.(process.Any)
 	if !assert.True(t, ok, "HA should wrap per-config conditions in Any") {
 		return
@@ -1085,6 +1115,15 @@ func TestTBC_Ts2phcUnlocksThroughProcessManager(t *testing.T) {
 	realTs2phc, err := NewTs2phcProcess(ct.Env(0, profile, event.TBC, &topology))
 	require.NoError(t, err)
 	ts2phcStub := ct.AddProcess(realTs2phc)
+	const reconcileEvent = "test-reconcile-complete"
+	barrier := &reconcileBarrierProcess{
+		stubProcess: &stubProcess{name: "reconcile-barrier", conds: map[process.Action]process.Condition{
+			process.ActionStart: process.OnPluginEvent{EventName: reconcileEvent},
+		}},
+		manager: ct.pm,
+		done:    make(chan struct{}),
+	}
+	ct.pm.process = append(ct.pm.process, barrier)
 
 	ct.StartProcesses()
 	assert.Equal(t, 0, ts2phcStub.Starts(), "T-BC ts2phc must not start immediately")
@@ -1101,6 +1140,14 @@ func TestTBC_Ts2phcUnlocksThroughProcessManager(t *testing.T) {
 
 	// Omitted source settings still require five fresh qualifying samples.
 	ct.SendSourceSamples(ptp4lConfig, testETH0, 10, 4)
+	// Source replies cover clock evaluation. The marker additionally waits for
+	// the process manager to complete the startup decision for that snapshot.
+	ct.SendPluginEvent("test", reconcileEvent)
+	select {
+	case <-barrier.done:
+	case <-time.After(time.Second):
+		t.Fatal("process manager did not acknowledge source-readiness reconciliation")
+	}
 	assert.Equal(t, 0, ts2phcStub.Starts(), "must wait for the default sample count")
 	ct.SendSourceSamples(ptp4lConfig, testETH0, 10, 1)
 	assert.Eventually(t, func() bool { return ts2phcStub.Starts() == 1 }, 2*time.Second, 10*time.Millisecond,

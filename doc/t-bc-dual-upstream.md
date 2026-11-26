@@ -64,7 +64,8 @@ select a legacy mode. In offset mode, the default is five consecutive samples
 in each direction. Missing source thresholds use `inSyncConditionThreshold`,
 then `maxOffsetThreshold`, then the daemon's default (100 ns, or 1000 ns with
 NTP failover). `ptpSourceUseS3: false` selects offset mode. Controlled TT-only
-profiles and HA system-clock profiles have no independent TR qualification policy.
+profiles have no independent TR qualification policy. T-BC profiles cannot
+configure HA or be HA members.
 
 Qualification belongs to the TR instance's timing stream, not to an individual
 upstream port. Port-role changes update interface labels and role metrics only;
@@ -80,8 +81,10 @@ The leading TR instance's BMCA result determines source availability:
 
 The PTP input is enabled only when an external reference is selected and the
 stream is qualified. HardwareConfig conditions and plugin holdover hooks share
-this single decision/application path. Failed actions are retried; hardware
-failure does not hide source loss, and failed enabling cannot release recovery.
+this single decision/application path. The initial state and each readiness
+change are applied once; failed actions are logged, not retried, and can leave
+hardware partially configured. Source loss remains visible, and an enable action
+that reports failure cannot release recovery.
 
 After DPLL locks and all offsets in the system are qualified, backup state is reached.
 
@@ -92,6 +95,7 @@ After DPLL locks and all offsets in the system are qualified, backup state is re
 Recovery starts when the original TR port regains adjacency to its reference.
 A-BMCA may reselect it without a holdover transition. Holdover is entered only
 when source readiness is actually lost, not simply because port roles change.
+
 ---
 
 ## Configuration

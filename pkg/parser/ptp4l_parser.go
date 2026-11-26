@@ -13,16 +13,17 @@ import (
 )
 
 var (
-
-	// ptp4l[4268779.809]: [ptp4l.3.config] port 3: UNCALIBRATED to MASTER on RS_MASTER
-	// ptp4l[4268779.809]: [ptp4l.4.config] port 4: FAULT_DETECTED
-	// ptp4l[412707.219]: [ptp4l.0.config:5] port 11 (ens8f2): LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES
+	// ptp4l[1115798.529]: [ptp4l.1.config:5] selected local clock b4e9b8.fffe.5ec390 as best master
+	// ptp4l[1.1]: [ptp4l.1.config:5] selected best master clock arbitrary-id
 	// The local clock identity is opaque; consumers select the instance by config_name.
 	ptp4lBMCARegex = regexp.MustCompile(
 		`^ptp4l\[(?P<timestamp>\d+\.?\d*)\]:` +
 			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +
 			`\s+selected (?:(?P<local_clock>local clock .+ as best master)|best master clock .+)$`,
 	)
+	// ptp4l[4268779.809]: [ptp4l.3.config] port 3: UNCALIBRATED to MASTER on RS_MASTER
+	// ptp4l[4268779.809]: [ptp4l.4.config] port 4: FAULT_DETECTED
+	// ptp4l[412707.219]: [ptp4l.0.config:5] port 11 (ens8f2): LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES
 	ptp4lEventRegex = regexp.MustCompile(
 		`^ptp4l\[(?P<timestamp>\d+\.?\d*)\]:` +
 			`\s+\[(?P<config_name>.*\.\d+\.config):?(?P<serverity>\d*)\]` +

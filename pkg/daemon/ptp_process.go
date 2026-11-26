@@ -135,6 +135,17 @@ func (p *ptpProcess) sendPtp4lOffsetEvent() {
 	p.tBCAttributes.lastOffsetEventSec = nowSec
 
 	avgOffset := int64(p.tBCAttributes.offsetEventWindow.Mean())
+	state := event.PTP_NOTSET
+	if q := p.sourceQualification; q != nil {
+		q.mu.Lock()
+		if q.desiredKnown {
+			state = event.PTP_FREERUN
+			if q.desired.Ready && q.appliedKnown && q.applied {
+				state = event.PTP_LOCKED
+			}
+		}
+		q.mu.Unlock()
+	}
 	glog.Infof("PTP4l offset event: %d", avgOffset)
 	select {
 	case p.eventCh <- event.Event{
@@ -144,7 +155,7 @@ func (p *ptpProcess) sendPtp4lOffsetEvent() {
 		ClockType: p.clockType,
 		Time:      time.Now().UnixMilli(),
 		Data: &event.OffsetData{
-			State:  p.tBCAttributes.lastReportedState,
+			State:  state,
 			Offset: avgOffset,
 		},
 	}:
@@ -662,7 +673,6 @@ type tBCProcessAttributes struct {
 	trPortsConfigFile string
 	trIfaceNames      []string
 	activePort        string
-	lastReportedState event.PTPState
 	// offsetEventWindow averages ptp4l offsets and sends them to the T-BC state machine once per second
 	offsetEventWindow  *utils.Window
 	lastOffsetEventSec int64
@@ -884,10 +894,7 @@ func NewPtp4lProcess(env ptpProcessEnv) (*ptpProcess, error) {
 		}
 	}
 	p.cmd = buildCmd(buildPtpCmdLine(event.Ptp4lProcessName, p.configPath, opts, env.nodeProfile))
-	p.tBCAttributes = tBCProcessAttributes{
-		trPortsConfigFile: configFile,
-		lastReportedState: event.PTP_NOTSET,
-	}
+	p.tBCAttributes = tBCProcessAttributes{trPortsConfigFile: configFile}
 	if len(env.upstreamPorts) > 0 && env.clockType == event.TBC {
 		p.tBCAttributes.trIfaceNames = env.upstreamPorts
 		offsetEventWindowSize := defaultPtp4lOffsetEventWindowSize
@@ -1125,11 +1132,6 @@ func ts2phcConditionsForTBC(p *ptpProcess, env ptpProcessEnv) map[process.Action
 	// p.haProfile is already set at this point from ApplyHaProfiles
 	if shouldWaitForPhc2sys(env.nodeProfile, p.haProfile) {
 		cfgName := fmt.Sprintf("ptp4l.%d.config", env.runID)
-		if len(listHAMemberProfiles(env.nodeProfile)) > 0 {
-			// Match this profile's phc2sys message tag, not an unrelated HA group.
-			cfgName = fmt.Sprintf("phc2sys.%d.config", env.runID)
-		}
-
 		startConditions = append(startConditions, &process.OnProcessState{
 			ConfigName: cfgName,
 			Source:     string(event.PHC2SYS),
