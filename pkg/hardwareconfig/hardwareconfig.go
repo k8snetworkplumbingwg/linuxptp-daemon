@@ -1911,11 +1911,14 @@ func (hcm *HardwareConfigManager) ApplyConditionForProfile(nodeProfile *ptpv1.Pt
 
 	// Find enriched hardware configs for this profile
 	var relevantConfigs []enrichedHardwareConfig
+	// HardwareConfig updates/status writes and source actions share this cache.
+	hcm.mu.RLock()
 	for _, hwConfig := range hcm.hardwareConfigs {
 		if ProfileNamesMatch(*nodeProfile.Name, hwConfig.Spec.RelatedPtpProfileName) {
 			relevantConfigs = append(relevantConfigs, hwConfig)
 		}
 	}
+	hcm.mu.RUnlock()
 
 	if len(relevantConfigs) == 0 {
 		glog.Infof("No hardware configurations found for PTP profile %s condition %s", *nodeProfile.Name, conditionType)
@@ -2088,6 +2091,7 @@ func (hcm *HardwareConfigManager) GetPTPStateDetector() *PTPStateDetector {
 }
 
 func (hcm *HardwareConfigManager) setHardwareConfigs(hwConfigs []enrichedHardwareConfig) {
+	// HardwareConfig updates and source-action snapshots share this cache.
 	hcm.mu.Lock()
 	defer hcm.mu.Unlock()
 	hcm.hardwareConfigs = hwConfigs

@@ -141,6 +141,14 @@ func TestSourceLostOnListening(t *testing.T) {
 	}
 }
 
+func TestProcessPtp4lEventIgnoresOutOfRangePort(t *testing.T) {
+	// A port number beyond the configured interfaces must not index the slice.
+	p := &ptpProcess{ExecProcess: ExecProcess{name: event.Ptp4lProcessName}, ifaces: config.IFaces{{Name: "tr0"}}}
+	require.NotPanics(t, func() {
+		processPtp4lEvent(p, &parser.PTPEvent{PortID: 2, Role: constants.PortRoleSlave})
+	})
+}
+
 func TestProcessParsedMetricsResolvesMasterIfaceAndDeletesPlaceholder(t *testing.T) {
 	InitializeOffsetMaps()
 	previousNodeName := NodeName

@@ -58,6 +58,14 @@ states ((MASTER - optional) → LISTENING → UNCALIBRATED → SLAVE) before it 
 
 
 ### Qualification
+Source qualification is always active on the T-BC TR profile. The optional
+`ptpClockThreshold.ptpSource*` settings tune its policy; omitting them does not
+select a legacy mode. In offset mode, the default is five consecutive samples
+in each direction. Missing source thresholds use `inSyncConditionThreshold`,
+then `maxOffsetThreshold`, then the daemon's default (100 ns, or 1000 ns with
+NTP failover). `ptpSourceUseS3: false` selects offset mode. Controlled TT-only
+profiles and HA system-clock profiles have no independent TR qualification policy.
+
 When the new TR port is qualified, DPLL input is enabled.
 After DPLL locks and all offsets in the system are qualified, backup state is reached.
 

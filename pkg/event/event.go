@@ -186,16 +186,14 @@ func (d *OffsetData) String() string {
 }
 
 // PTPSourceObservation is a fresh upstream PTP fact, before offset averaging.
-// Event identifies the local contributor, config and physical interface. Reply
-// must be buffered (capacity one); it lets the scanner apply hardware changes
-// after clock evaluation, without running hardware I/O under the manager lock.
+// Event identifies the local contributor, config and physical interface.
 type PTPSourceObservation struct {
 	Generation uint64
 	PortRole   *parserconstants.PTPPortRole
 	Offset     float64
 	ServoState string
 	SourceLost bool
-	Reply      chan SourceQualification
+	ClockID    string
 }
 
 func (*PTPSourceObservation) eventData() {}

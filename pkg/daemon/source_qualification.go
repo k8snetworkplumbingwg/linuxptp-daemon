@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/hardwareconfig"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
@@ -19,18 +20,18 @@ import (
 )
 
 type sourceQualificationPolicy struct {
-	enabled bool
-	config  utils.QualificationConfig
+	applicable bool // Only the T-BC TR profile owns an upstream qualification policy.
+	config     utils.QualificationConfig
 }
 
 type sourceQualificationRuntime struct {
-	mu           sync.Mutex // teardown waits for an in-flight hardware action
-	closed       bool
-	generation   uint64
-	ctx          context.Context
-	apply        func(bool) error
-	applied      bool
-	appliedKnown bool
+	mu         sync.Mutex
+	closed     bool
+	generation uint64
+	clockID    string
+	ctx        context.Context
+	apply      func(bool) error
+	actions    *clock.SourceInputActions
 }
 
 func (p *ptpProcess) configureSourceQualification(policy sourceQualificationPolicy) error {
@@ -48,8 +49,17 @@ func (p *ptpProcess) configureSourceQualification(policy sourceQualificationPoli
 	if err != nil {
 		return err
 	}
-	p.sourceQualification = &sourceQualificationRuntime{
+	clockID := ""
+	if p.nodeProfile != nil {
+		var clockIDErr error
+		clockID, clockIDErr = p.getPTPClockID()
+		if clockIDErr != nil {
+			glog.Error(clockIDErr)
+		}
+	}
+	qlf := &sourceQualificationRuntime{
 		generation: generation,
+		clockID:    clockID,
 		apply: func(qualified bool) error {
 			condition := hardwareconfig.ConditionTypeLost
 			if qualified {
@@ -62,10 +72,11 @@ func (p *ptpProcess) configureSourceQualification(policy sourceQualificationPoli
 			if qualified {
 				hook = "tbc-ho-exit"
 			}
-			// The legacy manager dispatcher discards hook errors. Source pin
-			// application must retain them so failed actions are retried rather
-			// than recorded as successfully applied. Still invoke every plugin.
+			// The legacy dispatcher discards errors; collect them without skipping plugins.
 			var failures []error
+			if p.pm == nil {
+				return nil
+			}
 			for name, handler := range p.pm.Plugins {
 				if handler.AfterRunPTPCommand != nil {
 					if hookErr := handler.AfterRunPTPCommand(p.pm.Data[name], p.nodeProfile, hook); hookErr != nil {
@@ -76,20 +87,43 @@ func (p *ptpProcess) configureSourceQualification(policy sourceQualificationPoli
 			return errors.Join(failures...)
 		},
 	}
+	p.sourceQualification = qlf
+	actions, err := p.dn.processManager.clockMgr.SetSourceInputAction(p.configName, generation, getProfileName(p.nodeProfile), func(qualified bool) error {
+		// The action worker and process startup/teardown share the runtime state.
+		qlf.mu.Lock()
+		apply := qlf.apply
+		ctx := qlf.ctx
+		closed := qlf.closed
+		qlf.mu.Unlock()
+		if apply == nil || (qualified && (closed || (ctx != nil && ctx.Err() != nil))) {
+			return nil
+		}
+		return apply(qualified)
+	})
+	if err != nil {
+		qlf.close()
+		p.sourceQualification = nil
+		return err
+	}
+	// Process setup and teardown share the action-worker handle.
+	qlf.mu.Lock()
+	qlf.actions = actions
+	qlf.mu.Unlock()
+	th := getPTPThreshold(p.nodeProfile)
 	glog.Infof("Source qualification profile=%s config=%s S3=%t thresholds=%d/%d samples=%d/%d thresholdFallbacks=%t/%t",
 		getProfileName(p.nodeProfile), p.configName, policy.config.UseS3,
 		policy.config.QualifiedThreshold, policy.config.DisqualifiedThreshold,
 		policy.config.QualifiedSamples, policy.config.DisqualifiedSamples,
-		p.nodeProfile.PtpClockThreshold.PtpSourceQualifiedThreshold == nil,
-		p.nodeProfile.PtpClockThreshold.PtpSourceDisqualifiedThreshold == nil)
+		th.PtpSourceQualifiedThreshold == nil,
+		th.PtpSourceDisqualifiedThreshold == nil)
 	return nil
 }
 
-// forwardSourceData forwards fresh parser facts before metrics mutate
-// them. The clock evaluates readiness; the scanner retains hardware application.
+// forwardSourceData forwards fresh parser facts before metrics mutate them. The
+// clock evaluates readiness and controls input actions.
 func (p *ptpProcess) forwardSourceData(metrics *parser.Metrics, portEvent *parser.PTPEvent) {
-	q := p.sourceQualification
-	if q == nil || p.name != event.Ptp4lProcessName {
+	qlf := p.sourceQualification
+	if qlf == nil || p.name != event.Ptp4lProcessName {
 		return
 	}
 	if portEvent != nil && portEvent.Role != parserconstants.PortRoleUnknown {
@@ -107,82 +141,23 @@ func (p *ptpProcess) forwardSourceData(metrics *parser.Metrics, portEvent *parse
 }
 
 func (p *ptpProcess) observeSource(port string, observation *event.PTPSourceObservation) {
-	q := p.sourceQualification
-	q.mu.Lock()
-	observation.Generation = q.generation
-	ctx := q.ctx
-	closed := q.closed
-	q.mu.Unlock()
-	if closed {
+	qlf := p.sourceQualification
+	// Scanner/process-exit forwarding and teardown share the publisher state.
+	qlf.mu.Lock()
+	if qlf.closed || (qlf.ctx != nil && qlf.ctx.Err() != nil) {
+		qlf.mu.Unlock()
 		return
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	observation.Reply = make(chan event.SourceQualification, 1)
+	observation.Generation = qlf.generation
+	observation.ClockID = qlf.clockID
 	ev := event.Event{Source: event.PTP4l, CfgName: p.configName, IFace: port, ClockType: p.clockType, Time: time.Now().UnixMilli(), Data: observation}
-	if observation.PortRole != nil || observation.SourceLost {
-		// These transitions may not repeat. Wait for delivery, but allow daemon
-		// shutdown to release a sender whose consumer has stopped.
-		select {
-		case p.eventCh <- ev:
-		case <-ctx.Done():
-			return
-		}
-	} else {
-		select {
-		case p.eventCh <- ev:
-		case <-ctx.Done():
-			return
-		default:
-			glog.Errorf("source qualification event channel full for %s[%s]; dropping observation", p.name, p.configName)
-			return
-		}
-	}
 	select {
-	case result := <-observation.Reply:
-		if result.SourceType == event.PTP4l {
-			p.applySourceQualification(result)
-		}
-	case <-ctx.Done():
-	}
-}
-
-func (p *ptpProcess) applySourceQualification(result event.SourceQualification) {
-	q := p.sourceQualification
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.closed || result.Generation != q.generation {
+	case p.eventCh <- ev:
+		qlf.mu.Unlock()
 		return
-	}
-	p.tBCAttributes.activePort = result.IFace // label existing state/averaged-offset events
-	previousState := p.tBCAttributes.lastReportedState
-	if result.Changed {
-		glog.Infof("PTPSourceQualified profile=%s config=%s source=%s port=%s qualified=%t reason=%q samples=%d",
-			getProfileName(p.nodeProfile), p.configName, result.SourceType, result.IFace, result.Qualified, result.Reason, result.Samples)
-	}
-	if result.Qualified {
-		p.tBCAttributes.lastReportedState = event.PTP_LOCKED
-	} else {
-		p.tBCAttributes.lastReportedState = event.PTP_FREERUN
-	}
-	// Source loss is a fact even if a pin update fails. Report it independently
-	// of successful hardware application, without fabricating aggregate lock.
-	if previousState != p.tBCAttributes.lastReportedState {
-		p.sendPtp4lStateEvent()
-	}
-	if q.appliedKnown && q.applied == result.Qualified {
-		return
-	}
-	if err := q.apply(result.Qualified); err != nil {
-		q.appliedKnown = false // failed actions may have partially programmed pins
-		glog.Errorf("PTPSourceQualified hardware apply profile=%s qualified=%t: %v", getProfileName(p.nodeProfile), result.Qualified, err)
-		return
-	}
-	q.applied, q.appliedKnown = result.Qualified, true
-	p.tBCAttributes.lastAppliedState = event.PTP_HOLDOVER
-	if result.Qualified {
-		p.tBCAttributes.lastAppliedState = event.PTP_LOCKED
+	default:
+		qlf.mu.Unlock()
+		glog.Errorf("SOURCE EVENT CHANNEL FULL for %s[%s]: DROPPING event %s", p.name, p.configName, observation)
 	}
 }
 
@@ -193,10 +168,16 @@ func (p *ptpProcess) invalidateSourceQualification() {
 	p.observeSource("", &event.PTPSourceObservation{SourceLost: true})
 }
 
-func (q *sourceQualificationRuntime) close() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.closed = true
+func (qlf *sourceQualificationRuntime) close() {
+	// Teardown, the scanner, and the action worker share the runtime state.
+	qlf.mu.Lock()
+	qlf.closed = true
+	actions := qlf.actions
+	generation := qlf.generation
+	qlf.mu.Unlock()
+	if actions != nil {
+		actions.CloseGeneration(generation)
+	}
 }
 
 func sourceQualifiedStartCondition(env ptpProcessEnv) process.Condition {
@@ -212,17 +193,15 @@ func sourceQualifiedStartCondition(env ptpProcessEnv) process.Condition {
 	return process.Any{Conditions: conditions}
 }
 
-// resolveSourceQualificationPolicy preserves the explicit opt-in boundary. Resolve
-// the migration fallback once, never from the aggregate InSync state at runtime.
+// resolveSourceQualificationPolicy always resolves a policy for a T-BC TR profile.
+// Optional source settings override defaults; their presence never enables or
+// disables qualification. TT-only and HA system-clock profiles have no TR input.
+// Resolve threshold fallbacks once, independently of aggregate InSync at runtime.
 func resolveSourceQualificationPolicy(profile *ptpv1.PtpProfile) (sourceQualificationPolicy, error) {
-	if profileClockType(profile) != TBC || profile.PtpClockThreshold == nil {
+	if profileClockType(profile) != TBC || profile.PtpSettings["controllingProfile"] != "" || len(listHAMemberProfiles(profile)) > 0 {
 		return sourceQualificationPolicy{}, nil
 	}
-	th := profile.PtpClockThreshold
-	if th.PtpSourceQualifiedThreshold == nil && th.PtpSourceDisqualifiedThreshold == nil &&
-		th.PtpSourceQualifiedSamples == nil && th.PtpSourceDisqualifiedSamples == nil && !th.PtpSourceUseS3 {
-		return sourceQualificationPolicy{}, nil
-	}
+	th := getPTPThreshold(profile)
 	fallback := th.MaxOffsetThreshold
 	if th.PtpSourceQualifiedThreshold == nil || th.PtpSourceDisqualifiedThreshold == nil {
 		if fallback <= 0 {
@@ -266,5 +245,5 @@ func resolveSourceQualificationPolicy(profile *ptpv1.PtpProfile) (sourceQualific
 	if err := cfg.Validate(); err != nil {
 		return sourceQualificationPolicy{}, fmt.Errorf("invalid source qualification policy: %w", err)
 	}
-	return sourceQualificationPolicy{enabled: true, config: cfg}, nil
+	return sourceQualificationPolicy{applicable: true, config: cfg}, nil
 }

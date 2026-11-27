@@ -406,10 +406,9 @@ func Test_applyProfile_TBC(t *testing.T) {
 			actualProcesses = append(actualProcesses, p.Name())
 			if p.Name() == event.Phc2SysProcessName {
 				cond := process.GetCondition(p, process.ActionStart, process.Immediate{})
-				offsetCond, ok := cond.(process.OnStateAndOffsetForCount)
-				assert.True(t, ok, "T-BC phc2sys must wait on ptp4l lock/offset, got %s", cond)
-				assert.Equal(t, event.PTP4l, offsetCond.Source)
-				assert.True(t, strings.HasPrefix(offsetCond.ConfigName, "ptp4l."), offsetCond.ConfigName)
+				sourceCond, ok := cond.(process.OnSourceQualified)
+				assert.True(t, ok, "T-BC phc2sys must wait on source qualification, got %s", cond)
+				assert.True(t, strings.HasPrefix(sourceCond.ConfigName, "ptp4l."), sourceCond.ConfigName)
 			}
 			if p.Name() == event.Ts2PhcProcessName {
 				cond := process.GetCondition(p, process.ActionStart, process.Immediate{})
