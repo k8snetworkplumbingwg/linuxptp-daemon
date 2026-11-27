@@ -111,7 +111,8 @@ func processParsedMetrics(process *ptpProcess, ptpMetrics *parser.Metrics) {
 	// Update clock state metrics if available. BC/OC clock_state is owned by the
 	// BCClock state machine (emitted from clockmgr as process="ptp4l"), so the
 	// log parser must not also emit it here.
-	if masterIfaceResolved && ptpMetrics.ClockState != "" && process.clockType != event.BC && process.clockType != event.OC {
+	if masterIfaceResolved && ptpMetrics.ClockState != "" && process.clockType != event.BC && process.clockType != event.OC &&
+		process.sourceQualification == nil {
 		updateClockStateMetrics(process.name, iface, string(ptpMetrics.ClockState), ptpMetrics.ServoState)
 	}
 
@@ -238,7 +239,7 @@ func processParsedEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 
 func processPtp4lEvent(process *ptpProcess, ptpEvent *parser.PTPEvent) {
 	// Update interface role metrics
-	if ptpEvent.PortID > 0 && len(process.ifaces) >= ptpEvent.PortID-1 {
+	if ptpEvent.PortID > 0 && ptpEvent.PortID <= len(process.ifaces) {
 		configName := strings.Replace(strings.Replace(process.messageTag, "]", "", 1), "[", "", 1)
 		configName = strings.Split(configName, MessageTagSuffixSeperator)[0]
 

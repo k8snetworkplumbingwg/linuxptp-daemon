@@ -23,15 +23,17 @@ import (
 )
 
 const (
-	configLabel  = "config"
-	fromLabel    = "from"
-	ifaceLabel   = "iface"
-	nodeLabel    = "node"
-	processLabel = "process"
+	configLabel                  = "config"
+	fromLabel                    = "from"
+	ifaceLabel                   = "iface"
+	nodeLabel                    = "node"
+	processLabel                 = "process"
+	maxPendingSourceObservations = 100
 )
 
 // ClockManager ... event handler to process events
 type ClockManager struct {
+	clockLifecycleMu  sync.Mutex
 	clockManagementMu sync.Mutex
 	nodeName          string
 	events            chan event.Event
@@ -45,9 +47,10 @@ type ClockManager struct {
 	osClock           clock.OsClock
 	ipcCache          *ipc.Cache
 	// applyingProfiles is set while applyNodePTPProfiles is tearing down /
-	// restarting processes. When true, T-BC/T-TSC events are skipped so
-	// teardown races cannot emit spurious state transitions.
-	applyingProfiles atomic.Bool
+	// restarting processes. Ordinary T-BC events are skipped; source role and
+	// loss transitions are retained for replay after apply.
+	applyingProfiles          atomic.Bool
+	pendingSourceObservations []event.Event // guarded by clockManagementMu
 	// syncStatusCh is signalled (non-blocking) whenever a clock state transitions.
 	syncStatusCh chan struct{}
 	// statsUpdates holds the latest complete snapshot for ProcessManager. All
@@ -61,6 +64,7 @@ type ClockManager struct {
 // cfg's ptp4l instance, not aggregate lock or the remote GM's time reference.
 // Configure before process startup; runtime observations use the event channel.
 func (m *ClockManager) ConfigureSourceQualification(cfg string, ports []string, policy utils.QualificationConfig) (uint64, error) {
+	// Process setup and the clock event loop share source qualification state.
 	m.clockManagementMu.Lock()
 	defer m.clockManagementMu.Unlock()
 	clk, ok := m.clocks[cfg].(*clock.TBC)
@@ -72,9 +76,26 @@ func (m *ClockManager) ConfigureSourceQualification(cfg string, ports []string, 
 	return generation, err
 }
 
+// SetSourceInputAction connects the current source to its hardware action.
+func (m *ClockManager) SetSourceInputAction(cfg string, generation uint64, profile string, apply func(bool) error) (*clock.SourceInputActions, error) {
+	// Process setup and the clock event loop share source qualification state.
+	m.clockManagementMu.Lock()
+	defer m.clockManagementMu.Unlock()
+	clk, ok := m.clocks[cfg].(*clock.TBC)
+	if !ok {
+		return nil, fmt.Errorf("source qualification requires a T-BC clock for %s", cfg)
+	}
+	source, exists := clk.SourceQualification(cfg)
+	if !exists || source.Generation != generation {
+		return nil, fmt.Errorf("source qualification changed for %s", cfg)
+	}
+	return clk.SetSourceInputAction(profile, apply)
+}
+
 // SourceQualification snapshots the upstream identity/epoch for a new process
 // run. Startup conditions continue to consume the retained stats channel.
 func (m *ClockManager) SourceQualification(cfg string) (event.SourceQualification, bool) {
+	// Process startup and the clock event loop share source qualification state.
 	m.clockManagementMu.Lock()
 	defer m.clockManagementMu.Unlock()
 	if clk, ok := m.clocks[cfg].(*clock.TBC); ok {
@@ -108,9 +129,20 @@ func (m *ClockManager) SetHAMetric(g *prometheus.GaugeVec) {
 	m.haMetric = g
 }
 
-// SetApplying marks whether a PTP profile apply is in progress.
+// SetApplying replays retained source transitions before newer events can pass.
 func (m *ClockManager) SetApplying(v bool) {
+	// Profile apply and the clock event loop share retained source transitions.
+	m.clockManagementMu.Lock()
+	defer m.clockManagementMu.Unlock()
 	m.applyingProfiles.Store(v)
+	if !v {
+		pending := m.pendingSourceObservations
+		m.pendingSourceObservations = nil
+		for _, ev := range pending {
+			m.processSourceObservationLocked(ev, ev.Data.(*event.PTPSourceObservation))
+		}
+	}
+	m.publishStats()
 }
 
 // IsApplying reports whether a PTP profile apply is in progress.
@@ -195,8 +227,24 @@ func (m *ClockManager) ConfigureOSClockFilter(cfg clock.OSClockFilterConfig) {
 // AddClock takes ownership of a given Clock
 // pmcClient may be nil for clock types that do not use PMC (e.g. BC, OC).
 func (m *ClockManager) AddClock(clk clock.Clock) error {
+	// Clock replacement and removal compete to retire input workers.
+	m.clockLifecycleMu.Lock()
+	defer m.clockLifecycleMu.Unlock()
 	clk.SetIPC(m.sendIPC)
 	clk.SetEventLoopbackFunc(m.sendEvent)
+	// Clock replacement and the event loop share the registered clock map.
+	m.clockManagementMu.Lock()
+	var oldInputs []*clock.TBC
+	for _, cfg := range clk.ConfigNames() {
+		if prev, ok := m.clocks[cfg].(*clock.TBC); ok && prev != clk {
+			oldInputs = append(oldInputs, prev)
+		}
+	}
+	m.clockManagementMu.Unlock()
+	for _, prev := range oldInputs {
+		prev.CloseSourceInputActions()
+	}
+	// Clock replacement and the event loop share the registered clock map.
 	m.clockManagementMu.Lock()
 	defer m.clockManagementMu.Unlock()
 	clk.SetOsClock(&m.osClock)
@@ -265,6 +313,22 @@ func (m *ClockManager) snapshotStats(requests []process.StatsRequest) process.Ev
 
 // RemoveAllClocks tears down all registered clocks and cleans up associated state.
 func (m *ClockManager) RemoveAllClocks() {
+	// Clock removal and replacement compete to retire input workers.
+	m.clockLifecycleMu.Lock()
+	defer m.clockLifecycleMu.Unlock()
+	// Clock removal and the event loop share the registered clock map.
+	m.clockManagementMu.Lock()
+	var oldInputs []*clock.TBC
+	for _, clk := range m.clocks {
+		if tbc, ok := clk.(*clock.TBC); ok {
+			oldInputs = append(oldInputs, tbc)
+		}
+	}
+	m.clockManagementMu.Unlock()
+	for _, tbc := range oldInputs {
+		tbc.CloseSourceInputActions()
+	}
+	// Clock removal and the event loop share the registered clock map.
 	m.clockManagementMu.Lock()
 	m.osClock.Reset()
 
@@ -273,6 +337,7 @@ func (m *ClockManager) RemoveAllClocks() {
 	}
 	m.clocks = map[string]clock.Clock{}
 	m.osClockConfigs = make(map[string]struct{})
+	m.pendingSourceObservations = nil
 	m.publishStats()
 	m.clockManagementMu.Unlock()
 
@@ -387,20 +452,11 @@ func (m *ClockManager) ProcessEvents(ctx context.Context) {
 // ProcessEvents channel; the resulting snapshot is pushed to ProcessManager.
 // All clock mutation is serialized by clockManagementMu.
 func (m *ClockManager) ProcessEvent(ev event.Event) {
+	// Event processing and profile/clock changes share clock state.
 	m.clockManagementMu.Lock()
 	defer m.clockManagementMu.Unlock()
 	if observation, ok := ev.Data.(*event.PTPSourceObservation); ok {
-		result := event.SourceQualification{}
-		if clk, exists := m.clocks[ev.CfgName].(*clock.TBC); exists && !m.IsApplying() {
-			result = clk.ObserveSource(ev, observation)
-		}
-		m.publishStats()
-		// Rejected observations also get a reply; a removed/replaced clock must
-		// not strand its old scanner. Never wait for hardware or a receiver.
-		select {
-		case observation.Reply <- result:
-		default:
-		}
+		m.processSourceObservationLocked(ev, observation)
 		return
 	}
 	if ev.Reset {
@@ -419,7 +475,7 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 	// TODO: Move to better identifiers? Having to do this translation here is odd
 	lookupName := ev.CfgName
 	if ev.Source == event.SYNCE {
-		lookupName = strings.Replace(ev.CfgName, "synce4l", "ptp4l", 1)
+		lookupName = strings.Replace(ev.CfgName, "synce4l", event.Ptp4lProcessName, 1)
 	}
 
 	clk := m.GetClock(lookupName)
@@ -431,6 +487,13 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 	if clk.ClockType() == event.TBC && m.IsApplying() {
 		return
 	}
+	if tbc, ok := clk.(*clock.TBC); ok && ev.Source == event.PTP4l {
+		if _, isOffset := ev.Data.(*event.OffsetData); isOffset {
+			if source, exists := tbc.SourceQualification(ev.CfgName); exists && source.IFace != "" {
+				ev.IFace = source.IFace
+			}
+		}
+	}
 
 	if ev.WriteToLog {
 		if logData := ev.GetLogData(); logData != "" {
@@ -439,6 +502,56 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 	}
 	prevState := clk.GetState()
 	clockState := clk.AddEvent(ev)
+	m.recordClockState(clk, lookupName, ev, prevState, clockState)
+	m.publishStats()
+}
+
+// processSourceObservationLocked evaluates or retains observations with the manager lock held.
+func (m *ClockManager) processSourceObservationLocked(ev event.Event, observation *event.PTPSourceObservation) {
+	clk, ok := m.clocks[ev.CfgName].(*clock.TBC)
+	if !ok || ev.Source != event.PTP4l {
+		m.publishStats()
+		return
+	}
+	source, exists := clk.SourceQualification(ev.CfgName)
+	if !exists || source.Generation != observation.Generation {
+		m.publishStats()
+		return
+	}
+	if m.IsApplying() {
+		if observation.SourceLost || observation.PortRole != nil {
+			count := 0
+			for _, pending := range m.pendingSourceObservations {
+				if pending.CfgName == ev.CfgName {
+					count++
+				}
+			}
+			if count >= maxPendingSourceObservations {
+				glog.Errorf("SOURCE OBSERVATION QUEUE FULL for %s during profile apply: DROPPING event %s", ev.CfgName, observation)
+			} else {
+				retained := *observation
+				if retained.PortRole != nil {
+					retained.PortRole = utils.ToPtr(*retained.PortRole)
+				}
+				ev.Data = &retained
+				m.pendingSourceObservations = append(m.pendingSourceObservations, ev)
+			}
+		}
+	} else {
+		previous := clk.GetState()
+		result := clk.ObserveSource(ev, observation)
+		if result.SourceType != "" {
+			if result.IFace != source.IFace {
+				m.deleteProcessClockStateMetric(ev.CfgName, ev.Source, source.IFace)
+			}
+			ev.IFace = result.IFace
+			m.recordClockState(clk, ev.CfgName, ev, previous, clk.GetSyncState())
+		}
+	}
+	m.publishStats()
+}
+
+func (m *ClockManager) recordClockState(clk clock.Clock, cfgName string, ev event.Event, prevState event.PTPState, clockState clock.SyncState) {
 	m.updateProcessClockStateMetrics(clk, ev)
 	if prevState != event.PTP_NOTSET && prevState != clockState.State {
 		m.signalSyncStatus()
@@ -456,15 +569,14 @@ func (m *ClockManager) ProcessEvent(ev event.Event) {
 	}
 	// Use the clock class from the event's returned state, not clk.ClockClass().
 	// For a composite HA clock, clk.ClockClass() is the active member's class,
-	// but the metric is keyed per member config (lookupName), so each member
+	// but the metric is keyed per member config (cfgName), so each member
 	// must report its own class. For GM/TBC/BC the returned state carries the
 	// same class clk.ClockClass() would, so this is equivalent for them.
-	m.updateClockClassMetrics(lookupName, clockState.ClockClass)
+	m.updateClockClassMetrics(cfgName, clockState.ClockClass)
 	m.updateHAProfileMetrics(clockState.HAProfileStatus)
 	m.updateMetrics(ev)
 	// A clock (E1) transition may move the derived E3 os_clock_state.
 	m.emitOSClockState()
-	m.publishStats()
 }
 
 // clockStateMetricProcess selects the process label for a clock-state metric.
@@ -514,6 +626,15 @@ func (m *ClockManager) updateProcessClockStateMetrics(clk clock.Clock, ev event.
 	}
 	var state event.PTPState
 	switch payload := ev.Data.(type) {
+	case *event.PTPSourceObservation:
+		if tbc, ok := clk.(*clock.TBC); ok {
+			if source, exists := tbc.SourceQualification(ev.CfgName); exists {
+				state = event.PTP_FREERUN
+				if source.Qualified {
+					state = event.PTP_LOCKED
+				}
+			}
+		}
 	case *event.SyncEData:
 		state = payload.State
 	case *event.GNSSData, *event.DPLLData:
@@ -540,6 +661,17 @@ func (m *ClockManager) updateProcessClockStateMetrics(clk clock.Clock, ev event.
 	m.metricCache[key] = metricEntry{gauge: m.clockMetric, labels: prometheus.Labels{
 		processLabel: process, nodeLabel: m.nodeName, ifaceLabel: iface,
 	}}
+}
+
+// deleteProcessClockStateMetric retires a source's previous interface label.
+func (m *ClockManager) deleteProcessClockStateMetric(cfgName string, source event.EventSource, iface string) {
+	key := metricKey{cfgName: cfgName, process: string(source), iface: alias.GetAlias(iface), dataType: "clock_state"}
+	if entry, exists := m.metricCache[key]; exists {
+		if entry.gauge != nil {
+			entry.gauge.Delete(entry.labels)
+		}
+		delete(m.metricCache, key)
+	}
 }
 
 // updateClockStateMetrics should be used to update metrics when a clock changes state
@@ -636,9 +768,9 @@ func (m *ClockManager) updateClockClassMetrics(cfgName string, clockClass fbprot
 	if clockClass == protocol.ClockClassUninitialized {
 		return
 	}
-	profile := strings.Replace(cfgName, "ts2phc", "ptp4l", 1)
+	profile := strings.Replace(cfgName, "ts2phc", event.Ptp4lProcessName, 1)
 	m.clockClassMetric.With(prometheus.Labels{
-		processLabel: "ptp4l", nodeLabel: m.nodeName, configLabel: profile}).Set(float64(clockClass))
+		processLabel: event.Ptp4lProcessName, nodeLabel: m.nodeName, configLabel: profile}).Set(float64(clockClass))
 }
 
 // convertToFloat converts an event field to float64.

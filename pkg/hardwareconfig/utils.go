@@ -703,25 +703,29 @@ func BatchPinSet(commands []dpll.PinParentDeviceCtl) error {
 	}
 	//nolint:errcheck
 	defer conn.Close()
+	return batchPinSet(commands, conn.SendCommand, conn.DoPinGet)
+}
+
+func batchPinSet(commands []dpll.PinParentDeviceCtl,
+	send func(uint8, []byte) error,
+	read func(dpll.DoPinGetRequest) (*dpll.PinInfo, error),
+) error {
 	for _, command := range commands {
 		glog.Infof("DPLL pin command %s", formatDpllPinCommand(command))
 		b, encodeErr := dpll.EncodePinControl(command)
 		if encodeErr != nil {
 			return encodeErr
 		}
-		err = conn.SendCommand(dpll.DpllCmdPinSet, b)
+		err := send(dpll.DpllCmdPinSet, b)
 		if err != nil {
 			glog.Error("failed to send pin command: ", err)
 			return err
 		}
-		// Read back the pin to confirm the command was applied, and log it as a
-		// table (see LogPinConfirmation) since LogPinTable never shows output
-		// pins and reflects state as of the next notification, not this write.
-		info, getErr := conn.DoPinGet(dpll.DoPinGetRequest{ID: command.ID})
+		// Log pin state for diagnostics; LogPinTable does not show output pins.
+		info, getErr := read(dpll.DoPinGetRequest{ID: command.ID})
 		if getErr != nil {
-			glog.Error("failed to get pin: ", getErr)
-			//TODO: handle properly after RHEL-137801 is fixed
-			return nil
+			glog.Errorf("failed to get pin %d: %v", command.ID, getErr)
+			continue
 		}
 		dpll.LogPinConfirmation(info)
 	}

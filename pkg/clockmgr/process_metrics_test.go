@@ -6,7 +6,9 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/alias"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/clock"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/event"
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/pmc"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -110,6 +112,70 @@ func TestProcessClockStateMetrics(t *testing.T) {
 			requireGaugeValue(t, gauge, labels, event.ClockStateLocked)
 		})
 	}
+}
+
+func TestPTPSourceMetricsFollowSelectedPort(t *testing.T) {
+	// Switching ports retires the old state label and requires fresh samples.
+	// Even an offset carrying the old interface must use the selected label.
+	cm, gauge := newProcessMetricManager(t, event.TBC)
+	cm.offsetMetric = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_ptp_selected_source_offset_ns"},
+		[]string{fromLabel, processLabel, nodeLabel, ifaceLabel})
+	generation, err := cm.ConfigureSourceQualification(testClockmgrPtp4lConfig, []string{"tr0", "tr1"}, utils.QualificationConfig{
+		QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 1, DisqualifiedSamples: 1})
+	require.NoError(t, err)
+	observe := func(iface string, observation event.PTPSourceObservation) {
+		observation.Generation = generation
+		cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: testClockmgrPtp4lConfig, IFace: iface, Data: &observation})
+	}
+	oldLabels := prometheus.Labels{processLabel: "ptp4l", nodeLabel: "testnode", ifaceLabel: "tr0"}
+	newLabels := prometheus.Labels{processLabel: "ptp4l", nodeLabel: "testnode", ifaceLabel: "tr1"}
+	observe("tr0", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleSlave)})
+	observe("tr0", event.PTPSourceObservation{ServoState: "s2", Offset: 10})
+	requireGaugeValue(t, gauge, oldLabels, event.ClockStateLocked)
+	observe("tr1", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleSlave)})
+	require.False(t, gauge.Delete(oldLabels), "the old source-state label must be retired")
+	requireGaugeValue(t, gauge, newLabels, event.ClockStateFreerun)
+	cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: testClockmgrPtp4lConfig, IFace: "tr0",
+		Data: &event.OffsetData{Offset: 17}})
+	requireGaugeValue(t, cm.offsetMetric, prometheus.Labels{
+		fromLabel: "ptp4l", processLabel: "ptp4l", nodeLabel: "testnode", ifaceLabel: "tr1",
+	}, 17)
+	observe("tr1", event.PTPSourceObservation{ServoState: "s2", Offset: 10})
+	requireGaugeValue(t, gauge, newLabels, event.ClockStateLocked)
+	observe("tr1", event.PTPSourceObservation{PortRole: utils.ToPtr(parserconstants.PortRoleMaster)})
+	requireGaugeValue(t, gauge, newLabels, event.ClockStateFreerun)
+}
+
+func TestSourceObservationOverflowDuringApplyDropsEvent(t *testing.T) {
+	// Alternate roles so the last retained event loses the source; the next
+	// selection overflows and must not be recovered after apply.
+	cm, _ := newProcessMetricManager(t, event.TBC)
+	generation, err := cm.ConfigureSourceQualification(testClockmgrPtp4lConfig, []string{"tr0"}, utils.QualificationConfig{
+		QualifiedThreshold: 100, DisqualifiedThreshold: 200, QualifiedSamples: 1, DisqualifiedSamples: 1})
+	require.NoError(t, err)
+	cm.SetApplying(true)
+	for i := 0; i <= maxPendingSourceObservations; i++ {
+		role := parserconstants.PortRoleSlave
+		if i%2 != 0 {
+			role = parserconstants.PortRoleMaster
+		}
+		cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: testClockmgrPtp4lConfig, IFace: "tr0",
+			Data: &event.PTPSourceObservation{Generation: generation, PortRole: utils.ToPtr(role)}})
+	}
+	require.Len(t, cm.pendingSourceObservations, maxPendingSourceObservations)
+	cm.SetApplying(false)
+	cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: testClockmgrPtp4lConfig, IFace: "tr0",
+		Data: &event.PTPSourceObservation{Generation: generation, ServoState: "s2", Offset: 10}})
+	source, exists := cm.SourceQualification(testClockmgrPtp4lConfig)
+	require.True(t, exists)
+	require.False(t, source.Qualified, "the overflowed final role must not be recovered")
+	// A later selection and sample must still be processed normally.
+	cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: testClockmgrPtp4lConfig, IFace: "tr0",
+		Data: &event.PTPSourceObservation{Generation: generation, PortRole: utils.ToPtr(parserconstants.PortRoleSlave)}})
+	cm.ProcessEvent(event.Event{Source: event.PTP4l, CfgName: testClockmgrPtp4lConfig, IFace: "tr0",
+		Data: &event.PTPSourceObservation{Generation: generation, ServoState: "s2", Offset: 10}})
+	source, exists = cm.SourceQualification(testClockmgrPtp4lConfig)
+	require.True(t, exists && source.Qualified, "later events must still be processed")
 }
 
 func TestSyncEClockStateMetrics(t *testing.T) {

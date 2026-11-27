@@ -216,6 +216,7 @@ func (p *ptpProcess) sendPtp4lOffsetEvent() {
 		},
 	}:
 	default:
+		glog.Errorf("PTP4L OFFSET EVENT CHANNEL FULL for %s: DROPPING offset %d", p.configName, avgOffset)
 	}
 }
 
@@ -352,6 +353,7 @@ func (p *ptpProcess) runScanner(cmdReader io.Reader) {
 }
 
 func (p *ptpProcess) Start(ctx context.Context) error {
+	// The process manager and process goroutines share lifecycle and command state.
 	p.execMutex.Lock()
 	st := p.state
 	switch st {
@@ -370,15 +372,17 @@ func (p *ptpProcess) Start(ctx context.Context) error {
 	p.state = process.Starting
 	p.execMutex.Unlock()
 
-	if q := p.sourceQualification; q != nil {
+	if qlf := p.sourceQualification; qlf != nil {
 		result, exists := p.dn.processManager.clockMgr.SourceQualification(p.configName)
 		if !exists {
 			p.setState(st)
 			return fmt.Errorf("source qualification is not configured for %s", p.configName)
 		}
-		q.mu.Lock()
-		q.generation, q.ctx = result.Generation, ctx
-		q.mu.Unlock()
+		// Process startup, the scanner, and teardown share the publisher state.
+		qlf.mu.Lock()
+		qlf.generation = result.Generation
+		qlf.ctx = ctx
+		qlf.mu.Unlock()
 	}
 	p.run()
 	return nil
@@ -1122,12 +1126,10 @@ func NewPtp4lProcess(env ptpProcessEnv) (*ptpProcess, error) {
 		p.tBCAttributes.offsetEventWindow = utils.NewWindow(offsetEventWindowSize)
 		p.prepareTBCResources()
 	}
-	if policy.enabled {
+	if policy.applicable {
 		if err = p.configureSourceQualification(policy); err != nil {
 			return nil, err
 		}
-	} else if env.clockType == event.TBC {
-		glog.Infof("Source qualification profile=%s config=%s policy=legacy", getProfileName(env.nodeProfile), p.configName)
 	}
 	return p, nil
 }
@@ -1204,7 +1206,7 @@ func phc2sysOffsetStartCondition(env ptpProcessEnv) process.Condition {
 		glog.Errorf("phc2sys source policy: %v", err)
 		return process.Never{}
 	}
-	if policy.enabled {
+	if policy.applicable {
 		return sourceQualifiedStartCondition(env)
 	}
 	base := process.OnStateAndOffsetForCount{
@@ -1341,7 +1343,7 @@ func ts2phcConditionsForTBC(p *ptpProcess, env ptpProcessEnv) map[process.Action
 		glog.Errorf("ts2phc source policy: %v", err)
 		return map[process.Action]process.Condition{process.ActionStart: process.Never{}}
 	}
-	if policy.enabled {
+	if policy.applicable {
 		startConditions = []process.Condition{sourceQualifiedStartCondition(env)}
 	}
 
@@ -1349,11 +1351,8 @@ func ts2phcConditionsForTBC(p *ptpProcess, env ptpProcessEnv) map[process.Action
 	// p.haProfile is already set at this point from ApplyHaProfiles
 	if shouldWaitForPhc2sys(env.nodeProfile, p.haProfile) {
 		cfgName := fmt.Sprintf("ptp4l.%d.config", env.runID)
-		if policy.enabled && len(listHAMemberProfiles(env.nodeProfile)) > 0 {
-			// Match NewPhc2sysProcess's message tag, not the presence of an
-			// unrelated HA group elsewhere in this node's topology.
-			cfgName = fmt.Sprintf("phc2sys.%d.config", env.runID)
-		} else if !policy.enabled && env.topology != nil && env.topology.haProfile != "" {
+		if len(listHAMemberProfiles(env.nodeProfile)) > 0 {
+			// Match this profile's phc2sys message tag, not an unrelated HA group.
 			cfgName = fmt.Sprintf("phc2sys.%d.config", env.runID)
 		}
 
