@@ -173,8 +173,9 @@ func setDataValue(e *event.Event, dv event.DataValue) bool {
 
 // CloudEventProxy connects PubSub, EventCache, and the REST API.
 type CloudEventProxy struct {
-	cache  *EventCache
-	pubSub *PubSub
+	Security *Security
+	cache    *EventCache
+	pubSub   *PubSub
 	// baseURL is the externally reachable root of this API server (scheme://host:port, no path).
 	// It is fixed at startup and used to build the mandatory O-RAN "UriLocation" field, which must
 	// be a stable, server-determined address rather than one derived from a client request.
@@ -229,7 +230,13 @@ func (l *CloudEventProxy) handleIncomingEvents(r io.Reader) {
 // Handler returns the HTTP handler for the CloudEvent REST API.
 func (l *CloudEventProxy) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc(apiBase+"health", func(w http.ResponseWriter, _ *http.Request) {
+	outer := http.NewServeMux()
+	outer.HandleFunc(apiBase+"health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			writeProblem(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
 	})
@@ -240,7 +247,8 @@ func (l *CloudEventProxy) Handler() http.Handler {
 	}
 	mux.HandleFunc(apiBase+publishersPath, l.publishersHandler)
 	mux.HandleFunc(apiBase, l.currentStateHandler)
-	return mux
+	outer.Handle("/", l.Security.protect(mux))
+	return outer
 }
 
 // AcceptDaemonConnections wait for a new connection on the listener and handles new events
@@ -282,13 +290,24 @@ func (l *CloudEventProxy) ListenAndServe(ctx context.Context, port int, certFile
 		ReadHeaderTimeout: 5 * time.Second,
 		Handler:           l.Handler(),
 	}
+	useTLS := certFile != "" && keyFile != ""
+	if l.Security != nil && l.Security.TLS != nil {
+		server.TLSConfig = l.Security.TLS
+		certFile, keyFile = "", ""
+		useTLS = true
+		if l.Security.material != nil {
+			reloadCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			go l.Security.material.watch(reloadCtx)
+		}
+	}
 	go func() {
 		<-ctx.Done()
 		if err := server.Shutdown(context.Background()); err != nil {
 			glog.Errorf("API server shutdown error: %v", err)
 		}
 	}()
-	if certFile != "" && keyFile != "" {
+	if useTLS {
 		glog.Infof("API server listening on :%d (TLS)", port)
 		if err := server.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 			return err

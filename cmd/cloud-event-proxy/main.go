@@ -5,13 +5,17 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/auth"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/cep"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/config"
 	"k8s.io/client-go/kubernetes"
@@ -19,17 +23,21 @@ import (
 
 var GitCommit = "Undefined"
 
+const httpsScheme = "https"
+
 var (
-	socket    string
-	port      int
-	storePath string
-	nodeName  string
-	apiHost   string
-	tlsCert   string
-	tlsKey    string
+	socket         string
+	port           int
+	storePath      string
+	nodeName       string
+	apiHost        string
+	tlsCert        string
+	tlsKey         string
+	authConfigPath string
 )
 
 func main() {
+	flag.StringVar(&authConfigPath, "auth-config", "", "Path to CEP authentication JSON configuration.")
 	flag.StringVar(&socket, "socket", "/var/run/ptp/ipc.sock", "Path to daemon IPC Unix socket.")
 	flag.IntVar(&port, "api-port", 9043, "The port the REST API endpoint binds to.")
 	flag.StringVar(&storePath, "store-path", "", "Directory for persistent subscription storage."+
@@ -57,12 +65,37 @@ func main() {
 	if apiHost == "" {
 		apiHost = nodeName
 	}
+	var security *cep.Security
+	writer := cep.NewHTTPWriterFunc(2 * time.Second)
+	if authConfigPath != "" {
+		cfg, err := auth.LoadAuthConfig(authConfigPath)
+		if err != nil {
+			glog.Fatalf("invalid auth configuration: %v", err)
+		}
+		var validator auth.TokenValidator
+		if cfg.EnableOAuth {
+			validator, err = auth.NewTokenReviewValidator()
+			if err != nil {
+				glog.Fatalf("TokenReview setup failed: %v", err)
+			}
+		}
+		security, writer, err = cep.NewSecurity(cfg, validator, 2*time.Second)
+		if err != nil {
+			glog.Fatalf("security setup failed: %v", err)
+		}
+	}
 	scheme := "http"
 	if tlsCert != "" {
-		scheme = "https"
+		scheme = httpsScheme
+	}
+	if security != nil && security.TLS != nil {
+		scheme = httpsScheme
 	}
 	// baseURL is the stable, server-determined root used to build subscription UriLocation values.
-	baseURL := fmt.Sprintf("%s://%s:%d", scheme, apiHost, port)
+	baseURL, err := makeBaseURL(apiHost, nodeName, port, scheme)
+	if err != nil {
+		glog.Fatalf("invalid API host: %v", err)
+	}
 
 	glog.Infof("cloud-event-proxy starting, node=%s, socket=%s, baseURL=%s, commit=%s", nodeName, socket, baseURL, GitCommit)
 
@@ -71,7 +104,6 @@ func main() {
 
 	cache := cep.NewEventCache(nodeName)
 	var storage cep.Store
-	var err error
 	if storePath != "" {
 		path := filepath.Join(storePath, "subscriptions.json")
 		storage, err = cep.NewDiskStore(path)
@@ -84,11 +116,12 @@ func main() {
 			glog.Fatalf("failed to init ConfigMap subscription store: %v", err)
 		}
 	}
-	ps := cep.NewPubSub(storage, cep.NewHTTPWriterFunc(2*time.Second))
+	ps := cep.NewPubSub(storage, writer)
 	if err = ps.LoadFromStore(ctx); err != nil {
 		glog.Fatalf("failed to load persisted subscriptions: %v", err)
 	}
 	proxy := cep.NewCloudEventProxy(cache, ps, nodeName, baseURL)
+	proxy.Security = security
 
 	if err = os.MkdirAll(filepath.Dir(socket), 0755); err != nil {
 		glog.Fatalf("failed to create socket directory: %v", err)
@@ -108,6 +141,21 @@ func main() {
 	if err = proxy.ListenAndServe(ctx, port, tlsCert, tlsKey); err != nil {
 		glog.Fatalf("API server error: %v", err)
 	}
+}
+
+// The operator's compatibility transportHost may be a full URL with a
+// NODE_NAME placeholder; the listener's actual TLS mode determines the scheme.
+func makeBaseURL(host, node string, port int, scheme string) (string, error) {
+	host = strings.ReplaceAll(host, "NODE_NAME", strings.Split(node, ".")[0])
+	if !strings.Contains(host, "://") {
+		// Parse a bare host as a URL authority, so host:port is not read as a scheme.
+		host = "//" + host
+	}
+	u, err := url.Parse(host)
+	if err != nil || u.Hostname() == "" || u.User != nil || (u.Path != "" && u.Path != "/") {
+		return "", fmt.Errorf("expected a host or root URL")
+	}
+	return (&url.URL{Scheme: scheme, Host: net.JoinHostPort(u.Hostname(), strconv.Itoa(port))}).String(), nil
 }
 
 func resolveNamespace() (string, error) {
