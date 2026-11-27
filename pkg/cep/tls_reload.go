@@ -25,7 +25,7 @@ const (
 type tlsSnapshot struct {
 	digests    [5][sha256.Size]byte
 	server     *tls.Config
-	client     *auth.AuthenticatedClient
+	client     *http.Client
 	serverLeaf *x509.Certificate
 	clientLeaf *x509.Certificate
 }
@@ -87,12 +87,12 @@ func (m *tlsMaterial) reload() error {
 	}
 	// A new handshake must use the current trust pool, including after a CA is removed.
 	server.SessionTicketsDisabled = true
-	var client *auth.AuthenticatedClient
+	var client *http.Client
 	var clientLeaf *x509.Certificate
 	if !m.config.EnableMTLS || callbackKeypairPresent {
 		client, err = auth.NewAuthenticatedClientWithTimeout(m.config, m.timeout)
 		if err == nil && m.config.EnableMTLS {
-			transport := client.GetClient().Transport.(*http.Transport)
+			transport := client.Transport.(*auth.AuthenticatedTransport)
 			clientLeaf = transport.TLSClientConfig.Certificates[0].Leaf
 			err = checkLeaf(clientLeaf, x509.ExtKeyUsageClientAuth)
 		}
@@ -120,7 +120,7 @@ func (m *tlsMaterial) reload() error {
 	})
 	if old != nil {
 		if old.client != nil {
-			old.client.GetClient().CloseIdleConnections()
+			old.client.CloseIdleConnections()
 		}
 		if old.digests != after || old.client != client {
 			glog.Info("Event API TLS material reloaded")

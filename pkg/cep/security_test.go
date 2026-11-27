@@ -1,6 +1,7 @@
 package cep
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -126,7 +127,7 @@ func TestLiveTLSReload(t *testing.T) {
 	if _, err := callback.Write([]byte("{}")); err != nil {
 		t.Fatalf("secured request after rotation on the original listener and writer: %v", err)
 	}
-	old.client.GetClient().CloseIdleConnections()
+	old.client.CloseIdleConnections()
 	if _, err := (&authenticatedWriter{endpoint: server.URL, client: old.client, security: &Security{Config: cfg}}).Write([]byte("{}")); err == nil {
 		t.Fatal("old credentials unexpectedly succeeded after rotation")
 	}
@@ -174,12 +175,12 @@ func TestSecurityStartsWithoutOutboundClientIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := peer.Post(server.URL, []byte("{}"))
+	response, err := peer.Post(server.URL, "application/json", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatalf("inbound request before provisioning: %v", err)
 	}
 	response.Body.Close()
-	peer.GetClient().CloseIdleConnections()
+	peer.CloseIdleConnections()
 	if response.StatusCode != http.StatusNoContent {
 		t.Fatalf("authenticated inbound request returned HTTP %d", response.StatusCode)
 	}
@@ -332,7 +333,7 @@ func TestSecureSubscribePullPush(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(subscriptionRequest{EndpointURI: callback.URL + "/event", Resource: resource})
-	response, err := client.Post(api.URL+apiBase+"subscriptions", body)
+	response, err := client.Post(api.URL+apiBase+"subscriptions", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +385,7 @@ func TestSecureSubscribePullPush(t *testing.T) {
 		{"uppercase bearer", http.MethodGet, "publishers", "BEARER test-token", true, 200},
 		{"wrong scheme", http.MethodGet, "publishers", "Basic test-token", true, 401},
 		{"health", http.MethodGet, "health", "", false, 200},
-		{"health POST anonymous", http.MethodPost, "health", "", false, 401},
+		{"health POST anonymous", http.MethodPost, "health", "", false, 405},
 		{"health POST authenticated", http.MethodPost, "health", "Bearer test-token", true, 405},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -472,14 +473,15 @@ func TestProtectedRouteAuthentication(t *testing.T) {
 
 func TestAuthenticationExceptions(t *testing.T) {
 	s := &Security{Config: &auth.Config{ServerConfig: &auth.ServerConfig{EnableMTLS: true, EnableOAuth: true}}}
+	handler := (&CloudEventProxy{Security: s}).Handler()
 	for _, remote := range []string{"192.0.2.1:1234", "127.0.0.1:1234", "[::1]:1234"} {
 		for _, tc := range []struct {
 			method, path string
 			want         int
 		}{
-			{http.MethodGet, "health", 204},
-			{http.MethodHead, "health", 401},
-			{http.MethodPost, "health", 401},
+			{http.MethodGet, "health", 200},
+			{http.MethodHead, "health", 405},
+			{http.MethodPost, "health", 405},
 			{http.MethodGet, "subscriptions", 401},
 			{http.MethodGet, "health/extra", 401},
 			{http.MethodGet, "health/", 401},
@@ -488,7 +490,7 @@ func TestAuthenticationExceptions(t *testing.T) {
 				r := httptest.NewRequest(tc.method, apiBase+tc.path, nil)
 				r.RemoteAddr = remote
 				w := httptest.NewRecorder()
-				s.protect(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })).ServeHTTP(w, r)
+				handler.ServeHTTP(w, r)
 				if w.Code != tc.want {
 					t.Fatalf("got %d want %d", w.Code, tc.want)
 				}

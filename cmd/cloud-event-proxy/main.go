@@ -148,6 +148,7 @@ func main() {
 func makeBaseURL(host, node string, port int, scheme string) (string, error) {
 	host = strings.ReplaceAll(host, "NODE_NAME", strings.Split(node, ".")[0])
 	if !strings.Contains(host, "://") {
+		// Parse a bare host as a URL authority, so host:port is not read as a scheme.
 		host = "//" + host
 	}
 	u, err := url.Parse(host)

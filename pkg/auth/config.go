@@ -303,22 +303,3 @@ func (c *Config) GetOAuthToken() (string, error) {
 func (c *Config) IsAuthenticationEnabled() bool {
 	return c.EnableMTLS || c.EnableOAuth
 }
-
-// GetConfigSummary returns a summary of the authentication configuration
-func (c *Config) GetConfigSummary() string {
-	summary := "Authentication Configuration:\n"
-	summary += fmt.Sprintf("  mTLS: %t\n", c.EnableMTLS)
-	if c.EnableMTLS {
-		summary += fmt.Sprintf("    Client Cert: %s\n", c.ClientCertPath)
-		summary += fmt.Sprintf("    Client Key: %s\n", c.ClientKeyPath)
-		summary += fmt.Sprintf("    CA Cert: %s\n", c.CACertPath)
-		summary += fmt.Sprintf("    Use Service CA: %t\n", c.UseServiceCA)
-	}
-	summary += fmt.Sprintf("  OAuth: %t\n", c.EnableOAuth)
-	if c.EnableOAuth {
-		summary += fmt.Sprintf("    Service Account: %s\n", c.ServiceAccountName)
-		summary += fmt.Sprintf("    Token Path: %s\n", c.ServiceAccountToken)
-		summary += fmt.Sprintf("    Use OpenShift OAuth: %t\n", c.UseOpenShiftOAuth)
-	}
-	return summary
-}

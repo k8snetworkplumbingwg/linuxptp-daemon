@@ -230,7 +230,8 @@ func (l *CloudEventProxy) handleIncomingEvents(r io.Reader) {
 // Handler returns the HTTP handler for the CloudEvent REST API.
 func (l *CloudEventProxy) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc(apiBase+"health", func(w http.ResponseWriter, r *http.Request) {
+	outer := http.NewServeMux()
+	outer.HandleFunc(apiBase+"health", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			writeProblem(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -246,7 +247,8 @@ func (l *CloudEventProxy) Handler() http.Handler {
 	}
 	mux.HandleFunc(apiBase+publishersPath, l.publishersHandler)
 	mux.HandleFunc(apiBase, l.currentStateHandler)
-	return l.Security.protect(mux)
+	outer.Handle("/", l.Security.protect(mux))
+	return outer
 }
 
 // AcceptDaemonConnections wait for a new connection on the listener and handles new events

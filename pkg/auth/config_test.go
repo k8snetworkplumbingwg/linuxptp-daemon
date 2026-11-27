@@ -27,7 +27,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -331,28 +330,4 @@ func TestIsAuthenticationEnabled(t *testing.T) {
 	assert.False(t, (&Config{ServerConfig: &ServerConfig{}}).IsAuthenticationEnabled())
 	assert.True(t, (&Config{ServerConfig: &ServerConfig{EnableMTLS: true}}).IsAuthenticationEnabled())
 	assert.True(t, (&Config{ServerConfig: &ServerConfig{EnableOAuth: true}}).IsAuthenticationEnabled())
-}
-
-func TestGetConfigSummary(t *testing.T) {
-	cfg := &Config{
-		ServerConfig: &ServerConfig{
-			EnableMTLS:          true,
-			EnableOAuth:         true,
-			CACertPath:          "/etc/ca.crt",
-			ServiceAccountName:  "consumer-sa",
-			ServiceAccountToken: "/var/run/token",
-		},
-		ClientCertPath: "/etc/client.crt",
-		ClientKeyPath:  "/etc/client.key",
-	}
-	s := cfg.GetConfigSummary()
-	assert.True(t, strings.Contains(s, "mTLS: true"))
-	assert.True(t, strings.Contains(s, "/etc/client.crt"))
-	assert.True(t, strings.Contains(s, "OAuth: true"))
-	assert.True(t, strings.Contains(s, "consumer-sa"))
-
-	// Both disabled: no detail lines.
-	off := (&Config{ServerConfig: &ServerConfig{}}).GetConfigSummary()
-	assert.True(t, strings.Contains(off, "mTLS: false"))
-	assert.True(t, strings.Contains(off, "OAuth: false"))
 }

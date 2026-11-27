@@ -52,19 +52,25 @@ workload boundary, existing RBAC, or shared outbound client identity.
 
 Serving and client certificates are separate: Service CA certificates have
 serverAuth usage, while outbound callbacks require a clientAuth certificate.
-Startup rejects incomplete configured credentials. Callback requests use HTTPS,
+The HTTPS listener can start before the outbound client certificate and key are
+provisioned. Callbacks fail until a reload installs a usable client identity.
+Callback requests use HTTPS,
 verify the server hostname, present the client certificate and reread the token
 file through client-go on each request. Before any credential-bearing request, including one from
 a restored subscription or an HTTPS redirect, the callback hostname must match
 `allowedCallbackHosts`. Exact names and leading `*.` subdomain patterns are
 supported; the operator uses the standard consumer Service name rather than a
-cluster-wide wildcard.
+cluster-wide wildcard. Authenticated redirects must also stay on the original
+HTTPS origin.
 
 The operator supplies the effective cluster TLS minimum version, cipher suites,
 and named groups. Both the HTTPS listener and callback client use the same
-OpenShift profile translator. The publisher validates replacement trust and both
-keypairs before activating them together. New connections use that snapshot;
-a partial or invalid rotation leaves the previous snapshot active.
+OpenShift profile translator. If replacement serving credentials or inbound
+trust fail validation, reload keeps the previous snapshot. If inbound TLS
+material is valid but the outbound mTLS identity is missing or unusable,
+reload publishes the new inbound configuration with callbacks disabled. A later
+successful reload restores callback delivery once the outbound credentials
+are usable.
 
 TokenReview successes are cached for 30 seconds with a 4096-entry bound. Cache
 misses fail closed during API outages; cached successes can survive until their

@@ -1,6 +1,7 @@
 package cep
 
 import (
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -39,7 +40,7 @@ func NewSecurity(config *auth.Config, validator auth.TokenValidator, callbackTim
 	if config.EnableOAuth && validator == nil {
 		return nil, nil, fmt.Errorf("OAuth requires a TokenReview validator")
 	}
-	var plainClient *auth.AuthenticatedClient
+	var plainClient *http.Client
 	if security.material == nil {
 		var err error
 		plainClient, err = auth.NewAuthenticatedClientWithTimeout(config, callbackTimeout)
@@ -54,7 +55,7 @@ func NewSecurity(config *auth.Config, validator auth.TokenValidator, callbackTim
 
 type authenticatedWriter struct {
 	endpoint string
-	client   *auth.AuthenticatedClient
+	client   *http.Client
 	security *Security
 }
 
@@ -75,11 +76,11 @@ func (w *authenticatedWriter) Write(data []byte) (int, error) {
 		// Close any connections opened by a request racing with rotation.
 		defer func() {
 			if w.security.material.current.Load() != snapshot {
-				client.GetClient().CloseIdleConnections()
+				client.CloseIdleConnections()
 			}
 		}()
 	}
-	response, err := client.Post(w.endpoint, data)
+	response, err := client.Post(w.endpoint, "application/json", bytes.NewReader(data))
 	if err != nil {
 		return 0, err
 	}
@@ -94,12 +95,6 @@ func (w *authenticatedWriter) Write(data []byte) (int, error) {
 func (s *Security) protect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s == nil || s.Config == nil || !s.Config.IsAuthenticationEnabled() {
-			next.ServeHTTP(w, r)
-			return
-		}
-		// Only the minimal GET probe is exempt. With hostNetwork, loopback is
-		// shared with host processes and other workloads, not a caller identity.
-		if r.Method == http.MethodGet && r.URL.Path == apiBase+"health" {
 			next.ServeHTTP(w, r)
 			return
 		}

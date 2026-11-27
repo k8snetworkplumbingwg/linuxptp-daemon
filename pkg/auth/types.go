@@ -29,16 +29,13 @@ type ServerConfig struct {
 	// callback rejects with "client certificate required".
 	ClientCertPath string `json:"clientCertPath"`
 	ClientKeyPath  string `json:"clientKeyPath"`
-	UseServiceCA   bool   `json:"useServiceCA"` // Use OpenShift Service CA (recommended for all cluster sizes)
 
 	// OAuth 2.0 / bearer-token configuration. Tokens are validated by the
 	// injected TokenValidator using the Kubernetes TokenReview API, so no
 	// issuer/JWKS is configured here.
 	EnableOAuth         bool     `json:"enableOAuth"`
 	RequiredAudiences   []string `json:"requiredAudiences"`   // Required token audiences (validated by TokenReview)
-	ServiceAccountName  string   `json:"serviceAccountName"`  // ServiceAccount used by clients for authentication
 	ServiceAccountToken string   `json:"serviceAccountToken"` // ServiceAccount token path (client side)
-	UseOpenShiftOAuth   bool     `json:"useOpenShiftOAuth"`   // Compatibility hint; the token is read from ServiceAccountToken
 
 	// TLS profile - centrally managed by the cluster's TLSSecurityProfile and
 	// propagated by the operator, subject to the TLS 1.2 security floor.
